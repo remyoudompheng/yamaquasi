@@ -1,0 +1,17 @@
+[package]
+name = "yamaquasi"
+version = "0.1.0"
+edition = "2021"
+description = "A toy implementation of multiple polynomial quadratic sieve"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+uint = "0.9"
+
+[dev-dependencies]
+brunch = "0.3"
+
+[[bench]]
+name = "bench"
+harness = false
