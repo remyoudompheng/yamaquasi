@@ -8,9 +8,12 @@
 //
 // https://en.wikipedia.org/wiki/Quadratic_sieve
 //
-use yamaquasi::{isqrt, sqrt_mod, U1024, U512};
+use yamaquasi::poly::{self, Prime, SievePrime};
+use yamaquasi::{isqrt, sqrt_mod, Uint, U1024};
 
-type Uint = U512;
+const OPT_MULTIPLIERS: bool = true;
+const OPT_SELECTPOLY: bool = false;
+const OPT_MULTIPOLY: bool = false;
 
 fn main() {
     let arg = std::env::args().nth(1).expect("Usage: ymqs NUMBER");
@@ -25,23 +28,37 @@ fn main() {
     }
     let n = Uint::from_dec_str(&arg).unwrap();
     eprintln!("Input number {}", n);
+    let ks = poly::select_multipliers(n);
+    eprintln!("Multipliers {:?}", ks);
     let b = smooth_bound(n);
     eprintln!("Smoothness bound {}", b);
     let primes = compute_primes(b);
     eprintln!("All primes {}", primes.len());
-    let nsqrt = isqrt(n);
+    let k: u32 = if OPT_MULTIPLIERS {
+        *ks.first().unwrap()
+    } else {
+        1
+    };
+    // Prepare factor base
     let primes: Vec<Prime> = primes
         .into_iter()
         .filter_map(|p| {
-            sqrt_mod(n, p).map(|r| Prime {
+            let r = sqrt_mod(n * k, p)?;
+            Some(Prime {
                 p: p as u64,
                 r: r as u64,
-                nsqrt: (nsqrt % Uint::from(p)).low_u64(),
             })
         })
         .collect();
-    eprintln!("Primes {}", primes.len());
-    sieve(n, primes)
+    let smallprimes: Vec<u64> = primes.iter().map(|f| f.p).take(10).collect();
+    eprintln!("Factor base size {} ({:?})", primes.len(), smallprimes);
+    // Prepare sieve
+    let nsqrt = isqrt(n * k);
+    let sprimes: Vec<SievePrime> = primes
+        .iter()
+        .map(|&p| poly::simple_prime(p, nsqrt))
+        .collect();
+    sieve(n * k, sprimes)
 }
 
 fn smooth_bound(n: Uint) -> u32 {
@@ -55,13 +72,6 @@ fn smooth_bound(n: Uint) -> u32 {
 }
 
 const BLOCK_SIZE: usize = 4 * 1024 * 1024;
-
-#[derive(Copy, Clone, Debug)]
-struct Prime {
-    p: u64,     // prime or prime power
-    r: u64,     // square root of N
-    nsqrt: u64, // reduction of iqsrt(n)
-}
 
 fn compute_primes(bound: u32) -> Vec<u32> {
     // Eratosthenes
@@ -85,7 +95,7 @@ fn compute_primes(bound: u32) -> Vec<u32> {
     primes
 }
 
-fn sieve(n: Uint, primes: Vec<Prime>) {
+fn sieve(n: Uint, primes: Vec<SievePrime>) {
     // Naïve quadratic sieve with polynomial x²-n (x=-M..M)
     // Max value is X = sqrt(n) * M
     // Smooth bound Y = exp(1/2 sqrt(log X log log X))
@@ -131,7 +141,7 @@ struct Block {
 impl Block {
     // Returns smallest i,j such that:
     // nsqrt + offset + {i,j} are roots modulo p
-    fn starts(&self, pr: &Prime) -> [u64; 2] {
+    fn starts(&self, pr: &SievePrime) -> [u64; 2] {
         let p = pr.p;
         // offset modulo p
         let off: u64 = if self.offset < 0 {
@@ -139,43 +149,17 @@ impl Block {
         } else {
             self.offset as u64 % p
         };
-        // full offset modulo p
-        let offset = (pr.nsqrt + off) % p;
-        let r = pr.r;
+        let [r1, r2] = pr.roots;
         [
-            if r < offset {
-                r + p - offset
-            } else {
-                r - offset
-            },
-            if p - r < offset {
-                2 * p - r - offset
-            } else {
-                p - r - offset
-            },
+            if r1 < off { r1 + p - off } else { r1 - off },
+            if r2 < off { r2 + p - off } else { r2 - off },
         ]
     }
 
-    fn matches(&self, i: usize, pr: &Prime) -> bool {
+    fn matches(&self, i: usize, pr: &SievePrime) -> bool {
         let [a, b] = self.starts(pr);
         i as u64 % pr.p == a || i as u64 % pr.p == b
     }
-}
-
-#[test]
-fn test_block() {
-    let b = Block {
-        offset: -16777216,
-        nsqrt: Uint::from_dec_str("13697025762053691031049747437678526773503028576").unwrap(),
-        n: Uint::from(0),
-    };
-    let p = Prime {
-        p: 10223,
-        r: 4526,
-        nsqrt: 8727,
-    };
-    // 8727 + offset + i == r or p-r
-    assert_eq!(b.starts(&p), [7295, 8466])
 }
 
 struct Relation {
@@ -184,7 +168,7 @@ struct Relation {
     factors: Vec<(isize, usize)>, // -1 for the sign
 }
 
-fn sieve_block(b: Block, primes: &[Prime]) -> usize {
+fn sieve_block(b: Block, primes: &[SievePrime]) -> usize {
     println!("block offset {}", b.offset);
     let mut blk = vec![0u8; BLOCK_SIZE];
     for item in primes {
@@ -230,6 +214,8 @@ fn sieve_block(b: Block, primes: &[Prime]) -> usize {
             if cofactor.bits() < 64 && cofactor.low_u64() < maxprime {
                 println!("i={} smooth {}", i, candidate);
                 found += 1;
+            } else {
+                println!("i={} smooth {} cofactor {}", i, candidate, cofactor);
             }
         }
     }

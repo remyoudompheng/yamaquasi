@@ -1,7 +1,11 @@
+pub mod poly;
+
 use std::ops::{Add, Div, Mul, Rem, Shl, Sub};
 use uint::construct_uint;
 
 // Multi-precision (fixed width) integers
+
+pub type Uint = U512;
 
 construct_uint! {
     pub struct U256(4);
