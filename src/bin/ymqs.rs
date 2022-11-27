@@ -8,9 +8,9 @@
 //
 // https://en.wikipedia.org/wiki/Quadratic_sieve
 //
-use yamaquasi::Uint;
 use yamaquasi::arith::{isqrt, sqrt_mod, U1024};
 use yamaquasi::poly::{self, Prime, SievePrime};
+use yamaquasi::Uint;
 
 const OPT_MULTIPLIERS: bool = true;
 const OPT_SELECTPOLY: bool = false;
@@ -44,10 +44,11 @@ fn main() {
     let primes: Vec<Prime> = primes
         .into_iter()
         .filter_map(|p| {
-            let r = sqrt_mod(n * k, p)?;
+            let nk = (n * k) % p;
+            let r = sqrt_mod(nk.low_u64(), p as u64)?;
             Some(Prime {
                 p: p as u64,
-                r: r as u64,
+                r: r,
             })
         })
         .collect();

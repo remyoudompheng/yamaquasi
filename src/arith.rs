@@ -1,4 +1,4 @@
-use std::ops::{Add, Div, Mul, Rem, Shl, Sub};
+use std::ops::{Add, Div, Mul, Rem, Shl, Shr, Sub};
 use uint::construct_uint;
 
 // Multi-precision (fixed width) integers
@@ -25,6 +25,7 @@ pub trait Num:
     + Div<Self, Output = Self>
     + Rem<Self, Output = Self>
     + Shl<usize, Output = Self>
+    + Shr<usize, Output = Self>
     + PartialOrd
     + Copy
 {
@@ -101,35 +102,41 @@ pub fn isqrt<T: Num>(n: T) -> T {
 }
 
 /// Square root modulo a prime number p
-pub fn sqrt_mod<T: Num>(n: T, p: u32) -> Option<u32> {
-    let np: u32 = (n % T::from(p)).low_u64() as u32;
-    if p == 2 {
-        Some(np % p)
-    } else if p % 4 == 3 {
+pub fn sqrt_mod<T: Num>(n: T, p: T) -> Option<T> {
+    let n = n % p;
+    let one = T::from(1);
+    if p == T::from(2) {
+        Some(n % p)
+    } else if p.low_u64() % 4 == 3 {
         // n = r^2
         // n^((p+1)/2) = r^((p+1)/4) = n^1/2
-        let r = pow_mod(np, (p + 1) / 4, p);
-        if mulmod(r, r, p) == np {
+        let r = pow_mod(n, (p >> 2) + one, p);
+        if mulmod(r, r, p) == n {
             Some(r)
         } else {
             None
         }
     } else {
-        if pow_mod(np, (p - 1) / 2, p) != 1 {
+        // p>>1 is (p-1)/2
+        if pow_mod(n, p >> 1, p) != one {
             None
         } else {
+            let exp2 = (p.low_u64() - 1).trailing_zeros();
+            assert!(exp2 < 20);
             // Simplified Tonelli-Shanks
             // O(2^k log(p)) where p-1 = q*2^k
-            let mut q = (p - 1) / 2;
-            while q % 2 == 0 {
-                q /= 2
+            let mut q = p >> 1;
+            while q.low_u64() % 2 == 0 {
+                q = q >> 1
             }
-            for k in 1..p {
+            let q1 = (q >> 1) + one; // (q+1)/2
+            for k in 1..(4 << exp2) {
                 // n*k*k has order q with probability q/(p-1)
-                let nk = mulmod(mulmod(np, k, p), k, p);
-                let root = pow_mod(nk, (q + 1) / 2, p);
+                let k = T::from(k);
+                let nk = mulmod(mulmod(n, k, p), k, p);
+                let root = pow_mod(nk, q1, p);
                 if mulmod(root, root, p) == nk {
-                    return Some(mulmod(root, pow_mod(k, p - 2, p), p));
+                    return Some(mulmod(root, inv_mod(k, p).unwrap(), p));
                 }
             }
             None
@@ -137,24 +144,34 @@ pub fn sqrt_mod<T: Num>(n: T, p: u32) -> Option<u32> {
     }
 }
 
-/// Modular exponentiation
-pub fn pow_mod(n: u32, k: u32, p: u32) -> u32 {
-    let mut res: u64 = 1;
-    let mut nn: u64 = n as u64;
-    let p64 = p as u64;
-    let mut k = k;
-    while k > 0 {
-        if k % 2 == 1 {
-            res = (res * nn) % p64;
-        }
-        nn = (nn * nn) % p64;
-        k /= 2;
+pub fn inv_mod<T: Num>(n: T, p: T) -> Option<T> {
+    if n.bits() == 0 {
+        None
+    } else {
+        Some(pow_mod(n, p - T::from(2), p))
     }
-    res as u32
 }
 
-fn mulmod(a: u32, b: u32, p: u32) -> u32 {
-    return ((a as u64 * b as u64) % p as u64) as u32;
+/// Modular exponentiation
+pub fn pow_mod<T: Num>(n: T, k: T, p: T) -> T {
+    assert!(2 * p.bits() < T::BITS);
+    let mut res: T = T::from(1);
+    let zero = T::from(0);
+    let mut nn = n % p;
+    let mut k = k;
+    while k > zero {
+        if k.low_u64() % 2 == 1 {
+            res = (res * nn) % p;
+        }
+        nn = (nn * nn) % p;
+        k = k >> 1;
+    }
+    res
+}
+
+fn mulmod<T: Num>(a: T, b: T, p: T) -> T {
+    assert!(2 * p.bits() < T::BITS);
+    (a * b) % p
 }
 
 #[cfg(test)]
@@ -163,10 +180,10 @@ mod tests {
 
     #[test]
     fn test_pow_mod() {
-        for i in 2..997 {
+        for i in 2..997u64 {
             assert_eq!(pow_mod(i, 996, 997), 1)
         }
-        for i in 2..996 {
+        for i in 2..996u64 {
             assert_eq!(pow_mod(5, i, 997) * pow_mod(5, 996 - i, 997) % 997, 1)
         }
     }
@@ -175,14 +192,16 @@ mod tests {
     fn test_sqrt_mod() {
         const PRIMES: &[u32] = &[2503, 2521, 2531, 2539, 2500213, 2500363, 300 * 1024 + 1];
         for &p in PRIMES {
+            let p = p as u64;
             for k in 1..p / 2 {
+                let k = k as u64;
                 if k > 5000 {
                     break;
                 }
-                if let Some(r) = sqrt_mod(U256::from(k), p) {
+                if let Some(r) = sqrt_mod(k, p) {
                     assert_eq!(k, mulmod(r, r, p));
                 }
-                let r = sqrt_mod(U256::from(k as u64 * k as u64), p);
+                let r = sqrt_mod(k * k, p);
                 assert!(
                     r == Some(k) || r == Some(p - k),
                     "failed sqrt({}) mod {}",
