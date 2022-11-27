@@ -47,37 +47,36 @@ fn test_simple_prime() {
 }
 
 /// Selects k such kn is a quadratic residue modulo many small primes.
-pub fn select_multipliers(n: Uint) -> Vec<u32> {
-    let mut res = vec![];
+pub fn select_multipliers(n: Uint) -> u32 {
     let bases: &[u32] = &[8, 3, 5, 7, 11, 13, 17];
     let residues: Vec<u32> = bases
         .iter()
         .map(|&b| (n % Uint::from(b)).to_u64().unwrap() as u32)
         .collect();
-    for i in 1..60000 {
+    let mut best: u32 = 1;
+    let mut best_nsq = 0;
+    for i in 0..30 {
         let k = 2 * i + 1;
+        if (k * residues[0]) % 8 != 1 {
+            continue
+        }
         let mut all_squares = true;
+        let mut nsq = 0;
         for (idx, &b) in bases.iter().enumerate() {
-            let mut square = false;
             for x in 1..b {
                 if (x * x) % b == (k * residues[idx]) % b {
-                    square = true;
+                    nsq += 1;
                     break;
                 }
             }
-            if !square {
-                all_squares = false;
-                break;
-            }
         }
-        if all_squares {
-            res.push(k);
-            if res.len() > 4 {
-                return res
-            }
+        if nsq > best_nsq {
+            best_nsq = nsq;
+            best = k;
+            break;
         }
     }
-    res
+    best
 }
 
 #[derive(Debug)]

@@ -34,16 +34,16 @@ fn main() {
     let n = Uint::from_str(&arg).unwrap();
     eprintln!("Input number {}", n);
     let ks = poly::select_multipliers(n);
-    eprintln!("Multipliers {:?}", ks);
+    let k: u32 = if OPT_MULTIPLIERS {
+        ks
+    } else {
+        1
+    };
+    eprintln!("Multiplier {}", k);
     let b = smooth_bound(n);
     eprintln!("Smoothness bound {}", b);
     let primes = compute_primes(b);
     eprintln!("All primes {}", primes.len());
-    let k: u32 = if OPT_MULTIPLIERS {
-        *ks.first().unwrap()
-    } else {
-        1
-    };
     // Prepare factor base
     let primes: Vec<Prime> = primes
         .into_iter()
@@ -62,7 +62,7 @@ fn main() {
         let mut found = 0usize ;
         let mlog = sieve_interval_logsize(n);
         println!("Sieving interval size {}M", 1<<(mlog - 20));
-        for idx in 0u64..1000 {
+        for idx in 0u64..10_000 {
             found += sieve_poly(idx, n * Uint::from(k), &primes);
             println!(
                 "Sieved {}M {} polys found {} smooths",
@@ -70,7 +70,10 @@ fn main() {
                 idx +1 ,
                 found
             );
-
+            if found > primes.len() * 11 / 10 {
+                println!("Found enough relations");
+                break
+            }
         }
     }
 }
