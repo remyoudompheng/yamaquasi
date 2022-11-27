@@ -1,113 +1,79 @@
-use std::ops::{Add, Div, Mul, Rem, Shl, Shr, Sub};
-use uint::construct_uint;
+pub use num_integer::sqrt as isqrt;
+use num_integer::Integer;
+use num_traits::cast::ToPrimitive;
+use num_traits::identities::One;
+use std::ops::{Shl, Shr};
+use std::str::FromStr;
 
-// Multi-precision (fixed width) integers
+pub use bnum::types::{I1024, U1024, U256, U512};
+use bnum::{BInt, BUint};
 
-pub type Uint = U512;
-
-construct_uint! {
-    pub struct U256(4);
-}
-
-construct_uint! {
-    pub struct U512(8);
-}
-
-construct_uint! {
-    pub struct U1024(16);
-}
+// Multi-precision (fixed width) integer arithmetic
 
 pub trait Num:
-    From<u32>
-    + Add<Self, Output = Self>
-    + Sub<Self, Output = Self>
-    + Mul<Self, Output = Self>
-    + Div<Self, Output = Self>
-    + Rem<Self, Output = Self>
+    Integer
+    + One
+    + Copy
+    + Clone
     + Shl<usize, Output = Self>
     + Shr<usize, Output = Self>
-    + PartialOrd
-    + Copy
+    + From<u64>
+    + FromStr
 {
-    const BITS: usize;
-    fn bits(&self) -> usize;
+    fn bits(&self) -> u32;
+
+    fn to_u64(&self) -> Option<u64>;
     fn low_u64(&self) -> u64;
 }
 
-impl Num for u32 {
-    const BITS: usize = 32;
-    fn bits(&self) -> usize {
-        (Self::BITS - self.leading_zeros()) as usize
-    }
-    fn low_u64(&self) -> u64 {
-        *self as u64
-    }
-}
-
 impl Num for u64 {
-    const BITS: usize = 64;
-    fn bits(&self) -> usize {
-        (Self::BITS - self.leading_zeros()) as usize
+    fn bits(&self) -> u32 {
+        u64::BITS - u64::leading_zeros(*self)
+    }
+
+    fn to_u64(&self) -> Option<u64> {
+        Some(*self)
     }
     fn low_u64(&self) -> u64 {
         *self
     }
 }
 
-impl Num for U256 {
-    const BITS: usize = 256;
-    fn bits(&self) -> usize {
-        U256::bits(self)
+impl<const N: usize> Num for BInt<N> {
+    fn bits(&self) -> u32 {
+        Self::bits(&self)
     }
+
+    fn to_u64(&self) -> Option<u64> {
+        ToPrimitive::to_u64(self)
+    }
+
     fn low_u64(&self) -> u64 {
-        Self::low_u64(&self)
+        self.to_bits().digits()[0]
     }
 }
 
-impl Num for U512 {
-    const BITS: usize = 512;
-    fn bits(&self) -> usize {
-        U512::bits(self)
+impl<const N: usize> Num for BUint<N> {
+    fn bits(&self) -> u32 {
+        Self::bits(&self)
     }
-    fn low_u64(&self) -> u64 {
-        Self::low_u64(&self)
-    }
-}
 
-impl Num for U1024 {
-    const BITS: usize = 1024;
-    fn bits(&self) -> usize {
-        U1024::bits(self)
+    fn to_u64(&self) -> Option<u64> {
+        ToPrimitive::to_u64(self)
     }
-    fn low_u64(&self) -> u64 {
-        Self::low_u64(&self)
-    }
-}
 
-/// Rounded down integer square root
-pub fn isqrt<T: Num>(n: T) -> T {
-    let one = T::from(1);
-    let two = T::from(2);
-    let mut r = one << (n.bits() / 2);
-    r = (r + n / r) / two;
-    // (r + n/r)^2 = 2n + r^2 + n^2/r^2 > 4n
-    while (r - one) * (r - one) > n {
-        r = (r + n / r) / two;
-    }
-    if r * r <= n {
-        r
-    } else {
-        r - one
+    fn low_u64(&self) -> u64 {
+        self.digits()[0]
     }
 }
 
 /// Square root modulo a prime number p
 pub fn sqrt_mod<T: Num>(n: T, p: T) -> Option<T> {
     let n = n % p;
-    let one = T::from(1);
+    let one = T::one();
     if p == T::from(2) {
         Some(n % p)
-    } else if p.low_u64() % 4 == 3 {
+    } else if p % T::from(4) == T::from(3) {
         // n = r^2
         // n^((p+1)/2) = r^((p+1)/4) = n^1/2
         let r = pow_mod(n, (p >> 2) + one, p);
@@ -136,7 +102,7 @@ pub fn sqrt_mod<T: Num>(n: T, p: T) -> Option<T> {
                 let nk = mulmod(mulmod(n, k, p), k, p);
                 let root = pow_mod(nk, q1, p);
                 if mulmod(root, root, p) == nk {
-                    return Some(mulmod(root, inv_mod(k, p).unwrap(), p));
+                    return Some(mulmod(root, pow_mod(k, p - T::from(2), p), p));
                 }
             }
             None
@@ -144,19 +110,26 @@ pub fn sqrt_mod<T: Num>(n: T, p: T) -> Option<T> {
     }
 }
 
-pub fn inv_mod<T: Num>(n: T, p: T) -> Option<T> {
-    if n.bits() == 0 {
-        None
+pub fn inv_mod<const N: usize>(n: BUint<N>, p: BUint<N>) -> Option<BUint<N>> {
+    // Not generic, we need to switch to signed realm.
+    let e = Integer::extended_gcd(&BInt::from_bits(n), &BInt::from_bits(p));
+    if e.gcd.is_one() {
+        let x = if e.x.is_negative() {
+            e.x + BInt::from_bits(p)
+        } else {
+            e.x
+        };
+        assert!(!x.is_negative());
+        Some(x.to_bits() % p)
     } else {
-        Some(pow_mod(n, p - T::from(2), p))
+        None
     }
 }
 
 /// Modular exponentiation
 pub fn pow_mod<T: Num>(n: T, k: T, p: T) -> T {
-    assert!(2 * p.bits() < T::BITS);
-    let mut res: T = T::from(1);
-    let zero = T::from(0);
+    let mut res: T = T::one();
+    let zero = T::zero();
     let mut nn = n % p;
     let mut k = k;
     while k > zero {
@@ -170,7 +143,6 @@ pub fn pow_mod<T: Num>(n: T, k: T, p: T) -> T {
 }
 
 fn mulmod<T: Num>(a: T, b: T, p: T) -> T {
-    assert!(2 * p.bits() < T::BITS);
     (a * b) % p
 }
 
@@ -213,19 +185,35 @@ mod tests {
     }
 
     #[test]
+    fn test_inv_mod() {
+        let n =
+            U1024::from_str("2953951639731214343967989360202131868064542471002037986749").unwrap();
+        for k in 1..100u64 {
+            let k = U1024::from(k);
+            let kinv = inv_mod(k, n).unwrap();
+            assert_eq!((kinv * k) % n, U1024::one());
+        }
+    }
+
+    #[test]
     fn test_isqrt() {
-        for k in 1..1000 {
-            let n = U256([1234, 5678, 1234, k]);
+        for k in 1..1000u64 {
+            let n = (U256::from(k) << 192) + U256::from(1234_5678_1234_5678 as u64);
             let r = isqrt(n);
             assert!(r * r <= n, "sqrt({}) = incorrect {}", n, r);
-            assert!(n < (r + 1) * (r + 1), "sqrt({}) = incorrect {}", n, r);
+            assert!(
+                n < (r + U256::one()) * (r + U256::one()),
+                "sqrt({}) = incorrect {}",
+                n,
+                r
+            );
         }
 
-        for k in 1..1000 {
-            let n = U256([1234, k, 0, 0]);
+        for k in 1..1000u64 {
+            let n = (U256::from(k) << 64) + U256::from(1234_5678_1234_5678 as u64);
             assert_eq!(isqrt(n * n), n);
-            assert_eq!(isqrt(n * n + 1), n);
-            assert_eq!(isqrt(n * n - 1), n - 1);
+            assert_eq!(isqrt(n * n + U256::one()), n);
+            assert_eq!(isqrt(n * n - U256::one()), n - U256::one());
         }
     }
 }

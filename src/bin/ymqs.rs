@@ -1,16 +1,20 @@
-// Bibliography:
-//
-// Carl Pomerance, A Tale of Two Sieves
-// https://www.ams.org/notices/199612/pomerance.pdf
-//
-// J. Gerver, Factoring Large Numbers with a Quadratic Sieve
-// https://www.jstor.org/stable/2007781
-//
-// https://en.wikipedia.org/wiki/Quadratic_sieve
-//
-use yamaquasi::arith::{isqrt, sqrt_mod, U1024};
+//! Bibliography:
+//!
+//! Carl Pomerance, A Tale of Two Sieves
+//! https://www.ams.org/notices/199612/pomerance.pdf
+//!
+//! J. Gerver, Factoring Large Numbers with a Quadratic Sieve
+//! https://www.jstor.org/stable/2007781
+//!
+//! https://en.wikipedia.org/wiki/Quadratic_sieve
+
+use std::str::FromStr;
+
+use yamaquasi::arith::{isqrt, sqrt_mod, Num, U1024};
 use yamaquasi::poly::{self, Prime, SievePrime};
-use yamaquasi::Uint;
+use yamaquasi::{Int, Uint};
+
+use num_integer::div_rem;
 
 const OPT_MULTIPLIERS: bool = true;
 const OPT_SELECTPOLY: bool = false;
@@ -18,8 +22,8 @@ const OPT_MULTIPOLY: bool = false;
 
 fn main() {
     let arg = std::env::args().nth(1).expect("Usage: ymqs NUMBER");
-    let n = U1024::from_dec_str(&arg).expect("could not read decimal number");
-    const MAXBITS: usize = 2 * (256 - 30);
+    let n = U1024::from_str(&arg).expect("could not read decimal number");
+    const MAXBITS: u32 = 2 * (256 - 30);
     if n.bits() > MAXBITS {
         panic!(
             "Number size ({} bits) exceeds {} bits limit",
@@ -27,7 +31,7 @@ fn main() {
             MAXBITS
         )
     }
-    let n = Uint::from_dec_str(&arg).unwrap();
+    let n = Uint::from_str(&arg).unwrap();
     eprintln!("Input number {}", n);
     let ks = poly::select_multipliers(n);
     eprintln!("Multipliers {:?}", ks);
@@ -44,23 +48,20 @@ fn main() {
     let primes: Vec<Prime> = primes
         .into_iter()
         .filter_map(|p| {
-            let nk = (n * k) % p;
+            let nk: Uint = (n * Uint::from(k)) % Uint::from(p);
             let r = sqrt_mod(nk.low_u64(), p as u64)?;
-            Some(Prime {
-                p: p as u64,
-                r: r,
-            })
+            Some(Prime { p: p as u64, r: r })
         })
         .collect();
     let smallprimes: Vec<u64> = primes.iter().map(|f| f.p).take(10).collect();
     eprintln!("Factor base size {} ({:?})", primes.len(), smallprimes);
     // Prepare sieve
-    let nsqrt = isqrt(n * k);
+    let nsqrt = isqrt(n * Uint::from(k));
     let sprimes: Vec<SievePrime> = primes
         .iter()
         .map(|&p| poly::simple_prime(p, nsqrt))
         .collect();
-    sieve(n * k, sprimes)
+    sieve(n * Uint::from(k), sprimes)
 }
 
 fn smooth_bound(n: Uint) -> u32 {
@@ -193,18 +194,13 @@ fn sieve_block(b: Block, primes: &[SievePrime]) -> usize {
     let mut found = 0usize;
     for i in 0..BLOCK_SIZE {
         if blk[i] >= target {
-            let candidate = if b.offset < 0 {
-                let s = b.nsqrt - (-b.offset - i as i64);
-                b.n - s * s
-            } else {
-                let s = b.nsqrt + b.offset + i;
-                s * s - b.n
-            };
-            let mut cofactor = candidate;
+            let s = Int::from_bits(b.nsqrt) + Int::from(b.offset + (i as i64));
+            let candidate = s * s - Int::from_bits(b.n);
+            let mut cofactor: Uint = candidate.abs().to_bits();
             for item in primes {
                 if b.matches(i, item) {
                     loop {
-                        let (q, r) = cofactor.div_mod(Uint::from(item.p));
+                        let (q, r) = div_rem(cofactor, Uint::from(item.p));
                         if r.is_zero() {
                             cofactor = q
                         } else {
