@@ -2,6 +2,7 @@ use brunch::Bench;
 use std::str::FromStr;
 use std::time::Duration;
 use yamaquasi::arith::{inv_mod, isqrt, sqrt_mod, U1024, U256, U512};
+use yamaquasi::poly::select_polys;
 use yamaquasi::Uint;
 
 const N256: &str = "23374454829417248628572084580131596971714744792262629806178559231363799527559";
@@ -17,7 +18,14 @@ brunch::benches! {
         let prime160 = U512::from_str(P160).unwrap();
         Bench::new("inv_mod(3, 160-bit prime) = Some(...)")
         .with_timeout(Duration::from_secs(1))
-        .run_seeded(3, |k: u64| inv_mod(U512::from(k), prime160))
+        .run_seeded(3, |k: u64| inv_mod(U512::from(k), prime160).unwrap())
+    },
+    {
+        let prime160 = U1024::from_str(P160).unwrap();
+        let n = U1024::from_str(PQ256).unwrap();
+        Bench::new("inv_mod(160-bit prime, 256-bit modulus) = Some(...)")
+        .with_timeout(Duration::from_secs(1))
+        .run_seeded(prime160, |k: Uint| inv_mod(k, n).unwrap())
     },
 
     Bench::new("sqrt_mod(6, 2500213) = None")
@@ -42,5 +50,11 @@ brunch::benches! {
         Bench::new("sqrt_mod(3, 160-bit prime) as U1024 = Some(...)")
         .with_timeout(Duration::from_secs(1))
         .run_seeded(3, |k: u64| sqrt_mod(U1024::from(k), prime160))
+    },
+    // Polynomial selection
+    {
+        let n = Uint::from_str(PQ256).unwrap();
+        Bench::new("select_polys(256-bit n) = Some(...)")
+        .run_seeded(n, |n| select_polys(25, 0, n))
     },
 }

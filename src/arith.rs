@@ -110,6 +110,21 @@ pub fn sqrt_mod<T: Num>(n: T, p: T) -> Option<T> {
     }
 }
 
+pub fn inv_mod64(n: u64, p: u64) -> Option<u64> {
+    let e = Integer::extended_gcd(&(n as i64), &(p as i64));
+    if e.gcd == 1 {
+        let x = if e.x < 0 {
+            e.x + p as i64
+        } else {
+            e.x
+        };
+        assert!(x >= 0);
+        Some(x as u64 % p)
+    } else {
+        None
+    }
+}
+
 pub fn inv_mod<const N: usize>(n: BUint<N>, p: BUint<N>) -> Option<BUint<N>> {
     // Not generic, we need to switch to signed realm.
     let e = Integer::extended_gcd(&BInt::from_bits(n), &BInt::from_bits(p));

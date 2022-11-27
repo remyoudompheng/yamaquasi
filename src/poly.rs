@@ -4,7 +4,7 @@
 //! Robert D. Silverman, The multiple polynomial quadratic sieve
 //! Math. Comp. 48, 1987, https://doi.org/10.1090/S0025-5718-1987-0866119-8
 
-use crate::arith::{inv_mod, isqrt, pow_mod, Num};
+use crate::arith::{inv_mod, inv_mod64, isqrt, pow_mod, Num};
 use crate::Uint;
 use num_traits::One;
 
@@ -49,12 +49,12 @@ fn test_simple_prime() {
 /// Selects k such kn is a quadratic residue modulo many small primes.
 pub fn select_multipliers(n: Uint) -> Vec<u32> {
     let mut res = vec![];
-    let bases: &[u32] = &[8, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31];
+    let bases: &[u32] = &[8, 3, 5, 7, 11, 13, 17];
     let residues: Vec<u32> = bases
         .iter()
         .map(|&b| (n % Uint::from(b)).to_u64().unwrap() as u32)
         .collect();
-    for i in 1..30000 {
+    for i in 1..60000 {
         let k = 2 * i + 1;
         let mut all_squares = true;
         for (idx, &b) in bases.iter().enumerate() {
@@ -71,8 +71,183 @@ pub fn select_multipliers(n: Uint) -> Vec<u32> {
             }
         }
         if all_squares {
-            res.push(k)
+            res.push(k);
+            if res.len() > 4 {
+                return res
+            }
         }
     }
     res
+}
+
+#[derive(Debug)]
+pub struct Poly(pub Uint, pub Uint); // A, B
+
+impl Poly {
+    pub fn prepare_prime(&self, p: Prime) -> SievePrime {
+        // If p == 2, (2A+B)^2 is always equal to n
+        if p.p == 2 {
+            return SievePrime {
+                p: p.p,
+                r: p.r,
+                roots: [0, 1],
+            };
+        }
+        // Transform roots as: r -> (r - B) / 2A
+        let a: Uint = (self.0 << 1) % Uint::from(p.p);
+        let ainv = inv_mod64(a.to_u64().unwrap(), p.p).unwrap();
+        let bp = (self.1 % Uint::from(p.p)).to_u64().unwrap();
+        SievePrime {
+            p: p.p,
+            r: p.r,
+            roots: [
+                ((p.r + p.p - bp) * ainv) % p.p,
+                ((p.p - p.r + p.p - bp) * ainv) % p.p,
+            ],
+        }
+    }
+}
+
+#[test]
+fn test_poly_prime() {
+    let p = Prime { p: 10223, r: 4526 };
+    let poly = Poly(
+        Uint::from_str("13628964805482736048449433716121").unwrap(),
+        Uint::from_str("2255304218805619815720698662795").unwrap(),
+    );
+    let sp = poly.prepare_prime(p);
+    let x1: Uint = (poly.0 << 1) * Uint::from(sp.roots[0]) + poly.1;
+    let x1p: u64 = (x1 % Uint::from(p.p)).to_u64().unwrap();
+    assert_eq!(pow_mod(x1p, 2, p.p), pow_mod(p.r, 2, p.p));
+    let x2: Uint = (poly.0 << 1) * Uint::from(sp.roots[1]) + poly.1;
+    let x2p: u64 = (x2 % Uint::from(p.p)).to_u64().unwrap();
+    assert_eq!(pow_mod(x2p, 2, p.p), pow_mod(p.r, 2, p.p));
+}
+
+/// Returns a polynomial suitable for sieving across ±2^sievebits
+/// The offset is a seed for prime generation.
+pub fn select_polys(sievebits: usize, offset: u64, n: Uint) -> Poly {
+    // Select an appropriate pseudoprime. It is enough to be able
+    // to compute a modular square root of n.
+    // See [Silverman, Section 3]
+    // Look for A=D^2 such that (2A M/2)^2 ~= N/2
+    // D is less than 64-bit for a 256-bit n
+    let mut base: Uint = isqrt(n >> 1) >> sievebits;
+    base = isqrt(base);
+    let (d, r) = sieve_poly(base, offset, n);
+
+    // Lift square root mod D^2
+    // Since D*D < N, computations can be done using the same integer width.
+    let h1 = r;
+    let c = ((n - h1 * h1) / d) % d;
+    let h2 = (c * inv_mod(h1 << 1, d).unwrap()) % d;
+    // (h1 + h2*D)**2 = n mod D^2
+    let mut b = (h1 + h2 * d) % (d * d);
+    if b.low_u64() % 2 == 0 {
+        b = d * d - b; // want an odd b
+    }
+
+    // A = D^2, B = sqrt(n) mod D^2, C = (B^2 - kn) / 4A
+    // (2Ax + B)^2 - kn = 4A (Ax^2 + B x + C)
+    // Ax^2 + Bx + C = ((2Ax + B)/2D)^2 mod n
+    Poly(d * d, b)
+}
+
+const SMALL_PRIMES: &[u64] = &[
+    2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97,
+    101, 103, 107, 109, 113, 127, 131, 137, 139, 149, 151, 157, 163, 167, 173, 179, 181, 191, 193,
+];
+
+pub const POLY_STRIDE: usize = 32768;
+
+fn sieve_at(base: Uint, offset: u64) -> [u64; 128] {
+    if base.bits() > 1024 {
+        panic!("not expecting to sieve {}-bit primes", base.bits())
+    }
+    let mut composites = [0u8; POLY_STRIDE];
+    for &p in SMALL_PRIMES {
+        let off = ((base + Uint::from(offset)) % Uint::from(p))
+            .to_u64()
+            .unwrap();
+        let mut idx = -(off as isize);
+        while idx < composites.len() as isize {
+            if idx >= 0 {
+                composites[idx as usize] = 1
+            }
+            idx += p as isize
+        }
+    }
+    let mut res = [0u64; 128];
+    let mut idx = 0;
+    let base4 = base.low_u64() % 4;
+    for i in 0..POLY_STRIDE {
+        if composites[i] == 0 && (base4 + i as u64) % 4 == 3 {
+            res[idx] = offset + i as u64;
+            idx += 1;
+        }
+        if idx == 128 {
+            break;
+        }
+    }
+    res
+}
+
+fn sieve_poly(base: Uint, offset: u64, n: Uint) -> (Uint, Uint) {
+    let offs = sieve_at(base, offset);
+    for o in offs {
+        if o == 0 {
+            continue;
+        }
+        let base = base + Uint::from(o);
+        if base.low_u64() % 4 == 3 {
+            // Compute pow(n, (d+1)/4, d)
+            let r = pow_mod(n, (base >> 2) + Uint::one(), base);
+            if (r * r) % base == n % base {
+                return (base, r);
+            }
+        }
+    }
+    panic!(
+        "impossible! failed to find a pseudoprime {} {}=>{:?}",
+        base, offset, offs
+    )
+}
+
+#[test]
+fn test_select_polys() {
+    use crate::arith::sqrt_mod;
+    use crate::Int;
+
+    let n = Uint::from_str(
+        "104567211693678450173299212092863908236097914668062065364632502155864426186497",
+    )
+    .unwrap();
+    let Poly(a, b) = select_polys(24, 0, n);
+    let d = isqrt(a);
+    // D = 3 mod 4
+    assert_eq!(d.low_u64() % 4, 3);
+    // N is a square modulo D
+    assert!(sqrt_mod(n, d).is_some());
+    // A = D^2
+    assert_eq!(a, d * d);
+    // B^2 = N mod 4D^2
+    assert_eq!(pow_mod(b, Uint::from(2u64), d * d << 2), n % (d * d << 2));
+    println!("D={} A={} B={}", d, a, b);
+
+    let c = (n - (b * b)) / (a << 2);
+
+    // Check that:
+    // Ax²+Bx+C is small
+    // 4A(Ax²+Bx+C) = (2Ax+B)^2 mod N
+    let x = Uint::from(1_234_567u64);
+    let num = ((a << 1) * x + b) % n;
+    let den = inv_mod(d << 1, n).unwrap();
+    println!("1/2D={}", den);
+    let q = (num * den) % n;
+    println!("{}", q);
+    let q2 = pow_mod(q, Uint::from(2u64), n);
+    println!("{}", q2);
+    let px = Int::from_bits(a * x * x + b * x) - Int::from_bits(c);
+    println!("Ax²+Bx+C = {}", px);
+    assert!(px.abs().bits() <= 128 + 24);
 }

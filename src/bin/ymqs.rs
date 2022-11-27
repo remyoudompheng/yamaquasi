@@ -10,15 +10,15 @@
 
 use std::str::FromStr;
 
-use yamaquasi::arith::{isqrt, sqrt_mod, Num, U1024};
-use yamaquasi::poly::{self, Prime, SievePrime};
+use yamaquasi::arith::{isqrt, sqrt_mod, inv_mod, Num, U1024};
+use yamaquasi::poly::{self, Poly, Prime, SievePrime, select_polys, POLY_STRIDE};
 use yamaquasi::{Int, Uint};
+use yamaquasi::params::{BLOCK_SIZE, smooth_bound, sieve_interval_logsize};
 
 use num_integer::div_rem;
 
 const OPT_MULTIPLIERS: bool = true;
-const OPT_SELECTPOLY: bool = false;
-const OPT_MULTIPOLY: bool = false;
+const OPT_MULTIPOLY: bool = true;
 
 fn main() {
     let arg = std::env::args().nth(1).expect("Usage: ymqs NUMBER");
@@ -55,26 +55,25 @@ fn main() {
         .collect();
     let smallprimes: Vec<u64> = primes.iter().map(|f| f.p).take(10).collect();
     eprintln!("Factor base size {} ({:?})", primes.len(), smallprimes);
-    // Prepare sieve
-    let nsqrt = isqrt(n * Uint::from(k));
-    let sprimes: Vec<SievePrime> = primes
-        .iter()
-        .map(|&p| poly::simple_prime(p, nsqrt))
-        .collect();
-    sieve(n * Uint::from(k), sprimes)
-}
 
-fn smooth_bound(n: Uint) -> u32 {
-    // x => sqrt(2)/4 * sqrt(x * log(2) * log(x * log(2)))
-    let bits = n.bits() / 2 + 30;
-    let bits_f = bits as f64;
-    let mut sqrt: f64 = bits_f / 8.;
-    sqrt = sqrt / 2. + bits_f / (2. * sqrt);
-    sqrt = sqrt / 2. + bits_f / (2. * sqrt);
-    (1.08 * sqrt).exp() as u32
-}
+    if !OPT_MULTIPOLY {
+        sieve(n * Uint::from(k), &primes)
+    } else {
+        let mut found = 0usize ;
+        let mlog = sieve_interval_logsize(n);
+        println!("Sieving interval size {}M", 1<<(mlog - 20));
+        for idx in 0u64..1000 {
+            found += sieve_poly(idx, n * Uint::from(k), &primes);
+            println!(
+                "Sieved {}M {} polys found {} smooths",
+                ((idx + 1) << (mlog+1 - 10)) >> 10,
+                idx +1 ,
+                found
+            );
 
-const BLOCK_SIZE: usize = 4 * 1024 * 1024;
+        }
+    }
+}
 
 fn compute_primes(bound: u32) -> Vec<u32> {
     // Eratosthenes
@@ -98,7 +97,14 @@ fn compute_primes(bound: u32) -> Vec<u32> {
     primes
 }
 
-fn sieve(n: Uint, primes: Vec<SievePrime>) {
+fn sieve(n: Uint, primes: &[Prime]) {
+    // Prepare sieve
+    let nsqrt = isqrt(n);
+    let sprimes: Vec<SievePrime> = primes
+        .iter()
+        .map(|&p| poly::simple_prime(p, nsqrt))
+        .collect();
+
     // Naïve quadratic sieve with polynomial x²-n (x=-M..M)
     // Max value is X = sqrt(n) * M
     // Smooth bound Y = exp(1/2 sqrt(log X log log X))
@@ -122,7 +128,7 @@ fn sieve(n: Uint, primes: Vec<SievePrime>) {
                 n: n,
                 nsqrt: nsqrt,
             },
-            &primes,
+            &sprimes,
         );
         found += x;
         if i % 4 == 3 {
@@ -163,12 +169,6 @@ impl Block {
         let [a, b] = self.starts(pr);
         i as u64 % pr.p == a || i as u64 % pr.p == b
     }
-}
-
-struct Relation {
-    x: Uint,
-    x2: Uint,                     // x*x mod n
-    factors: Vec<(isize, usize)>, // -1 for the sign
 }
 
 fn sieve_block(b: Block, primes: &[SievePrime]) -> usize {
@@ -219,3 +219,93 @@ fn sieve_block(b: Block, primes: &[SievePrime]) -> usize {
     }
     found
 }
+
+// MPQS implementation
+
+// One MPQS unit of work, identified by an integer 'idx'.
+fn sieve_poly(idx: u64, n: Uint, primes: &[Prime]) -> usize {
+    let mlog = sieve_interval_logsize(n);
+    // a suitable prime will be found (hopefully) in
+    // a size (2 log n) interval
+    let pol = select_polys(mlog as usize, idx * POLY_STRIDE as u64, n);
+    let nblocks = (1u64 << (mlog-10)) / (BLOCK_SIZE as u64 / 1024);
+    println!("Sieving polynomial A={} B={} M=2^{} blocks={}", pol.0, pol.1, mlog,nblocks);
+    // Precompute inverse of 4A
+    let ainv = inv_mod(pol.0 << 2, n).unwrap();
+
+    // Precompute factor base extra information.
+    let sprimes: Vec<_> = primes.into_iter().map(|&p| pol.prepare_prime(p)).collect();
+
+    let mut found: usize = 0;
+    let nsqrt = isqrt(n);
+    // Sieve from -M to M
+    let nblocks = nblocks as i64;
+    for i in -nblocks..nblocks {
+        let x = sieve_block_poly(
+            Block {
+                offset: i * BLOCK_SIZE as i64,
+                n: n,
+                nsqrt: nsqrt,
+            },
+            &sprimes,
+            &pol,
+            ainv
+        );
+        found += x;
+    }
+    found
+}
+
+// Sieve using a selected polynomial
+fn sieve_block_poly(b: Block, primes: &[SievePrime], pol: &Poly, ainv: Uint) -> usize {
+    let mut blk = vec![0u8; BLOCK_SIZE];
+    for item in primes {
+        let p = item.p;
+        let size = u64::BITS - u64::leading_zeros(p);
+        let starts = b.starts(&item);
+        let starts = if p == 2 { &starts[..1] } else { &starts[..] };
+        for &s in starts {
+            let mut i = s as usize;
+            while i < blk.len() {
+                blk[i] += size as u8;
+                i += p as usize;
+            }
+        }
+    }
+
+    let maxprime = primes.last().unwrap().p;
+    const EXTRABITS: u8 = 8;
+    let target = b.nsqrt.bits() as u8 + EXTRABITS;
+    let mut found = 0usize;
+    for i in 0..BLOCK_SIZE {
+        if blk[i] >= target {
+            // Evaluate polynomial
+            let s = Int::from_bits(pol.0) * Int::from(b.offset + (i as i64)) << 1;
+            let s = s + Int::from_bits(pol.1);
+            let candidate: Int = s * s - Int::from_bits(b.n);
+            let cabs = (candidate.abs().to_bits() * ainv) % b.n;
+            let sign = candidate.is_negative();
+            let mut cofactor: Uint = cabs;
+            for item in primes {
+                if b.matches(i, item) {
+                    loop {
+                        let (q, r) = div_rem(cofactor, Uint::from(item.p));
+                        if r.is_zero() {
+                            cofactor = q
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+            if cofactor.bits() < 64 && cofactor.low_u64() < maxprime {
+                println!("i={} smooth {}", i, cabs);
+                found += 1;
+            } else {
+                println!("i={} smooth {} cofactor {}", i, cabs, cofactor);
+            }
+        }
+    }
+    found
+}
+
