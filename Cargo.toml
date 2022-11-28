@@ -8,6 +8,7 @@ license = "BSD3"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+bitvec_simd = "0.20"
 bnum = { version = "0.3", features = ["numtraits"] }
 num-integer = "0.1"
 num-traits = "*"

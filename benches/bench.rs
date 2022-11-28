@@ -2,6 +2,7 @@ use brunch::Bench;
 use std::str::FromStr;
 use std::time::Duration;
 use yamaquasi::arith::{inv_mod, isqrt, sqrt_mod, U1024, U256, U512};
+use yamaquasi::matrix::{kernel, make_test_matrix, make_test_matrix_sparse};
 use yamaquasi::poly::select_polys;
 use yamaquasi::Uint;
 
@@ -56,5 +57,21 @@ brunch::benches! {
         let n = Uint::from_str(PQ256).unwrap();
         Bench::new("select_polys(256-bit n) = Some(...)")
         .run_seeded(n, |n| select_polys(25, 0, n))
+    },
+    // Linear algebra
+    {
+        let (mat, _) = make_test_matrix(500);
+        Bench::new("kernel(matrix 1000x1000)")
+        .run_seeded(mat, |mat| kernel(mat).pop().unwrap())
+    },
+    {
+        let (mat, _) = make_test_matrix(2000);
+        Bench::new("kernel(matrix 4000x4000)")
+        .run_seeded(mat, |mat| kernel(mat).pop().unwrap())
+    },
+    {
+        let mat = make_test_matrix_sparse(1000, 10, 16);
+        Bench::new("kernel(sparse size 1000, 16 per vec)")
+        .run_seeded(mat, |mat| kernel(mat).pop().unwrap())
     },
 }
