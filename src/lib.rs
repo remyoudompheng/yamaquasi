@@ -2,6 +2,7 @@ pub mod arith;
 pub mod matrix;
 pub mod params;
 pub mod poly;
+pub mod relations;
 
 // We need to perform modular multiplication modulo the input number.
 pub type Int = arith::I1024;

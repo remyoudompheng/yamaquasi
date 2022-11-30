@@ -58,9 +58,8 @@ pub fn select_multipliers(n: Uint) -> u32 {
     for i in 0..30 {
         let k = 2 * i + 1;
         if (k * residues[0]) % 8 != 1 {
-            continue
+            continue;
         }
-        let mut all_squares = true;
         let mut nsq = 0;
         for (idx, &b) in bases.iter().enumerate() {
             for x in 1..b {
@@ -80,7 +79,11 @@ pub fn select_multipliers(n: Uint) -> u32 {
 }
 
 #[derive(Debug)]
-pub struct Poly(pub Uint, pub Uint); // A, B
+pub struct Poly {
+    pub a: Uint,
+    pub b: Uint,
+    pub d: Uint,
+}
 
 impl Poly {
     pub fn prepare_prime(&self, p: Prime) -> SievePrime {
@@ -93,9 +96,9 @@ impl Poly {
             };
         }
         // Transform roots as: r -> (r - B) / 2A
-        let a: Uint = (self.0 << 1) % Uint::from(p.p);
-        let ainv = inv_mod64(a.to_u64().unwrap(), p.p).unwrap();
-        let bp = (self.1 % Uint::from(p.p)).to_u64().unwrap();
+        let a: u64 = (self.a << 1) % p.p;
+        let ainv = inv_mod64(a, p.p).unwrap();
+        let bp = self.b % p.p;
         SievePrime {
             p: p.p,
             r: p.r,
@@ -110,15 +113,16 @@ impl Poly {
 #[test]
 fn test_poly_prime() {
     let p = Prime { p: 10223, r: 4526 };
-    let poly = Poly(
-        Uint::from_str("13628964805482736048449433716121").unwrap(),
-        Uint::from_str("2255304218805619815720698662795").unwrap(),
-    );
+    let poly = Poly {
+        a: Uint::from_str("13628964805482736048449433716121").unwrap(),
+        b: Uint::from_str("2255304218805619815720698662795").unwrap(),
+        d: Uint::from(3691742787015739u64),
+    };
     let sp = poly.prepare_prime(p);
-    let x1: Uint = (poly.0 << 1) * Uint::from(sp.roots[0]) + poly.1;
+    let x1: Uint = (poly.a << 1) * Uint::from(sp.roots[0]) + poly.b;
     let x1p: u64 = (x1 % Uint::from(p.p)).to_u64().unwrap();
     assert_eq!(pow_mod(x1p, 2, p.p), pow_mod(p.r, 2, p.p));
-    let x2: Uint = (poly.0 << 1) * Uint::from(sp.roots[1]) + poly.1;
+    let x2: Uint = (poly.a << 1) * Uint::from(sp.roots[1]) + poly.b;
     let x2p: u64 = (x2 % Uint::from(p.p)).to_u64().unwrap();
     assert_eq!(pow_mod(x2p, 2, p.p), pow_mod(p.r, 2, p.p));
 }
@@ -149,7 +153,11 @@ pub fn select_polys(sievebits: usize, offset: u64, n: Uint) -> Poly {
     // A = D^2, B = sqrt(n) mod D^2, C = (B^2 - kn) / 4A
     // (2Ax + B)^2 - kn = 4A (Ax^2 + B x + C)
     // Ax^2 + Bx + C = ((2Ax + B)/2D)^2 mod n
-    Poly(d * d, b)
+    Poly {
+        a: d * d,
+        b: b,
+        d: d,
+    }
 }
 
 const SMALL_PRIMES: &[u64] = &[
@@ -221,8 +229,7 @@ fn test_select_polys() {
         "104567211693678450173299212092863908236097914668062065364632502155864426186497",
     )
     .unwrap();
-    let Poly(a, b) = select_polys(24, 0, n);
-    let d = isqrt(a);
+    let Poly { a, b, d } = select_polys(24, 0, n);
     // D = 3 mod 4
     assert_eq!(d.low_u64() % 4, 3);
     // N is a square modulo D

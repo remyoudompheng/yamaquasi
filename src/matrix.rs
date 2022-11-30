@@ -34,8 +34,6 @@ pub fn kernel(columns: Vec<BitVec>) -> Vec<BitVec> {
     // Make matrix triangular.
     let mut done: usize = 0;
     let mut cols = columns;
-    let mut tmpc = cols[0].clone();
-    let mut tmpr = coefs[0].clone();
     while done < ncols {
         assert!(
             &zeros[..done].iter().max().unwrap_or(&0)
@@ -72,6 +70,7 @@ pub fn kernel(columns: Vec<BitVec>) -> Vec<BitVec> {
     vec![]
 }
 
+#[cfg(test)]
 fn make_bitvec(slice: &[u8]) -> BitVec {
     BitVec::from(slice.iter().map(|&n| n != 0))
 }
@@ -142,9 +141,9 @@ pub fn make_test_matrix(n: usize) -> (Vec<BitVec>, BitVec) {
 pub fn make_test_matrix_sparse(n: usize, k: usize, ones: usize) -> Vec<BitVec> {
     let mut seed: Wrapping<u32> = Wrapping(0xcafe1337 + n as u32);
     let mut matrix = vec![];
-    for i in 0..n + k {
+    for _ in 0..n + k {
         let mut p = BitVec::zeros(n);
-        for j in 0..ones {
+        for _ in 0..ones {
             seed *= 0x12345;
             seed ^= 0x1337;
             p.set((seed.0 >> 8) as usize % n, true);

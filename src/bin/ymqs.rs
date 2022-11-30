@@ -10,10 +10,11 @@
 
 use std::str::FromStr;
 
-use yamaquasi::arith::{isqrt, sqrt_mod, inv_mod, Num, U1024};
-use yamaquasi::poly::{self, Poly, Prime, SievePrime, select_polys, POLY_STRIDE};
+use yamaquasi::arith::{inv_mod, isqrt, sqrt_mod, Num, U1024};
+use yamaquasi::params::{sieve_interval_logsize, smooth_bound, BLOCK_SIZE};
+use yamaquasi::poly::{self, select_polys, Poly, Prime, SievePrime, POLY_STRIDE};
+use yamaquasi::relations::{final_step, Relation};
 use yamaquasi::{Int, Uint};
-use yamaquasi::params::{BLOCK_SIZE, smooth_bound, sieve_interval_logsize};
 
 use num_integer::div_rem;
 
@@ -34,11 +35,7 @@ fn main() {
     let n = Uint::from_str(&arg).unwrap();
     eprintln!("Input number {}", n);
     let ks = poly::select_multipliers(n);
-    let k: u32 = if OPT_MULTIPLIERS {
-        ks
-    } else {
-        1
-    };
+    let k: u32 = if OPT_MULTIPLIERS { ks } else { 1 };
     eprintln!("Multiplier {}", k);
     let b = smooth_bound(n);
     eprintln!("Smoothness bound {}", b);
@@ -59,22 +56,25 @@ fn main() {
     if !OPT_MULTIPOLY {
         sieve(n * Uint::from(k), &primes)
     } else {
-        let mut found = 0usize ;
+        let target = primes.len() + 32;
+        let mut relations = vec![];
         let mlog = sieve_interval_logsize(n);
-        println!("Sieving interval size {}M", 1<<(mlog - 20));
+        println!("Sieving interval size {}M", 1 << (mlog - 20));
         for idx in 0u64..10_000 {
-            found += sieve_poly(idx, n * Uint::from(k), &primes);
+            let mut found = sieve_poly(idx, n * Uint::from(k), &primes);
+            relations.append(&mut found);
             println!(
                 "Sieved {}M {} polys found {} smooths",
-                ((idx + 1) << (mlog+1 - 10)) >> 10,
-                idx +1 ,
-                found
+                ((idx + 1) << (mlog + 1 - 10)) >> 10,
+                idx + 1,
+                relations.len()
             );
-            if found > primes.len() * 11 / 10 {
+            if relations.len() >= target {
                 println!("Found enough relations");
-                break
+                break;
             }
         }
+        final_step(n, &relations);
     }
 }
 
@@ -226,25 +226,30 @@ fn sieve_block(b: Block, primes: &[SievePrime]) -> usize {
 // MPQS implementation
 
 // One MPQS unit of work, identified by an integer 'idx'.
-fn sieve_poly(idx: u64, n: Uint, primes: &[Prime]) -> usize {
+fn sieve_poly(idx: u64, n: Uint, primes: &[Prime]) -> Vec<Relation> {
     let mlog = sieve_interval_logsize(n);
     // a suitable prime will be found (hopefully) in
     // a size (2 log n) interval
     let pol = select_polys(mlog as usize, idx * POLY_STRIDE as u64, n);
-    let nblocks = (1u64 << (mlog-10)) / (BLOCK_SIZE as u64 / 1024);
-    println!("Sieving polynomial A={} B={} M=2^{} blocks={}", pol.0, pol.1, mlog,nblocks);
+    let nblocks = (1u64 << (mlog - 10)) / (BLOCK_SIZE as u64 / 1024);
+    println!(
+        "Sieving polynomial A={} B={} M=2^{} blocks={}",
+        pol.a, pol.b, mlog, nblocks
+    );
     // Precompute inverse of 4A
-    let ainv = inv_mod(pol.0 << 2, n).unwrap();
+    let ainv = inv_mod(pol.a << 2, n).unwrap();
+    // Precompute inverse of 2D
+    let dinv = inv_mod(pol.d << 1, n).unwrap();
 
     // Precompute factor base extra information.
     let sprimes: Vec<_> = primes.into_iter().map(|&p| pol.prepare_prime(p)).collect();
 
-    let mut found: usize = 0;
+    let mut result: Vec<Relation> = vec![];
     let nsqrt = isqrt(n);
     // Sieve from -M to M
     let nblocks = nblocks as i64;
     for i in -nblocks..nblocks {
-        let x = sieve_block_poly(
+        let mut x = sieve_block_poly(
             Block {
                 offset: i * BLOCK_SIZE as i64,
                 n: n,
@@ -252,15 +257,23 @@ fn sieve_poly(idx: u64, n: Uint, primes: &[Prime]) -> usize {
             },
             &sprimes,
             &pol,
-            ainv
+            ainv,
+            dinv,
         );
-        found += x;
+        result.append(&mut x);
     }
-    found
+    result
 }
 
 // Sieve using a selected polynomial
-fn sieve_block_poly(b: Block, primes: &[SievePrime], pol: &Poly, ainv: Uint) -> usize {
+fn sieve_block_poly(
+    b: Block,
+    primes: &[SievePrime],
+    pol: &Poly,
+    ainv: Uint,
+    dinv: Uint,
+) -> Vec<Relation> {
+    let mut result = vec![];
     let mut blk = vec![0u8; BLOCK_SIZE];
     for item in primes {
         let p = item.p;
@@ -276,39 +289,52 @@ fn sieve_block_poly(b: Block, primes: &[SievePrime], pol: &Poly, ainv: Uint) -> 
         }
     }
 
-    let maxprime = primes.last().unwrap().p;
+    //let maxprime = primes.last().unwrap().p;
     const EXTRABITS: u8 = 8;
     let target = b.nsqrt.bits() as u8 + EXTRABITS;
-    let mut found = 0usize;
     for i in 0..BLOCK_SIZE {
         if blk[i] >= target {
+            let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
             // Evaluate polynomial
-            let s = Int::from_bits(pol.0) * Int::from(b.offset + (i as i64)) << 1;
-            let s = s + Int::from_bits(pol.1);
+            let s: Int = Int::from_bits(pol.a) * Int::from(b.offset + (i as i64)) << 1;
+            let s = s + Int::from_bits(pol.b);
             let candidate: Int = s * s - Int::from_bits(b.n);
             let cabs = (candidate.abs().to_bits() * ainv) % b.n;
-            let sign = candidate.is_negative();
+            if candidate.is_negative() {
+                factors.push((-1, 1));
+            }
             let mut cofactor: Uint = cabs;
             for item in primes {
                 if b.matches(i, item) {
+                    let mut exp = 0;
                     loop {
                         let (q, r) = div_rem(cofactor, Uint::from(item.p));
                         if r.is_zero() {
-                            cofactor = q
+                            cofactor = q;
+                            exp += 1;
                         } else {
                             break;
                         }
                     }
+                    factors.push((item.p as i64, exp));
                 }
             }
-            if cofactor.bits() < 64 && cofactor.low_u64() < maxprime {
+            if cofactor.bits() < 64 && cofactor.low_u64() == 1 {
                 println!("i={} smooth {}", i, cabs);
-                found += 1;
+                let sabs = (s.abs().to_bits() * dinv) % b.n;
+                result.push(Relation {
+                    x: if candidate.is_negative() {
+                        b.n - sabs
+                    } else {
+                        sabs
+                    },
+                    cofactor: 1,
+                    factors,
+                });
             } else {
                 println!("i={} smooth {} cofactor {}", i, cabs, cofactor);
             }
         }
     }
-    found
+    result
 }
-

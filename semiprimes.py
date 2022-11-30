@@ -18,7 +18,7 @@ def main():
     p, q = primes
     print(f"{p =}")
     print(f"{q =}")
-    print(f"n = {p*q}")
+    print(f"n = {p*q} {(p*q).bit_length()} bits")
 
 
 if __name__ == "__main__":
