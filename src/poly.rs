@@ -70,10 +70,7 @@ fn test_simple_prime() {
 /// Selects k such kn is a quadratic residue modulo many small primes.
 pub fn select_multipliers(n: Uint) -> u32 {
     let bases: &[u32] = &[8, 3, 5, 7, 11, 13, 17];
-    let residues: Vec<u32> = bases
-        .iter()
-        .map(|&b| (n % Uint::from(b)).to_u64().unwrap() as u32)
-        .collect();
+    let residues: Vec<u32> = bases.iter().map(|&b| (n % b as u64) as u32).collect();
     let mut best: u32 = 1;
     let mut best_nsq = 0;
     for i in 0..30 {
@@ -150,14 +147,9 @@ fn test_poly_prime() {
 
 /// Returns a polynomial suitable for sieving across ±2^sievebits
 /// The offset is a seed for prime generation.
-pub fn select_polys(sievebits: usize, offset: u64, n: Uint) -> Poly {
+pub fn select_polys(base: Uint, offset: u64, n: Uint) -> Poly {
     // Select an appropriate pseudoprime. It is enough to be able
     // to compute a modular square root of n.
-    // See [Silverman, Section 3]
-    // Look for A=D^2 such that (2A M/2)^2 ~= N/2
-    // D is less than 64-bit for a 256-bit n
-    let mut base: Uint = isqrt(n >> 1) >> sievebits;
-    base = isqrt(base);
     let (d, r) = sieve_poly(base, offset, n);
 
     // Lift square root mod D^2
@@ -194,9 +186,7 @@ fn sieve_at(base: Uint, offset: u64) -> [u64; 128] {
     }
     let mut composites = [0u8; POLY_STRIDE];
     for &p in SMALL_PRIMES {
-        let off = ((base + Uint::from(offset)) % Uint::from(p))
-            .to_u64()
-            .unwrap();
+        let off = (base + Uint::from(offset)) % p;
         let mut idx = -(off as isize);
         while idx < composites.len() as isize {
             if idx >= 0 {

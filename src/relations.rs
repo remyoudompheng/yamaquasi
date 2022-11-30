@@ -23,7 +23,27 @@ pub struct Relation {
 }
 
 impl Relation {
-    fn verify(&self, n: Uint) -> bool {
+    /// Combine 2 relations sharing a cofactor.
+    pub fn combine(&self, rhs: &Relation, n: &Uint) -> Relation {
+        assert_eq!(self.cofactor, rhs.cofactor);
+        let mut exps = HashMap::<i64, u64>::new();
+        for (p, k) in &self.factors {
+            let e = exps.get(&p).unwrap_or(&0);
+            exps.insert(*p, e + k);
+        }
+        for (p, k) in &rhs.factors {
+            let e = exps.get(&p).unwrap_or(&0);
+            exps.insert(*p, e + k);
+        }
+        exps.insert(self.cofactor as i64, 2);
+        Relation {
+            x: (self.x * rhs.x) % n,
+            cofactor: 1,
+            factors: exps.into_iter().collect(),
+        }
+    }
+
+    pub fn verify(&self, n: Uint) -> bool {
         let mut prod = Uint::one();
         for &(p, k) in self.factors.iter() {
             if p == -1 && k % 2 == 1 {
@@ -33,6 +53,20 @@ impl Relation {
             }
         }
         (self.x * self.x) % n == prod
+    }
+}
+
+pub fn combine_large_relation(
+    h: &mut HashMap<u64, Relation>,
+    r: &Relation,
+    n: &Uint,
+) -> Option<Relation> {
+    let c = r.cofactor;
+    if let Some(r0) = h.get(&c) {
+        Some(r.combine(r0, &n))
+    } else {
+        h.insert(c, r.clone());
+        None
     }
 }
 

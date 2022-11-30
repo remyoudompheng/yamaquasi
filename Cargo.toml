@@ -8,6 +8,7 @@ license = "BSD3"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+arguments = "0.7"
 bitvec_simd = "0.20"
 bnum = { version = "0.3", features = ["numtraits"] }
 num-integer = "0.1"
@@ -15,6 +16,9 @@ num-traits = "*"
 
 [dev-dependencies]
 brunch = "0.3"
+
+[profile.release]
+debug = 2
 
 [[bench]]
 name = "arith"

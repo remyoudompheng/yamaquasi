@@ -1,7 +1,7 @@
 use crate::Uint;
 
 // Fits cache size per core on most reasonable CPUs.
-pub const BLOCK_SIZE: usize = 1024 * 1024;
+pub const BLOCK_SIZE: usize = 512 * 1024;
 
 pub fn factor_base_size(n: Uint) -> u32 {
     let sz = n.bits();
@@ -19,15 +19,53 @@ pub fn factor_base_size(n: Uint) -> u32 {
     }
 }
 
-pub fn sieve_interval_logsize(n: Uint) -> u32 {
-    // 200 bits => 1M
-    // 250 bits => 32M
-    // 300 bits => 1B
-    let sz = n.bits() / 11;
-    if sz < 20 {
-        20
-    } else {
-        sz
+pub fn large_prime_factor(n: &Uint) -> u64 {
+    // Allow large cofactors up to FACTOR * largest prime
+    n.bits() as u64 / 4
+}
+
+pub fn qs_blocksize(n: &Uint) -> usize {
+    let sz = n.bits();
+    match sz {
+        // QS converges quickly for small inputs
+        0..=59 => 1 << 13,
+        60..=84 => 1 << (2 + sz / 5), // 14..18
+        _ => BLOCK_SIZE,
+    }
+}
+
+pub fn mpqs_interval_logsize(n: &Uint) -> u32 {
+    // 90 bits => 512k
+    // 120 bits => 1M
+    // 160 bits => 2M
+    // 200 bits => 4M
+    // 250 bits => 8M
+    let sz = n.bits();
+    match sz {
+        // Small numbers don't have enough polynomials,
+        // sieve large intervals
+        0..=79 => 17,
+        60..=99 => 16,
+        // Ordinary growth
+        100..=119 => 16 + sz / 30, // 16..19
+        120..=239 => 17 + sz / 40, // 20..22
+        _ => 23,
+    }
+}
+
+pub fn target_size(n: &Uint) -> u32 {
+    // Target smooth factor size during sieve
+    // When smooths are abundant, don't try too much
+    // to find large factors.
+    let sz = n.bits();
+    match sz {
+        // Large factor can be 10-16 bits
+        0..=127 => sz / 2 + 4,
+        // Large factor is about 20 bits
+        // Target lower than expected sz/2+8
+        128..=192 => sz / 2,
+        // Lower target for large sizes
+        _ => sz / 2 + 10 - sz / 20,
     }
 }
 
