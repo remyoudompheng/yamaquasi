@@ -17,5 +17,14 @@ num-traits = "*"
 brunch = "0.3"
 
 [[bench]]
-name = "bench"
+name = "arith"
 harness = false
+
+[[bench]]
+name = "matrix"
+harness = false
+
+[[bench]]
+name = "sieve"
+harness = false
+
