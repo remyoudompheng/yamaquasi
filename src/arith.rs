@@ -70,6 +70,9 @@ impl<const N: usize> Num for BUint<N> {
 /// Square root modulo a prime number p
 pub fn sqrt_mod<T: Num>(n: T, p: T) -> Option<T> {
     let n = n % p;
+    if n == T::zero() {
+        return Some(T::zero());
+    }
     let one = T::one();
     if p == T::from(2) {
         Some(n % p)
