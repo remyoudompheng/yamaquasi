@@ -16,9 +16,10 @@ def main():
             primes.append(int(seed))
             seed = mpz(randint(2 ** (size // 2 - 1), 2**(size // 2)))
     p, q = primes
-    print(f"{p =}")
-    print(f"{q =}")
-    print(f"n = {p*q} {(p*q).bit_length()} bits")
+    print(f"{p =}", file=sys.stderr)
+    print(f"{q =}", file=sys.stderr)
+    print(f"n = {p*q} {(p*q).bit_length()} bits", file=sys.stderr)
+    print(p * q)
 
 
 if __name__ == "__main__":

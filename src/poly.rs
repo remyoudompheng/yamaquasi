@@ -11,6 +11,27 @@ use num_traits::One;
 #[cfg(test)]
 use std::str::FromStr;
 
+pub fn primes(n: u32) -> Vec<u32> {
+    let bound = (n * 2 * (32 - n.leading_zeros())) as usize;
+    let mut sieve = vec![0; bound];
+
+    let mut primes = vec![];
+    for p in 2..sieve.len() {
+        if sieve[p] == 0 {
+            primes.push(p as u32);
+            if primes.len() == n as usize {
+                break;
+            }
+            let mut k = 2 * p as usize;
+            while k < bound {
+                sieve[k] = 1;
+                k += p
+            }
+        }
+    }
+    primes
+}
+
 // Helpers for polynomial selection
 
 #[derive(Copy, Clone, Debug)]

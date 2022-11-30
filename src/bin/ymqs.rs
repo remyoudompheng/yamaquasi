@@ -11,7 +11,7 @@
 use std::str::FromStr;
 
 use yamaquasi::arith::{inv_mod, isqrt, sqrt_mod, Num, U1024};
-use yamaquasi::params::{sieve_interval_logsize, smooth_bound, BLOCK_SIZE};
+use yamaquasi::params::{factor_base_size, sieve_interval_logsize, BLOCK_SIZE};
 use yamaquasi::poly::{self, select_polys, Poly, Prime, SievePrime, POLY_STRIDE};
 use yamaquasi::relations::{final_step, relation_gap, Relation};
 use yamaquasi::{Int, Uint};
@@ -37,16 +37,16 @@ fn main() {
     let ks = poly::select_multipliers(n);
     let k: u32 = if OPT_MULTIPLIERS { ks } else { 1 };
     eprintln!("Multiplier {}", k);
-    let b = smooth_bound(n);
-    eprintln!("Smoothness bound {}", b);
-    let primes = compute_primes(b);
+    let b = factor_base_size(n);
+    let primes = poly::primes(b);
+    eprintln!("Smoothness bound {}", primes.last().unwrap());
     eprintln!("All primes {}", primes.len());
     // Prepare factor base
     let primes: Vec<Prime> = primes
         .into_iter()
         .filter_map(|p| {
-            let nk: Uint = (n * Uint::from(k)) % Uint::from(p);
-            let r = sqrt_mod(nk.low_u64(), p as u64)?;
+            let nk: u64 = (n * Uint::from(k)) % (p as u64);
+            let r = sqrt_mod(nk, p as u64)?;
             Some(Prime { p: p as u64, r: r })
         })
         .collect();
@@ -82,28 +82,6 @@ fn main() {
         }
         final_step(n, &relations);
     }
-}
-
-fn compute_primes(bound: u32) -> Vec<u32> {
-    // Eratosthenes
-    let mut sieve = vec![0; bound as usize];
-    let mut p = 2;
-    while p * p < bound {
-        let mut k = 2 * p;
-        while k < bound {
-            sieve[k as usize] = 1;
-            k += p
-        }
-        p += 1
-    }
-
-    let mut primes = vec![];
-    for p in 2..sieve.len() {
-        if sieve[p] == 0 {
-            primes.push(p as u32)
-        }
-    }
-    primes
 }
 
 fn sieve(n: Uint, primes: &[Prime]) {
