@@ -147,11 +147,48 @@ fn test_poly_prime() {
 
 /// Returns a polynomial suitable for sieving across ±2^sievebits
 /// The offset is a seed for prime generation.
-pub fn select_polys(base: Uint, offset: u64, n: Uint) -> Poly {
+pub fn select_poly(base: Uint, offset: u64, n: Uint) -> Poly {
     // Select an appropriate pseudoprime. It is enough to be able
     // to compute a modular square root of n.
     let (d, r) = sieve_poly(base, offset, n);
+    make_poly(d, r, &n)
+}
 
+pub fn select_polys(base: Uint, width: usize, n: &Uint) -> Vec<Poly> {
+    sieve_for_polys(base, width, &n)
+        .into_iter()
+        .map(|(d, r)| make_poly(d, r, &n))
+        .collect()
+}
+
+pub fn sieve_for_polys(bmin: Uint, width: usize, n: &Uint) -> Vec<(Uint, Uint)> {
+    let mut composites = vec![false; width as usize];
+    for &p in SMALL_PRIMES {
+        let off = bmin % (p as u64);
+        let mut idx = -(off as isize);
+        while idx < composites.len() as isize {
+            if idx >= 0 {
+                composites[idx as usize] = true
+            }
+            idx += p as isize
+        }
+    }
+    let base4 = bmin.low_u64() % 4;
+    let mut result = vec![];
+    for i in 0..width {
+        if !composites[i] && (base4 + i as u64) % 4 == 3 {
+            // No small factor, 3 mod 4
+            let p = bmin + Uint::from(i);
+            let r = pow_mod(*n, (p >> 2) + Uint::one(), p);
+            if (r * r) % p == n % p {
+                result.push((p, r));
+            }
+        }
+    }
+    result
+}
+
+fn make_poly(d: Uint, r: Uint, n: &Uint) -> Poly {
     // Lift square root mod D^2
     // Since D*D < N, computations can be done using the same integer width.
     let h1 = r;
@@ -232,7 +269,7 @@ fn sieve_poly(base: Uint, offset: u64, n: Uint) -> (Uint, Uint) {
 }
 
 #[test]
-fn test_select_polys() {
+fn test_select_poly() {
     use crate::arith::sqrt_mod;
     use crate::Int;
 
@@ -240,7 +277,9 @@ fn test_select_polys() {
         "104567211693678450173299212092863908236097914668062065364632502155864426186497",
     )
     .unwrap();
-    let Poly { a, b, d } = select_polys(24, 0, n);
+    let mut polybase: Uint = isqrt(n >> 1) >> 24;
+    polybase = isqrt(polybase);
+    let Poly { a, b, d } = select_poly(polybase, 0, n);
     // D = 3 mod 4
     assert_eq!(d.low_u64() % 4, 3);
     // N is a square modulo D

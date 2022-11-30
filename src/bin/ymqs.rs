@@ -13,7 +13,7 @@ use std::str::FromStr;
 
 use yamaquasi::arith::{inv_mod, isqrt, sqrt_mod, Num, U1024};
 use yamaquasi::params::{self, large_prime_factor, BLOCK_SIZE};
-use yamaquasi::poly::{self, select_polys, Poly, Prime, SievePrime};
+use yamaquasi::poly::{self, Poly, Prime, SievePrime};
 use yamaquasi::relations::{combine_large_relation, final_step, relation_gap, Relation};
 use yamaquasi::{Int, Uint};
 
@@ -26,7 +26,6 @@ fn main() {
     if arg.orphans.len() != 1 {
         println!("Usage: ymqs [--mode qs|mpqs] NUMBER");
     }
-    eprintln!("{:?}", arg);
     let mode = arg.get::<String>("mode").unwrap_or("mpqs".into());
     let number = &arg.orphans[0];
     let n = U1024::from_str(number).expect("could not read decimal number");
@@ -46,13 +45,22 @@ fn main() {
     // Choose factor base. Sieve twice the number of primes
     // (n will be a quadratic residue for only half of them)
     let b = params::factor_base_size(n);
-    let primes = poly::primes(2 * b);
+    let primes = poly::primes(std::cmp::max(2 * b, 1000));
+    eprintln!("Testing small prime divisors");
+    let mut n = n;
+    for &p in &primes {
+        while n % (p as u64) == 0 {
+            n /= Uint::from(p);
+            println!("Factor {}", p)
+        }
+    }
+    let primes = &primes[..2 * b as usize];
     eprintln!("Smoothness bound {}", primes.last().unwrap());
     eprintln!("All primes {}", primes.len());
     // Prepare factor base
     let primes: Vec<Prime> = primes
         .into_iter()
-        .filter_map(|p| {
+        .filter_map(|&p| {
             let nk: u64 = (n * Uint::from(k)) % (p as u64);
             let r = sqrt_mod(nk, p as u64)?;
             Some(Prime { p: p as u64, r: r })
@@ -84,10 +92,29 @@ fn main() {
         if polybase < Uint::from(maxprime) {
             polybase = Uint::from(maxprime + 1000);
         }
+        let polystride = if n.bits() < 100 {
+            // Block of 20 polynomials
+            20 * 20 / 7 * polybase.bits()
+        } else {
+            100 * 20 / 7 * polybase.bits()
+        };
+        let nk: Uint = n * Uint::from(k);
+        let mut polys = poly::select_polys(polybase, polystride as usize, &nk);
+        let mut polyidx = 0;
+        println!("Generated {} polynomials", polys.len());
         let maxlarge: u64 = maxprime * large_prime_factor(&n);
         println!("Max cofactor {}", maxlarge);
         for idx in 0u64..1_000_000 {
-            let (mut found, foundlarge) = sieve_poly(idx, polybase, n * Uint::from(k), &primes);
+            // Pop next polynomial.
+            if polyidx == polys.len() {
+                polybase += Uint::from(polystride);
+                polys = poly::select_polys(polybase, polystride as usize, &nk);
+                polyidx = 0;
+                println!("Generated {} polynomials", polys.len());
+            }
+            let pol = &polys[polyidx];
+            polyidx += 1;
+            let (mut found, foundlarge) = sieve_poly(pol, nk, &primes);
             relations.append(&mut found);
             for r in foundlarge {
                 if let Some(rr) = combine_large_relation(&mut larges, &r, &n) {
@@ -300,25 +327,12 @@ fn sieve_block(b: Block, primes: &[SievePrime]) -> (Vec<Relation>, Vec<Relation>
 // MPQS implementation
 
 // One MPQS unit of work, identified by an integer 'idx'.
-fn sieve_poly(
-    idx: u64,
-    polybase: Uint,
-    n: Uint,
-    primes: &[Prime],
-) -> (Vec<Relation>, Vec<Relation>) {
+fn sieve_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Relation>) {
     let mlog = params::mpqs_interval_logsize(&n);
-    // a suitable prime will be found (hopefully) in
-    // a size (16 log n = 64 log D) interval
-    let stride = n.bits() * 8;
-    let pol = select_polys(polybase, idx * stride as u64, n);
     let nblocks = (1u64 << (mlog - 10)) / (BLOCK_SIZE as u64 / 1024);
     println!(
-        "Sieving polynomial offset={}, A={} B={} M=2^{} blocks={}",
-        idx * stride as u64,
-        pol.a,
-        pol.b,
-        mlog,
-        nblocks
+        "Sieving polynomial A={} B={} M=2^{} blocks={}",
+        pol.a, pol.b, mlog, nblocks
     );
     // Precompute inverse of 4A
     let ainv = inv_mod(pol.a << 2, n).unwrap();
