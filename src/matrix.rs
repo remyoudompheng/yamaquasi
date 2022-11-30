@@ -63,8 +63,8 @@ pub fn kernel(columns: Vec<BitVec>) -> Vec<BitVec> {
         }
         done += 1;
     }
-    if size > 0 && zeros[size - 1] == size {
-        return vec![coefs.swap_remove(size - 1)];
+    if ncols > 0 && zeros[ncols - 1] == size {
+        return vec![coefs.swap_remove(ncols - 1)];
     }
     // Reached the end but no vector is null.
     vec![]
