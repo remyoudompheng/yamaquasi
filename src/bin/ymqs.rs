@@ -13,7 +13,7 @@ use std::str::FromStr;
 use yamaquasi::arith::{inv_mod, isqrt, sqrt_mod, Num, U1024};
 use yamaquasi::params::{sieve_interval_logsize, smooth_bound, BLOCK_SIZE};
 use yamaquasi::poly::{self, select_polys, Poly, Prime, SievePrime, POLY_STRIDE};
-use yamaquasi::relations::{final_step, Relation};
+use yamaquasi::relations::{final_step, relation_gap, Relation};
 use yamaquasi::{Int, Uint};
 
 use num_integer::div_rem;
@@ -56,7 +56,7 @@ fn main() {
     if !OPT_MULTIPOLY {
         sieve(n * Uint::from(k), &primes)
     } else {
-        let target = primes.len() + 32;
+        let mut target = primes.len() * 9 / 10;
         let mut relations = vec![];
         let mlog = sieve_interval_logsize(n);
         println!("Sieving interval size {}M", 1 << (mlog - 20));
@@ -70,8 +70,14 @@ fn main() {
                 relations.len()
             );
             if relations.len() >= target {
-                println!("Found enough relations");
-                break;
+                let gap = relation_gap(n, &relations);
+                if gap == 0 {
+                    println!("Found enough relations");
+                    break;
+                } else {
+                    println!("Need {} additional relations", gap);
+                    target += gap + 10;
+                }
             }
         }
         final_step(n, &relations);
