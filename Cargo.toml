@@ -13,6 +13,7 @@ bitvec_simd = "0.20"
 bnum = { version = "0.3", features = ["numtraits"] }
 num-integer = "0.1"
 num-traits = "*"
+rayon = "1.6"
 
 [dev-dependencies]
 brunch = "0.3"

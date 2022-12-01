@@ -18,15 +18,17 @@ use yamaquasi::relations::{combine_large_relation, final_step, relation_gap, Rel
 use yamaquasi::{Int, Uint};
 
 use num_integer::div_rem;
+use rayon::prelude::*;
 
 const OPT_MULTIPLIERS: bool = true;
 
 fn main() {
     let arg = arguments::parse(std::env::args()).unwrap();
     if arg.orphans.len() != 1 {
-        println!("Usage: ymqs [--mode qs|mpqs] NUMBER");
+        println!("Usage: ymqs [--mode qs|mpqs] [--threads N] NUMBER");
     }
     let mode = arg.get::<String>("mode").unwrap_or("mpqs".into());
+    let threads = arg.get::<usize>("threads");
     let number = &arg.orphans[0];
     let n = U1024::from_str(number).expect("could not read decimal number");
     const MAXBITS: u32 = 2 * (256 - 30);
@@ -72,6 +74,16 @@ fn main() {
     if &mode == "qs" {
         sieve(n * Uint::from(k), &primes)
     } else {
+        let mut pool: Option<_> = None;
+        if let Some(t) = threads {
+            eprintln!("Parallel sieving over {} threads", t);
+            pool = Some(
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(t)
+                    .build()
+                    .expect("cannot create thread pool"),
+            );
+        }
         let mut target = primes.len() * 8 / 10;
         let mut relations = vec![];
         let mut larges = HashMap::<u64, Relation>::new();
@@ -101,10 +113,11 @@ fn main() {
         let nk: Uint = n * Uint::from(k);
         let mut polys = poly::select_polys(polybase, polystride as usize, &nk);
         let mut polyidx = 0;
+        let mut polys_done = 0;
         println!("Generated {} polynomials", polys.len());
         let maxlarge: u64 = maxprime * large_prime_factor(&n);
         println!("Max cofactor {}", maxlarge);
-        for idx in 0u64..1_000_000 {
+        loop {
             // Pop next polynomial.
             if polyidx == polys.len() {
                 polybase += Uint::from(polystride);
@@ -112,20 +125,37 @@ fn main() {
                 polyidx = 0;
                 println!("Generated {} polynomials", polys.len());
             }
-            let pol = &polys[polyidx];
-            polyidx += 1;
-            let (mut found, foundlarge) = sieve_poly(pol, nk, &primes);
-            relations.append(&mut found);
-            for r in foundlarge {
-                if let Some(rr) = combine_large_relation(&mut larges, &r, &n) {
-                    relations.push(rr);
-                    extras += 1;
+            let mut results: Vec<(Vec<_>, Vec<_>)> = if threads.is_some() {
+                // Parallel sieving: do all polynomials at once.
+                let v = pool.as_ref().unwrap().install(|| {
+                    (&polys[polyidx..])
+                        .par_iter()
+                        .map(|p| sieve_poly(p, nk, &primes))
+                        .collect()
+                });
+                polys_done += polys.len() - polyidx;
+                polyidx = polys.len();
+                v
+            } else {
+                // Sequential sieving
+                let pol = &polys[polyidx];
+                polyidx += 1;
+                polys_done += 1;
+                vec![sieve_poly(pol, nk, &primes)]
+            };
+            for (ref mut found, foundlarge) in &mut results {
+                relations.append(found);
+                for r in foundlarge {
+                    if let Some(rr) = combine_large_relation(&mut larges, &r, &n) {
+                        relations.push(rr);
+                        extras += 1;
+                    }
                 }
             }
             println!(
                 "Sieved {}M {} polys found {} smooths ({} using cofactors)",
-                ((idx + 1) << (mlog + 1 - 10)) >> 10,
-                idx + 1,
+                ((polys_done) << (mlog + 1 - 10)) >> 10,
+                polys_done,
                 relations.len(),
                 extras,
             );
