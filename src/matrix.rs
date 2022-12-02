@@ -1,32 +1,30 @@
-//! Gauss reduction and kernels of matrices modulo 2
-//!
-//! Matrix are represented as vectors of dense bit vectors
-//! A size 20000 matrix will use 50MB of memory.
-//! A size 40000 matrix will use 200MB of memory.
-//! A size 100000 matrix will use 1.25GB of memory.
-
 // Note that crate bitvec 1.0 generates slow code for our purpose.
 
-use bitvec_simd::BitVec;
+use std::default::Default;
 use std::num::Wrapping;
+use std::ops::Mul;
 
-/// Kernel of a matrix of sparse vectors.
-pub fn kernel_sparse(vecs: Vec<Vec<usize>>) -> Vec<BitVec> {
-    panic!("")
-}
+use bitvec_simd::BitVec;
+use rand::{self, Fill};
+use wide;
 
+/// Gauss reduction and kernels of matrices modulo 2
+///
+/// Matrices are represented as vectors of dense bit vectors
+/// A size 20000 matrix will use 50MB of memory.
+/// A size 40000 matrix will use 200MB of memory.
+/// A size 100000 matrix will use 1.25GB of memory.
+///
 /// Given a list of m columns of n bits, return a list
 /// of bit vectors (size m) generating the kernel of the matrix.
-///
-/// The matrix is supposed to be pre-filtered.
-pub fn kernel(columns: Vec<BitVec>) -> Vec<BitVec> {
+pub fn kernel_gauss(columns: Vec<BitVec>) -> Vec<BitVec> {
     let size = columns[0].len();
     let ncols = columns.len();
     assert!(columns.iter().all(|v| v.len() == size));
     // Auxiliary matrix
     let mut coefs = vec![];
-    for i in 0..columns.len() {
-        let mut r = BitVec::zeros(columns.len());
+    for i in 0..ncols {
+        let mut r = BitVec::zeros(ncols);
         r.set(i, true);
         coefs.push(r);
     }
@@ -35,15 +33,16 @@ pub fn kernel(columns: Vec<BitVec>) -> Vec<BitVec> {
     let mut done: usize = 0;
     let mut cols = columns;
     while done < ncols {
-        assert!(
+        debug_assert!(
             &zeros[..done].iter().max().unwrap_or(&0)
                 <= &zeros[done..].iter().min().unwrap_or(&size)
         );
+        debug_assert!(zeros[done] == cols[done].leading_zeros());
         // Find longest columns
         // Invariant: zeros[done..] >= zeros[..done]
         let i = (done..ncols).min_by_key(|&j| zeros[j]).unwrap();
         if zeros[i] == size {
-            return (coefs[i..]).to_vec();
+            return (coefs[done..]).to_vec();
         }
         // Move first
         if i > done {
@@ -70,6 +69,598 @@ pub fn kernel(columns: Vec<BitVec>) -> Vec<BitVec> {
     vec![]
 }
 
+// Block Lanczos algorithm.
+//
+// A Block Lanczos Algorithm for Finding Dependencies over GF(2)
+// Peter L. Montgomery
+// https://doi.org/10.1007/3-540-49264-X_9
+//
+// Computation involves:
+// - Dot product of blocks of vectors (a few ms)
+// - Product of a small matrix by a block (a few ms)
+// - Product of a sparse matrix by a block (<1ms)
+// - Inverse of a small matrix
+
+/// Quadratic version of Block Lanczos.
+/// It follows the formulas from [Montgomery, Sections 4, 5, 6]
+pub fn kernel_lanczos(b: &SparseMat, verbose: bool) -> Vec<BitVec> {
+    // Consider the quadratic form defined by A = b^T b
+    // Decompose the entire space in blocks such that
+    // A is block-diagonal over these blocks.
+    // Compute kernel by X = preimage(AY) => A(X-Y) = 0
+
+    // At each step:
+    // Wk = B0 + ... + Bk
+    // A W[k-1] inside W[k]
+    // A W[k] inside Wk + ABk
+    // => use A Bk for the next block
+
+    let mut vs: Vec<Block> = vec![];
+    // W[i] a masked subblock of V[i]
+    let mut ws: Vec<Block> = vec![];
+    // Inverse Gram matrix of W[i]
+    let mut invgs: Vec<SmallMat> = vec![];
+    // How many vectors from vs[i] are kept at current step.
+    let mut masks: Vec<Lane> = vec![];
+
+    // Generate a random block with full rank (no need to mask).
+    let mut y = genblock(b);
+    // First block, use AY
+    let ay = mul_aab(b, &y);
+    {
+        let bay = b * &ay;
+        let g = &bay * &bay;
+        let ginv = g.inverse().unwrap();
+        // Project on block 1.
+        // Use block to reduce Y => Y - W (W^TAW)^-1 W^T (AY)
+        let coef = &ginv * &(&ay * &ay);
+        y.muladd(&coef, &ay);
+
+        vs.push(ay.clone());
+        ws.push(ay.clone());
+        invgs.push(ginv);
+        masks.push(!Lane::ZERO);
+    }
+    if verbose {
+        eprintln!("[Lanczos] Selected block 1 with rank {}", LSIZE);
+    }
+    loop {
+        assert_eq!(vs.len(), ws.len());
+        // Use A * previous W + previous V
+        let mut next = mul_aab(b, ws.last().unwrap());
+        let prev = vs.last().unwrap();
+        for i in 0..next.0.len() {
+            next.0[i] ^= prev.0[i];
+        }
+        // Make it orthogonal to all previous blocks: [Montgomery, Section 5, 6]
+        // We are computing V[i+1] using AW[i] + V[i]
+        // Subtract W[j] with coefficient <Wj|A|Wj>^-1 (<Wj|A^2|Wi> + <Wj|A|Vi>)
+        // By construction V[i] is orthogonal to W[j < i]
+        // <Wj|A^2|Wi> = <AWj|A|Wi> = 0 if AWj has been consumed in Vj for j < i
+        //
+        // Compute <next, b> / <b, b> for each previous block
+        let av = mul_aab(b, &next);
+        let mut projs = 0;
+        for j in 0..ws.len() {
+            if ws[j].0.is_empty() {
+                continue;
+            }
+            let mut mask = !Lane::ZERO;
+            for k in j + 2..vs.len() {
+                mask &= masks[k - 1];
+            }
+            if mask == Lane::ZERO {
+                // AWj has been consumed in V[j+1..i-1] no need to compute.
+                // Free memory: the block will no longer be used.
+                debug_assert!(&ws[j] * &av == SmallMat::default());
+                vs[j].0 = vec![];
+                ws[j].0 = vec![];
+                continue;
+            }
+            //eprintln!("[Lanczos] Block {} projection to block {}", vs.len()+1, j+1);
+            let w = &ws[j];
+            let coef = &invgs[j] * &(w * &av);
+            next.muladd(&coef, w);
+            debug_assert!(&mul_aab(b, w) * &next == SmallMat::default());
+            projs += 1;
+        }
+        // Compute a non-degenerate subblock.
+        let bv = b * &next;
+        let gram = &bv * &bv;
+        // For every 2nd block we compute rank in reverse
+        // to avoid masking the same vector twice in a row.
+        let reverse = vs.len() % 2 == 1;
+        let (rk, mask) = if !reverse {
+            gram.rank()
+        } else {
+            gram.rank_reverse()
+        };
+        if rk == 0 {
+            // Lanczos iterations are finished, return kernel.
+            if verbose {
+                eprintln!(
+                    "[Lanczos] Space is exhausted after {} blocks of size {}",
+                    vs.len(),
+                    LSIZE
+                );
+            }
+            break;
+        } else {
+            vs.push(next.clone());
+            if verbose {
+                eprintln!(
+                    "[Lanczos] Found block {} rank {} ({} projections)",
+                    vs.len(),
+                    rk,
+                    projs
+                );
+            }
+        }
+        for v in &mut next.0 {
+            *v &= mask;
+        }
+        let w = next;
+        let ginv = gram.mask(mask).pseudoinverse();
+        debug_assert!(ginv.rank() == (rk, mask));
+        // Use block to reduce Y => Y - W (W^TAW)^-1 W^T (AY)
+        let coef = &ginv * &(&w * &ay);
+        y.muladd(&coef, &w);
+        debug_assert!(&w * &mul_aab(b, &y) == SmallMat::default());
+        ws.push(w);
+        invgs.push(ginv);
+        masks.push(!mask);
+    }
+    // Check that Y is orthogonal to all blocks
+    for w in &ws {
+        debug_assert!(w * &mul_aab(b, &y) == SmallMat::default());
+    }
+    // Y is orthogonal to all blocks, its image is contained
+    // in the (small, possibly null) final block.
+    //
+    // Compute an actual kernel: compute the kernel of BY as K, return YK.
+    let by = b * &y;
+    let mut by_bits = vec![];
+    for _ in 0..LSIZE {
+        by_bits.push(BitVec::zeros(by.0.len()));
+    }
+    for (i, l) in by.0.iter().enumerate() {
+        let l = l.as_array_ref();
+        for j in 0..LSIZE {
+            if l[j / 64] & (1 << (j % 64)) != 0 {
+                by_bits[j].set(i, true);
+            }
+        }
+    }
+    let ker = kernel_gauss(by_bits);
+    let dimker = ker.len();
+    if verbose {
+        eprintln!("[Lanczos] found kernel subspace of rank <= {}", ker.len());
+    }
+    // For each actual kernel basis, turn into a bit vector.
+    // Beware, if a basis element is in the kernel of Y,
+    // it will be a null column of YK.
+    let mut basis = vec![];
+    for _ in 0..dimker {
+        basis.push(BitVec::zeros(y.0.len()));
+    }
+    // basis[i,j] = sum y[i,_] * ker[_,j]
+    for (i, l) in y.0.into_iter().enumerate() {
+        for (j, k) in ker.iter().enumerate() {
+            debug_assert!(k.len() == LSIZE);
+            let k: *const wide::u64x4 = k.as_ptr();
+            let lk: Lane = l & unsafe { *(k as *const Lane) };
+            let mut sum: u64 = 0;
+            for &word in lk.as_array_ref() {
+                sum ^= word;
+            }
+            basis[j].set(i, sum.count_ones() % 2 == 1);
+        }
+    }
+    // Pop any resulting null vector.
+    for i in 0..dimker {
+        let i = dimker - 1 - i;
+        if basis[i].none() {
+            basis.swap_remove(i);
+        }
+    }
+    if verbose {
+        eprintln!("[Lanczos] final kernel rank <= {}", basis.len());
+    }
+    basis
+}
+
+// Compute A^T A B, which is a block of the same
+// shape as b.
+pub fn mul_aab(a: &SparseMat, b: &Block) -> Block {
+    assert_eq!(a.cols.len(), b.0.len());
+    // Output[k,*] = sum a[i,k] a[i,j] b[j,*]
+    let tmp: Block = a * b;
+    let mut out = Block::new(b.0.len());
+    for (k, col) in a.cols.iter().enumerate() {
+        for &i in col {
+            out.0[k] ^= tmp.0[i];
+        }
+    }
+    out
+}
+
+pub fn genblock(b: &SparseMat) -> Block {
+    // Input matrix B.
+    // Generate block Y such that Gram(B A Y) has full rank
+    // This is to avoid null rows in the Gram matrix of AY
+    let mut rng = rand::thread_rng();
+    let n = b.cols.len();
+    let mut y = Block::new(n);
+    loop {
+        y.try_fill(&mut rng).unwrap();
+        let ay: Block = mul_aab(b, &y);
+        let bay = b * &ay;
+        let gram: SmallMat = &bay * &bay;
+        if gram.rank().0 == LSIZE {
+            return y;
+        }
+    }
+}
+
+type Lane = wide::u64x4;
+const LSIZE: usize = Lane::BITS as usize;
+
+// A square symmetric matrix of size BxB (B=256)
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SmallMat([Lane; LSIZE]);
+
+impl Default for SmallMat {
+    fn default() -> Self {
+        SmallMat([Default::default(); LSIZE])
+    }
+}
+
+// A matrix of size K rows x N columns
+pub struct SparseMat {
+    pub k: usize,
+    pub cols: Vec<Vec<usize>>,
+}
+
+// A block of B vectors of length N
+#[derive(Clone, PartialEq, Eq)]
+pub struct Block(Vec<Lane>);
+
+impl Block {
+    pub fn new(n: usize) -> Self {
+        Block(vec![Default::default(); n])
+    }
+}
+
+#[inline]
+fn randlane<R: rand::Rng + ?Sized>(rng: &mut R) -> Result<Lane, rand::Error> {
+    let mut w = [0u64; LSIZE / 64];
+    w.try_fill(rng)?;
+    Ok(w.into())
+}
+
+impl rand::Fill for SmallMat {
+    fn try_fill<R: rand::Rng + ?Sized>(&mut self, rng: &mut R) -> Result<(), rand::Error> {
+        for i in 0..LSIZE {
+            self.0[i] = randlane(rng)?;
+        }
+        Ok(())
+    }
+}
+
+impl rand::Fill for Block {
+    fn try_fill<R: rand::Rng + ?Sized>(&mut self, rng: &mut R) -> Result<(), rand::Error> {
+        for i in 0..self.0.len() {
+            self.0[i] = randlane(rng)?;
+        }
+        Ok(())
+    }
+}
+
+impl Mul<&SmallMat> for &Block {
+    type Output = Block;
+
+    fn mul(self, rhs: &SmallMat) -> Block {
+        // output[i,k] = sum self[i,j] * rhs[j,k]
+        let mut output = Block::new(self.0.len());
+        for (i, v) in self.0.iter().enumerate() {
+            let words = v.to_array();
+            for j in 0..LSIZE {
+                if words[j / 64] & (1 << (j % 64)) != 0 {
+                    output.0[i] ^= rhs.0[j]
+                }
+            }
+        }
+        output
+    }
+}
+
+impl Mul<&SmallMat> for &SmallMat {
+    type Output = SmallMat;
+
+    fn mul(self, rhs: &SmallMat) -> SmallMat {
+        // output[i,k] = sum self[i,j] * rhs[j,k]
+        let mut output = SmallMat::default();
+        for (i, v) in self.0.iter().enumerate() {
+            let words = v.to_array();
+            for j in 0..LSIZE {
+                if words[j / 64] & (1 << (j % 64)) != 0 {
+                    output.0[i] ^= rhs.0[j]
+                }
+            }
+        }
+        output
+    }
+}
+
+/// Dot product of blocks of vectors.
+impl Mul<&Block> for &Block {
+    type Output = SmallMat;
+
+    fn mul(self, rhs: &Block) -> SmallMat {
+        // output[i,j] = sum self[i,k] * rhs[j,k]
+        let mut m = SmallMat::default();
+        for (k, x) in self.0.iter().enumerate() {
+            // Each coordinate contributes x ⊗ x
+            for (i, w) in x.as_array_ref().iter().enumerate() {
+                let mut w = *w;
+                let mut ii = i * 64;
+                while w != 0 {
+                    if w & 1 == 1 {
+                        m.0[ii] ^= rhs.0[k];
+                    }
+                    w >>= 1;
+                    ii += 1;
+                }
+            }
+        }
+        m
+    }
+}
+
+impl Block {
+    // Computes self -= m*b.
+    fn muladd(&mut self, m: &SmallMat, b: &Block) {
+        // self[i,*] -= sum m[i,j] b[j,*]
+        for k in 0..self.0.len() {
+            for (j, w) in b.0[k].as_array_ref().iter().enumerate() {
+                let mut w = *w;
+                let mut jj = j * 64;
+                while w != 0 {
+                    if w & 1 == 1 {
+                        self.0[k] ^= m.0[jj];
+                    }
+                    w >>= 1;
+                    jj += 1;
+                }
+            }
+        }
+    }
+}
+
+impl Mul<&Block> for &SparseMat {
+    type Output = Block;
+
+    fn mul(self, rhs: &Block) -> Block {
+        // output[i] = sum self[i,j] * rhs[j]
+        let mut out = Block::new(self.k);
+        for (j, col) in self.cols.iter().enumerate() {
+            let row = &rhs.0[j];
+            for &i in col {
+                out.0[i] ^= row;
+            }
+        }
+        out
+    }
+}
+
+fn lz(w: Lane) -> usize {
+    for (i, &v) in w.as_array_ref().iter().enumerate() {
+        if v != 0 {
+            return i * 64 + v.trailing_zeros() as usize;
+        }
+    }
+    LSIZE
+}
+
+fn reverse_lane(l: Lane) -> Lane {
+    let [a, b, c, d] = l.to_array();
+    [
+        d.reverse_bits(),
+        c.reverse_bits(),
+        b.reverse_bits(),
+        a.reverse_bits(),
+    ]
+    .into()
+}
+
+/// Pseudo inverse of a small symmetric matrix.
+///
+/// If M is a square matrix with null coefficients
+/// outside of set of indices I, return matrix N
+/// such that (MN)[i,i] = 1 for i in I
+impl SmallMat {
+    fn identity() -> Self {
+        let mut m = SmallMat::default();
+        for i in 0..LSIZE {
+            let mut r = [0u64; LSIZE / 64];
+            r[i / 64] = 1 << (i % 64);
+            m.0[i] = r.into();
+        }
+        m
+    }
+
+    fn symmetric(&self) -> bool {
+        for i in 0..LSIZE {
+            for j in 0..i {
+                let mij = (self.0[i].as_array_ref()[j / 64] >> (j % 64)) & 1;
+                let mji = (self.0[j].as_array_ref()[i / 64] >> (i % 64)) & 1;
+                if mij != mji {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    fn mask(&self, mask: Lane) -> SmallMat {
+        let mask_a = mask.clone().to_array();
+        let mut m = self.clone();
+        for i in 0..LSIZE {
+            if mask_a[i / 64] >> (i % 64) & 1 == 0 {
+                m.0[i] = Lane::ZERO;
+            } else {
+                m.0[i] &= mask;
+            }
+        }
+        debug_assert!(!self.symmetric() || m.symmetric());
+        m
+    }
+
+    // Find a submatrix M[I,I] such that rank = #I
+    // See [Montgomery, Section 8]
+    pub fn submatrix(&self) -> SmallMat {
+        debug_assert!(self.symmetric());
+        let (r, mask) = self.rank();
+        let m = self.mask(mask);
+        debug_assert!(m.symmetric());
+        debug_assert!(m.rank() == (r, mask));
+        m
+    }
+
+    // Returns the rank of self and a mask of linearly
+    // independent rows.
+    pub fn rank(&self) -> (usize, Lane) {
+        let mut m: SmallMat = self.clone();
+        let mut mask = [0u64; LSIZE / 64];
+        // Run Gauss elimination
+        let mut rank = 0;
+        let mut orig_idx = [0u8; LSIZE];
+        for i in 0..LSIZE {
+            orig_idx[i] = i as u8
+        }
+        for i in 0..LSIZE {
+            let Some(j) = m.0.iter().position(|&v| lz(v) == i)
+                else { continue };
+            let idx = orig_idx[j] as usize;
+            mask[idx / 64] |= 1 << (idx % 64);
+            m.0.swap(rank, j);
+            orig_idx.swap(rank, j);
+            for j in (rank + 1)..LSIZE {
+                if lz(m.0[j]) == i {
+                    m.0[j] ^= m.0[rank];
+                }
+            }
+            rank += 1;
+        }
+        debug_assert!(rank == mask.iter().map(|&n| n.count_ones() as usize).sum());
+        (rank, mask.into())
+    }
+
+    // Pseudoinverse for a submatrix restricted to #I=rank
+    // The pseudoinverse has same row/col indices as the original matrix.
+    fn pseudoinverse(&self) -> SmallMat {
+        let (rk, mask) = self.rank();
+        // Augment with an identity matrix
+        let mut m: SmallMat = self.clone();
+        let mut minv = Self::identity();
+        for i in 0..LSIZE {
+            minv.0[i] &= mask;
+        }
+        debug_assert!(minv.rank() == self.rank());
+        let mut idx = [0u8; 256];
+        let mut i = 0;
+        let mask = mask.to_array();
+        for j in 0..LSIZE {
+            if mask[j / 64] >> (j % 64) & 1 == 1 {
+                idx[i] = j as u8;
+                i += 1;
+            }
+        }
+        // Run Gauss elimination
+        for &i in &idx[..rk] {
+            let i = i as usize;
+            let j = m.0.iter().position(|&v| lz(v) == i).unwrap();
+            m.0.swap(i, j);
+            minv.0.swap(i, j);
+            for j in (i + 1)..LSIZE {
+                if lz(m.0[j]) == i {
+                    m.0[j] ^= m.0[i];
+                    minv.0[j] ^= minv.0[i];
+                } else {
+                    debug_assert!(lz(m.0[j]) > i);
+                }
+            }
+        }
+        // Solve triangular inverse
+        for idx1 in 0..rk {
+            let i = idx[rk - 1 - idx1] as usize;
+            let r = m.0[i].to_array();
+            debug_assert!(lz(m.0[i]) == i);
+            for idx2 in 0..idx1 {
+                let j = idx[rk - 1 - idx2] as usize;
+                debug_assert!(i < j);
+                if r[j / 64] & (1 << (j % 64)) != 0 {
+                    m.0[i] ^= m.0[j];
+                    minv.0[i] ^= minv.0[j];
+                }
+            }
+            let r = m.0[i].to_array();
+            debug_assert!(r[i / 64] == 1 << (i % 64));
+        }
+        debug_assert!(minv.rank() == self.rank());
+        minv
+    }
+
+    fn reverse(&self) -> SmallMat {
+        let mut rev = SmallMat::default();
+        for i in 0..LSIZE {
+            rev.0[i] = reverse_lane(self.0[LSIZE - 1 - i]);
+        }
+        rev
+    }
+
+    fn rank_reverse(&self) -> (usize, Lane) {
+        let (rk, mask) = self.reverse().rank();
+        let mask = reverse_lane(mask);
+        (rk, mask.into())
+    }
+
+    pub fn inverse(&self) -> Option<SmallMat> {
+        // Augment with an identity matrix
+        let mut m: SmallMat = self.clone();
+        let mut minv = Self::identity();
+        // Run Gauss elimination
+        for i in 0..LSIZE {
+            let Some(j) = m.0.iter().position(|&v| lz(v) == i)
+                else { return None };
+            m.0.swap(i, j);
+            minv.0.swap(i, j);
+            for j in (i + 1)..LSIZE {
+                if lz(m.0[j]) == i {
+                    m.0[j] ^= m.0[i];
+                    minv.0[j] ^= minv.0[i];
+                } else {
+                    debug_assert!(lz(m.0[j]) > i);
+                }
+            }
+        }
+        // Solve triangular inverse
+        for i in 0..LSIZE {
+            let i = LSIZE - 1 - i;
+            let r = m.0[i].to_array();
+            for j in (i + 1)..LSIZE {
+                if r[j / 64] & (1 << (j % 64)) != 0 {
+                    m.0[i] ^= m.0[j];
+                    minv.0[i] ^= minv.0[j];
+                }
+            }
+            let r = m.0[i].to_array();
+            debug_assert!(r[i / 64] == 1 << (i % 64));
+        }
+        Some(minv)
+    }
+}
+
 #[cfg(test)]
 fn make_bitvec(slice: &[u8]) -> BitVec {
     BitVec::from(slice.iter().map(|&n| n != 0))
@@ -78,7 +669,7 @@ fn make_bitvec(slice: &[u8]) -> BitVec {
 #[test]
 fn test_kernel_small() {
     // Rank 4
-    let v = kernel(vec![
+    let v = kernel_gauss(vec![
         make_bitvec(&[1, 0, 0, 1]),
         make_bitvec(&[0, 1, 0, 1]),
         make_bitvec(&[0, 1, 0, 0]),
@@ -86,7 +677,7 @@ fn test_kernel_small() {
     ]);
     assert_eq!(v, Vec::<BitVec>::new());
     // Rank 3
-    let v = kernel(vec![
+    let v = kernel_gauss(vec![
         make_bitvec(&[1, 0, 0, 1]),
         make_bitvec(&[1, 0, 1, 0]),
         make_bitvec(&[1, 1, 1, 0]),
@@ -138,6 +729,23 @@ pub fn make_test_matrix(n: usize) -> (Vec<BitVec>, BitVec) {
     (vecs, ker)
 }
 
+#[allow(dead_code)]
+pub fn make_test_sparsemat(k: usize, corank: usize, ones: usize) -> SparseMat {
+    let mut seed: Wrapping<u32> = Wrapping(0xcafe1337 + k as u32);
+    let mut cols = vec![];
+    for _ in 0..k + corank {
+        let mut col = vec![];
+        for _ in 0..ones {
+            seed *= 0x12345;
+            seed ^= 0x1337;
+            col.push((seed.0 >> 8) as usize % k);
+        }
+        cols.push(col);
+    }
+    SparseMat { k, cols }
+}
+
+#[allow(dead_code)]
 pub fn make_test_matrix_sparse(n: usize, k: usize, ones: usize) -> Vec<BitVec> {
     let mut seed: Wrapping<u32> = Wrapping(0xcafe1337 + n as u32);
     let mut matrix = vec![];
@@ -154,23 +762,125 @@ pub fn make_test_matrix_sparse(n: usize, k: usize, ones: usize) -> Vec<BitVec> {
 }
 
 #[test]
-fn test_kernel() {
+fn test_kernel_gauss() {
     let n = 100;
     let (mat, ker) = make_test_matrix(n);
-    let k = kernel(mat);
+    let k = kernel_gauss(mat);
     assert_eq!(k.len(), 1);
     let k: BitVec = k.into_iter().next().unwrap();
     assert_eq!(k, ker);
 
     let n = 500;
     let (mat, ker) = make_test_matrix(n);
-    let k = kernel(mat);
+    let k = kernel_gauss(mat);
     assert_eq!(k.len(), 1);
     let k: BitVec = k.into_iter().next().unwrap();
     assert_eq!(k, ker);
 
-    let n = 5000;
+    let n = 2000;
     let mat = make_test_matrix_sparse(n, 2, 16);
-    let ker = kernel(mat);
+    let ker = kernel_gauss(mat);
     assert!(ker.len() >= 2);
+}
+
+#[test]
+fn test_smallmat() {
+    let mut rng = rand::thread_rng();
+    let mut inverts = 0;
+    for _ in 0..30 {
+        let mut x = Block::new(300);
+        x.try_fill(&mut rng).unwrap();
+        // Small symmetric matrix
+        let m: SmallMat = &x * &x;
+        assert!(m.symmetric());
+        let (rk, _) = m.rank();
+        if let Some(minv) = m.inverse() {
+            assert_eq!(&m * &minv, SmallMat::identity());
+            assert_eq!(&(&m * &minv) * &m, m);
+            assert_eq!(&(&m * &minv) * &minv, minv);
+            inverts += 1;
+        } else {
+            assert!(rk < LSIZE);
+            let msub = m.submatrix();
+            assert_eq!(m.rank(), msub.rank());
+            let minv = msub.pseudoinverse();
+            assert!(minv.symmetric());
+            assert_eq!(&msub * &minv, &minv * &msub);
+            assert_eq!(&(&msub * &minv) * &msub, msub);
+            assert_eq!(&(&msub * &minv) * &minv, minv);
+
+            // Reverse computation.
+            let (invrk, invmask) = m.rank_reverse();
+            assert_eq!(rk, invrk);
+            let msub = m.mask(invmask);
+            assert_eq!(msub.rank(), (invrk, invmask));
+            let minv = msub.pseudoinverse();
+            assert!(minv.symmetric());
+            assert_eq!(&msub * &minv, &minv * &msub);
+            assert_eq!(&(&msub * &minv) * &msub, msub);
+            assert_eq!(&(&msub * &minv) * &minv, minv);
+        }
+    }
+    // 1/4 of matrices are invertible.
+    assert!(inverts > 5);
+}
+
+#[test]
+fn test_sparsemat() {
+    // Test that X·A^T A X == (AX)^T (AX)
+    for _ in 0..10 {
+        let mat = make_test_sparsemat(1000, 10, 20);
+        let mut x = Block::new(1010);
+        let mut rng = rand::thread_rng();
+        x.try_fill(&mut rng).unwrap();
+        let ax = &mat * &x;
+        assert_eq!(&ax * &ax, &x * &mul_aab(&mat, &x));
+    }
+}
+
+#[test]
+fn test_projection() {
+    for _ in 0..10 {
+        let mut rng = rand::thread_rng();
+        let mut x = Block::new(1000);
+        x.try_fill(&mut rng).unwrap();
+        // Generate block, mask extra vectors
+        let mut y = Block::new(1000);
+        y.try_fill(&mut rng).unwrap();
+        let g = &y * &y;
+        let (_, mask) = g.rank();
+        for v in &mut y.0 {
+            *v &= mask;
+        }
+        assert_eq!(g.submatrix(), &y * &y);
+        // Compute projection
+        let g = g.submatrix();
+        let ginv = g.pseudoinverse();
+        // <x - y (yy)^-1 (yx), y>
+        let c = &ginv * &(&y * &x);
+        x.muladd(&c, &y);
+        assert_eq!(&x * &y, SmallMat::default());
+    }
+}
+
+#[test]
+fn test_lanczos() {
+    const N: usize = 5_000;
+    let mat = make_test_sparsemat(N, 10, 20);
+    eprintln!("Matrix size {}x{}", mat.k, mat.cols.len());
+    let ker = kernel_lanczos(&mat, true);
+    eprintln!("Kernel rank {}", ker.len());
+    for (i, v) in ker.into_iter().enumerate() {
+        // Vector is non zero and in kernel
+        assert!(v.any());
+        let mut w = BitVec::zeros(N);
+        for &i in v.into_usizes().iter() {
+            for &j in mat.cols[i].iter() {
+                w.set(j, !w.get_unchecked(j));
+            }
+        }
+        if !w.none() {
+            eprintln!("Kernel element {i} not in kernel!");
+        }
+    }
 }

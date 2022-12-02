@@ -12,7 +12,7 @@ use num_integer::Integer;
 use num_traits::One;
 
 use crate::arith::pow_mod;
-use crate::matrix::kernel;
+use crate::matrix;
 use crate::{Int, Uint};
 
 #[derive(Clone, Debug)]
@@ -115,14 +115,16 @@ pub fn final_step(n: Uint, rels: &[Relation]) {
     let mut filt_rels: Vec<&Relation> = vec![];
     let mut matrix = vec![];
     let size = idxs.len();
+    let mut coeffs = 0;
     'skiprel: for r in rels.iter() {
-        let mut v = BitVec::zeros(size);
+        let mut v = vec![];
         for (f, k) in r.factors.iter() {
             if k % 2 == 0 {
                 continue;
             }
             if let Some(&idx) = idxs.get(&f) {
-                v.set(idx, true);
+                v.push(idx);
+                coeffs += 1;
             } else {
                 continue 'skiprel;
             }
@@ -135,8 +137,30 @@ pub fn final_step(n: Uint, rels: &[Relation]) {
         filt_rels.len(),
         nfactors
     );
-    eprintln!("Build matrix {}x{}", size, matrix.len());
-    let k = kernel(matrix.clone());
+    eprintln!(
+        "Build matrix {}x{} ({:.1} entries/col)",
+        size,
+        matrix.len(),
+        coeffs as f64 / size as f64
+    );
+    let k = if size > 5000 {
+        // Block Lanczos
+        let mat = matrix::SparseMat {
+            k: size,
+            cols: matrix,
+        };
+        matrix::kernel_lanczos(&mat, true)
+    } else {
+        let mut dense = vec![];
+        for col in matrix {
+            let mut v = BitVec::zeros(size);
+            for idx in col {
+                v.set(idx, true);
+            }
+            dense.push(v);
+        }
+        matrix::kernel_gauss(dense)
+    };
     eprintln!("Found kernel of dimension {}", k.len());
     for eq in k {
         let mut rs = vec![];

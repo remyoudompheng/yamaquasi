@@ -4,7 +4,7 @@
 //! Robert D. Silverman, The multiple polynomial quadratic sieve
 //! Math. Comp. 48, 1987, https://doi.org/10.1090/S0025-5718-1987-0866119-8
 
-use crate::arith::{inv_mod, inv_mod64, isqrt, pow_mod, Num};
+use crate::arith::{inv_mod, inv_mod64, pow_mod, Num};
 use crate::Uint;
 use num_traits::One;
 
@@ -270,7 +270,7 @@ fn sieve_poly(base: Uint, offset: u64, n: Uint) -> (Uint, Uint) {
 
 #[test]
 fn test_select_poly() {
-    use crate::arith::sqrt_mod;
+    use crate::arith::{isqrt, sqrt_mod};
     use crate::Int;
 
     let n = Uint::from_str(
