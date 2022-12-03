@@ -109,9 +109,15 @@ fn main() {
         if polybase < Uint::from(maxprime) {
             polybase = Uint::from(maxprime + 1000);
         }
+        // Generate multiple polynomials at a time.
+        // For small numbers (90-140 bits) usually less than
+        // a hundred polynomials will provide enough relations.
+        // We multiply by 1.4 log2(n) which is the expected gap between
+        // 2 solutions.
         let polystride = if n.bits() < 100 {
-            // Block of 20 polynomials
             20 * 20 / 7 * polybase.bits()
+        } else if n.bits() < 180 && threads.is_some() {
+            10 * 20 / 7 * polybase.bits()
         } else {
             100 * 20 / 7 * polybase.bits()
         };
@@ -125,15 +131,15 @@ fn main() {
         loop {
             // Pop next polynomial.
             if polyidx == polys.len() {
-                polybase += Uint::from(polystride);
-                polys = poly::select_polys(polybase, polystride as usize, &nk);
-                polyidx = 0;
-                eprintln!("Generated {} polynomials", polys.len());
                 let gap = relation_gap(n, &relations);
                 if gap == 0 {
                     eprintln!("Found enough relations");
                     break;
                 }
+                polybase += Uint::from(polystride);
+                polys = poly::select_polys(polybase, polystride as usize, &nk);
+                polyidx = 0;
+                eprintln!("Generated {} polynomials", polys.len());
             }
             let mut results: Vec<(Vec<_>, Vec<_>)> = if threads.is_some() {
                 // Parallel sieving: do all polynomials at once.
