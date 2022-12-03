@@ -21,7 +21,16 @@ pub fn factor_base_size(n: Uint) -> u32 {
 
 pub fn large_prime_factor(n: &Uint) -> u64 {
     // Allow large cofactors up to FACTOR * largest prime
-    n.bits() as u64 / 4
+    if n.bits() < 50 {
+        // Even larger cofactors for extremely small numbers
+        // 100 => 200
+        100 + 2 * n.bits() as u64
+    } else if n.bits() < 100 {
+        // 200..100
+        300 - 2 * n.bits() as u64
+    } else {
+        n.bits() as u64
+    }
 }
 
 pub fn qs_blocksize(n: &Uint) -> usize {

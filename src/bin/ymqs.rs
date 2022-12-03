@@ -47,8 +47,8 @@ fn main() {
     eprintln!("Multiplier {}", k);
     // Choose factor base. Sieve twice the number of primes
     // (n will be a quadratic residue for only half of them)
-    let b = params::factor_base_size(n);
-    let primes = poly::primes(std::cmp::max(2 * b, 1000));
+    let fb = params::factor_base_size(n);
+    let primes = poly::primes(std::cmp::max(2 * fb, 1000));
     eprintln!("Testing small prime divisors");
     let mut n = n;
     for &p in &primes {
@@ -58,7 +58,10 @@ fn main() {
             println!("{}", p);
         }
     }
-    let primes = &primes[..2 * b as usize];
+    if n.is_one() {
+        return;
+    }
+    let primes = &primes[..2 * fb as usize];
     eprintln!("Smoothness bound {}", primes.last().unwrap());
     eprintln!("All primes {}", primes.len());
     // Prepare factor base
@@ -126,6 +129,11 @@ fn main() {
                 polys = poly::select_polys(polybase, polystride as usize, &nk);
                 polyidx = 0;
                 eprintln!("Generated {} polynomials", polys.len());
+                let gap = relation_gap(n, &relations);
+                if gap == 0 {
+                    eprintln!("Found enough relations");
+                    break;
+                }
             }
             let mut results: Vec<(Vec<_>, Vec<_>)> = if threads.is_some() {
                 // Parallel sieving: do all polynomials at once.
@@ -168,7 +176,7 @@ fn main() {
                     break;
                 } else {
                     eprintln!("Need {} additional relations", gap);
-                    target += gap + 10;
+                    target += gap + std::cmp::min(10, fb as usize / 4);
                 }
             }
         }
@@ -462,6 +470,12 @@ fn sieve_block_poly(
             let s: Int = Int::from_bits(pol.a) * Int::from(b.offset + (i as i64)) << 1;
             let s = s + Int::from_bits(pol.b);
             let candidate: Int = s * s - Int::from_bits(b.n);
+            // In the case of very small inputs (< 50 bits)
+            // Sieved numbers can be absurdly large.
+            let gap = candidate.abs().bits() as i32 - blk[i] as i32 - maxlarge.bits() as i32;
+            if gap > 10 + (b.n.bits() / 4) as i32 {
+                continue;
+            }
             let cabs = (candidate.abs().to_bits() * ainv) % b.n;
             if candidate.is_negative() {
                 factors.push((-1, 1));
