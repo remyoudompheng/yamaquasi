@@ -21,6 +21,7 @@ use num_integer::div_rem;
 use rayon::prelude::*;
 
 const OPT_MULTIPLIERS: bool = true;
+const DEBUG: bool = false;
 
 fn main() {
     let arg = arguments::parse(std::env::args()).unwrap();
@@ -53,7 +54,8 @@ fn main() {
     for &p in &primes {
         while n % (p as u64) == 0 {
             n /= Uint::from(p);
-            println!("Factor {}", p)
+            eprintln!("Found small factor");
+            println!("{}", p);
         }
     }
     let primes = &primes[..2 * b as usize];
@@ -90,9 +92,9 @@ fn main() {
         let mut extras = 0;
         let mlog = params::mpqs_interval_logsize(&n);
         if mlog >= 20 {
-            println!("Sieving interval size {}M", 1 << (mlog - 20));
+            eprintln!("Sieving interval size {}M", 1 << (mlog - 20));
         } else {
-            println!("Sieving interval size {}k", 1 << (mlog - 10));
+            eprintln!("Sieving interval size {}k", 1 << (mlog - 10));
         }
         // Precompute starting point for polynomials
         // See [Silverman, Section 3]
@@ -114,16 +116,16 @@ fn main() {
         let mut polys = poly::select_polys(polybase, polystride as usize, &nk);
         let mut polyidx = 0;
         let mut polys_done = 0;
-        println!("Generated {} polynomials", polys.len());
+        eprintln!("Generated {} polynomials", polys.len());
         let maxlarge: u64 = maxprime * large_prime_factor(&n);
-        println!("Max cofactor {}", maxlarge);
+        eprintln!("Max cofactor {}", maxlarge);
         loop {
             // Pop next polynomial.
             if polyidx == polys.len() {
                 polybase += Uint::from(polystride);
                 polys = poly::select_polys(polybase, polystride as usize, &nk);
                 polyidx = 0;
-                println!("Generated {} polynomials", polys.len());
+                eprintln!("Generated {} polynomials", polys.len());
             }
             let mut results: Vec<(Vec<_>, Vec<_>)> = if threads.is_some() {
                 // Parallel sieving: do all polynomials at once.
@@ -152,7 +154,7 @@ fn main() {
                     }
                 }
             }
-            println!(
+            eprintln!(
                 "Sieved {}M {} polys found {} smooths ({} using cofactors)",
                 ((polys_done) << (mlog + 1 - 10)) >> 10,
                 polys_done,
@@ -162,10 +164,10 @@ fn main() {
             if relations.len() >= target {
                 let gap = relation_gap(n, &relations);
                 if gap == 0 {
-                    println!("Found enough relations");
+                    eprintln!("Found enough relations");
                     break;
                 } else {
-                    println!("Need {} additional relations", gap);
+                    eprintln!("Need {} additional relations", gap);
                     target += gap + 10;
                 }
             }
@@ -182,7 +184,7 @@ fn sieve(n: Uint, primes: &[Prime]) {
         .map(|&p| poly::simple_prime(p, nsqrt))
         .collect();
     let maxlarge: u64 = primes.last().unwrap().p * large_prime_factor(&n);
-    println!("Max cofactor {}", maxlarge);
+    eprintln!("Max cofactor {}", maxlarge);
 
     // Naïve quadratic sieve with polynomial x²-n (x=-M..M)
     // Max value is X = sqrt(n) * M
@@ -360,10 +362,12 @@ fn sieve_block(b: Block, primes: &[SievePrime]) -> (Vec<Relation>, Vec<Relation>
 fn sieve_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Relation>) {
     let mlog = params::mpqs_interval_logsize(&n);
     let nblocks = (1u64 << (mlog - 10)) / (BLOCK_SIZE as u64 / 1024);
-    println!(
-        "Sieving polynomial A={} B={} M=2^{} blocks={}",
-        pol.a, pol.b, mlog, nblocks
-    );
+    if DEBUG {
+        eprintln!(
+            "Sieving polynomial A={} B={} M=2^{} blocks={}",
+            pol.a, pol.b, mlog, nblocks
+        );
+    }
     // Precompute inverse of 4A
     let ainv = inv_mod(pol.a << 2, n).unwrap();
     // Precompute inverse of 2D
@@ -483,7 +487,9 @@ fn sieve_block_poly(
                 continue;
             }
             if cofactor == 1 {
-                //println!("i={} smooth {}", i, cabs);
+                if DEBUG {
+                    eprintln!("i={} smooth {}", i, cabs);
+                }
                 let sabs = (s.abs().to_bits() * dinv) % b.n;
                 result.push(Relation {
                     x: if candidate.is_negative() {
@@ -495,7 +501,9 @@ fn sieve_block_poly(
                     factors,
                 });
             } else {
-                //println!("i={} smooth {} cofactor {}", i, cabs, cofactor);
+                if DEBUG {
+                    eprintln!("i={} smooth {} cofactor {}", i, cabs, cofactor);
+                }
                 let sabs = (s.abs().to_bits() * dinv) % b.n;
                 extras.push(Relation {
                     x: if candidate.is_negative() {

@@ -171,7 +171,9 @@ pub fn final_step(n: Uint, rels: &[Relation]) {
         let (a, b) = combine(n, &rs);
         eprintln!("Same square mod N: {} {}", a, b);
         if let Some((p, q)) = try_factor(n, a, b) {
-            eprintln!("Found factors!\n{}\n{}", p, q);
+            eprintln!("Found factors!");
+            println!("{}", p);
+            println!("{}", q);
             break;
         }
     }
