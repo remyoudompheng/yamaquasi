@@ -74,6 +74,14 @@ pub fn mpqs(n: Uint, primes: &[Prime], threads: Option<usize>) -> Vec<Relation> 
                 eprintln!("Found enough relations");
                 break;
             }
+            eprintln!(
+                "Sieved {}M {} polys found {} smooths (cofactors: {} combined, {} pending)",
+                ((polys_done) << (mlog + 1 - 10)) >> 10,
+                polys_done,
+                relations.len(),
+                extras,
+                larges.len(),
+            );
             polybase += Uint::from(polystride);
             polys = select_polys(polybase, polystride as usize, &n);
             polyidx = 0;
@@ -106,13 +114,6 @@ pub fn mpqs(n: Uint, primes: &[Prime], threads: Option<usize>) -> Vec<Relation> 
                 }
             }
         }
-        eprintln!(
-            "Sieved {}M {} polys found {} smooths ({} using cofactors)",
-            ((polys_done) << (mlog + 1 - 10)) >> 10,
-            polys_done,
-            relations.len(),
-            extras,
-        );
         if relations.len() >= target {
             let gap = relation_gap(n, &relations);
             if gap == 0 {
