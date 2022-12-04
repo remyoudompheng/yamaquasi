@@ -8,13 +8,11 @@ def main():
         print(f"Usage: {sys.argv[0]} N_BITS")
         exit(1)
     size = int(sys.argv[1])
-    seed = mpz(randint(2 ** (size // 2 - 1), 2**(size // 2)))
     primes = []
     while len(primes) < 2:
+        seed = mpz(randint(2 ** (size // 2 - 1), 2**(size // 2)))
         seed = next_prime(seed)
-        if is_prime(seed // 2):
-            primes.append(int(seed))
-            seed = mpz(randint(2 ** (size // 2 - 1), 2**(size // 2)))
+        primes.append(int(seed))
     p, q = primes
     print(f"{p =}", file=sys.stderr)
     print(f"{q =}", file=sys.stderr)

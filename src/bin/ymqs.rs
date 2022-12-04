@@ -20,7 +20,6 @@ use yamaquasi::{Int, Uint};
 use num_integer::div_rem;
 use rayon::prelude::*;
 
-const OPT_MULTIPLIERS: bool = true;
 const DEBUG: bool = false;
 
 fn main() {
@@ -42,9 +41,8 @@ fn main() {
     }
     let n = Uint::from_str(number).unwrap();
     eprintln!("Input number {}", n);
-    let ks = poly::select_multipliers(n);
-    let k: u32 = if OPT_MULTIPLIERS { ks } else { 1 };
-    eprintln!("Multiplier {}", k);
+    let (k, score) = poly::select_multiplier(n);
+    eprintln!("Selected multiplier {} (score {:.2}/8)", k, score);
     // Choose factor base. Sieve twice the number of primes
     // (n will be a quadratic residue for only half of them)
     let fb = params::factor_base_size(n);
@@ -382,10 +380,10 @@ fn sieve_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Rela
             pol.a, pol.b, mlog, nblocks
         );
     }
-    // Precompute inverse of 4A
-    let ainv = inv_mod(pol.a << 2, n).unwrap();
-    // Precompute inverse of 2D
-    let dinv = inv_mod(pol.d << 1, n).unwrap();
+    // Precompute inverse of D^2
+    let d2inv = inv_mod(pol.d * pol.d, n).unwrap();
+    // Precompute inverse of D
+    let dinv = inv_mod(pol.d, n).unwrap();
 
     // Precompute factor base extra information.
     let sprimes: Vec<_> = primes.into_iter().map(|&p| pol.prepare_prime(p)).collect();
@@ -402,7 +400,7 @@ fn sieve_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Rela
             },
             &sprimes,
             &pol,
-            ainv,
+            d2inv,
             dinv,
         );
     }
@@ -419,7 +417,7 @@ fn sieve_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Rela
             },
             &sprimes,
             &pol,
-            ainv,
+            d2inv,
             dinv,
         );
         result.append(&mut x);
@@ -433,7 +431,7 @@ fn sieve_block_poly(
     b: Block,
     primes: &[SievePrime],
     pol: &Poly,
-    ainv: Uint,
+    d2inv: Uint,
     dinv: Uint,
 ) -> (Vec<Relation>, Vec<Relation>) {
     let mut blk = vec![0u8; b.len];
@@ -473,7 +471,7 @@ fn sieve_block_poly(
         if blk[i] as u32 >= target {
             let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
             // Evaluate polynomial
-            let s: Int = Int::from_bits(pol.a) * Int::from(b.offset + (i as i64)) << 1;
+            let s: Int = Int::from_bits(pol.a) * Int::from(b.offset + (i as i64));
             let s = s + Int::from_bits(pol.b);
             let candidate: Int = s * s - Int::from_bits(b.n);
             // In the case of very small inputs (< 50 bits)
@@ -482,7 +480,7 @@ fn sieve_block_poly(
             if gap > 10 + (b.n.bits() / 4) as i32 {
                 continue;
             }
-            let cabs = (candidate.abs().to_bits() * ainv) % b.n;
+            let cabs = (candidate.abs().to_bits() * d2inv) % b.n;
             if candidate.is_negative() {
                 factors.push((-1, 1));
             }

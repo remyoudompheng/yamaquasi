@@ -4,7 +4,7 @@
 //! Robert D. Silverman, The multiple polynomial quadratic sieve
 //! Math. Comp. 48, 1987, https://doi.org/10.1090/S0025-5718-1987-0866119-8
 
-use crate::arith::{inv_mod, inv_mod64, pow_mod, Num};
+use crate::arith::{self, inv_mod, inv_mod64, pow_mod, Num};
 use crate::Uint;
 use num_traits::One;
 
@@ -68,34 +68,63 @@ fn test_simple_prime() {
 }
 
 /// Selects k such kn is a quadratic residue modulo many small primes.
-pub fn select_multipliers(n: Uint) -> u32 {
-    let bases: &[u32] = &[8, 3, 5, 7, 11, 13, 17];
-    let residues: Vec<u32> = bases.iter().map(|&b| (n % b as u64) as u32).collect();
-    let mut best: u32 = 1;
-    let mut best_nsq = 0;
-    for i in 0..30 {
-        let k = 2 * i + 1;
-        if (k * residues[0]) % 8 != 1 {
-            continue;
-        }
-        let mut nsq = 0;
-        for (idx, &b) in bases.iter().enumerate() {
-            for x in 1..b {
-                if (x * x) % b == (k * residues[idx]) % b {
-                    nsq += 1;
-                    break;
-                }
-            }
-        }
-        if nsq > best_nsq {
-            best_nsq = nsq;
+/// The scoring system is the average bit length of the smooth factor
+/// of sieved numbers.
+pub fn select_multiplier(n: Uint) -> (u32, f64) {
+    let mut best = 1;
+    let mut best_score = 0.0;
+    for k in 1..100 {
+        let mag = expected_smooth_magnitude(&(n * Uint::from(k)));
+        let mag = (mag - 0.5 * (k as f64).ln()) / std::f64::consts::LN_2;
+        if mag > best_score && k % 2 == 1 {
+            best_score = mag;
             best = k;
-            break;
         }
     }
-    best
+    (best, best_score)
 }
 
+/// The optimization criterion is the Knuth-Schroeppel formula
+/// giving the expected number of small prime factors.
+///
+/// Reference: [Silverman, section 5]
+///
+/// Formula is corrected for the weight of 2 (1 instead of 2)
+/// and denominator p-1 instead of p to account for prime
+/// powers.
+pub fn expected_smooth_magnitude(n: &Uint) -> f64 {
+    let mut res: f64 = 0.0;
+    for &p in SMALL_PRIMES {
+        let np: u64 = *n % p;
+        let exp = if p == 2 {
+            match *n % 8u64 {
+                // square root modulo every power of 2
+                // score is 1/2 + 1/4 + ...
+                1 => 1.0,
+                // square root modulo 2 and 4, score is 1/2 + 1/4
+                5 => 0.75,
+                // square root modulo 2, score 1/2
+                3 | 7 => 0.5,
+                _ => 0.0,
+            }
+        } else if np == 0 {
+            1 as f64 / (p - 1) as f64
+        } else if let Some(_) = arith::sqrt_mod(np, p) {
+            2 as f64 / (p - 1) as f64
+        } else {
+            0.0
+        };
+        res += exp * (p as f64).ln();
+    }
+    res
+}
+
+/// A polynomial is an omitted quadratic Ax^2 + Bx + C
+/// such that (ax+b)^2-n = d^2(Ax^2 + Bx + C) and A=d^2
+/// and the polynomial values are small.
+///
+/// The polynomial values are divisible by p iff
+/// ax+b is a square root of n modulo p
 #[derive(Debug)]
 pub struct Poly {
     pub a: Uint,
@@ -114,7 +143,7 @@ impl Poly {
             };
         }
         // Transform roots as: r -> (r - B) / 2A
-        let a: u64 = (self.a << 1) % p.p;
+        let a: u64 = self.a % p.p;
         let ainv = inv_mod64(a, p.p).unwrap();
         let bp = self.b % p.p;
         SievePrime {
@@ -137,10 +166,10 @@ fn test_poly_prime() {
         d: Uint::from(3691742787015739u64),
     };
     let sp = poly.prepare_prime(p);
-    let x1: Uint = (poly.a << 1) * Uint::from(sp.roots[0]) + poly.b;
+    let x1: Uint = poly.a * Uint::from(sp.roots[0]) + poly.b;
     let x1p: u64 = (x1 % Uint::from(p.p)).to_u64().unwrap();
     assert_eq!(pow_mod(x1p, 2, p.p), pow_mod(p.r, 2, p.p));
-    let x2: Uint = (poly.a << 1) * Uint::from(sp.roots[1]) + poly.b;
+    let x2: Uint = poly.a * Uint::from(sp.roots[1]) + poly.b;
     let x2p: u64 = (x2 % Uint::from(p.p)).to_u64().unwrap();
     assert_eq!(pow_mod(x2p, 2, p.p), pow_mod(p.r, 2, p.p));
 }
@@ -196,17 +225,36 @@ fn make_poly(d: Uint, r: Uint, n: &Uint) -> Poly {
     let h2 = (c * inv_mod(h1 << 1, d).unwrap()) % d;
     // (h1 + h2*D)**2 = n mod D^2
     let mut b = (h1 + h2 * d) % (d * d);
-    if b.low_u64() % 2 == 0 {
-        b = d * d - b; // want an odd b
-    }
 
+    // If kn = 1 mod 4:
     // A = D^2, B = sqrt(n) mod D^2, C = (B^2 - kn) / 4A
     // (2Ax + B)^2 - kn = 4A (Ax^2 + B x + C)
     // Ax^2 + Bx + C = ((2Ax + B)/2D)^2 mod n
-    Poly {
-        a: d * d,
-        b: b,
-        d: d,
+    //
+    // otherwise:
+    // A = D^2, B = sqrt(n) mod D^2, C = (4B^2 - kn) / A
+    // (Ax+2B)^2 - kn = A (Ax^2 + 2Bx + C)
+    // Ax^2 + 2Bx + C = ((Ax+2B)/D)^2 mod n
+    if n.low_u64() % 4 == 1 {
+        // want an odd b
+        if b.low_u64() % 2 == 0 {
+            b = d * d - b;
+        }
+        Poly {
+            a: d * d << 1,
+            b: b,
+            d: d << 1,
+        }
+    } else {
+        // want even b
+        if b.low_u64() % 2 == 1 {
+            b = d * d - b;
+        }
+        Poly {
+            a: d * d,
+            b: b,
+            d: d,
+        }
     }
 }
 
@@ -280,14 +328,14 @@ fn test_select_poly() {
     let mut polybase: Uint = isqrt(n >> 1) >> 24;
     polybase = isqrt(polybase);
     let Poly { a, b, d } = select_poly(polybase, 0, n);
-    // D = 3 mod 4
-    assert_eq!(d.low_u64() % 4, 3);
+    // D = 3 mod 4, 2D = 6 mod 8
+    assert_eq!(d.low_u64() % 8, 6);
     // N is a square modulo D
-    assert!(sqrt_mod(n, d).is_some());
-    // A = D^2
-    assert_eq!(a, d * d);
+    assert!(sqrt_mod(n, d >> 1).is_some());
+    // A = D^2, 2A = (2D)^2
+    assert_eq!(a << 1, d * d);
     // B^2 = N mod 4D^2
-    assert_eq!(pow_mod(b, Uint::from(2u64), d * d << 2), n % (d * d << 2));
+    assert_eq!(pow_mod(b, Uint::from(2u64), d * d), n % (d * d));
     println!("D={} A={} B={}", d, a, b);
 
     let c = (n - (b * b)) / (a << 2);
