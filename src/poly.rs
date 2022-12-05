@@ -4,7 +4,7 @@
 //! Robert D. Silverman, The multiple polynomial quadratic sieve
 //! Math. Comp. 48, 1987, https://doi.org/10.1090/S0025-5718-1987-0866119-8
 
-use crate::arith::{self, inv_mod, inv_mod64, pow_mod, Num};
+use crate::arith::{self, inv_mod, pow_mod, Num};
 use crate::Uint;
 use num_traits::One;
 
@@ -32,12 +32,28 @@ pub fn primes(n: u32) -> Vec<u32> {
     primes
 }
 
+pub fn prepare_factor_base(nk: &Uint, primes: &[u32]) -> Vec<Prime> {
+    primes
+        .into_iter()
+        .filter_map(|&p| {
+            let nk: u64 = *nk % (p as u64);
+            let r = arith::sqrt_mod(nk, p as u64)?;
+            Some(Prime {
+                p: p as u64,
+                r: r,
+                div: arith::Dividers::new(p),
+            })
+        })
+        .collect()
+}
+
 // Helpers for polynomial selection
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct Prime {
     pub p: u64, // prime number
     pub r: u64, // square root of N
+    pub div: arith::Dividers,
 }
 
 pub struct SievePrime {
@@ -47,7 +63,7 @@ pub struct SievePrime {
 }
 
 /// Compute sieving parameters for polynomial (X+offset)^2 - n
-pub fn simple_prime(p: Prime, offset: Uint) -> SievePrime {
+pub fn simple_prime(p: &Prime, offset: Uint) -> SievePrime {
     let shift: u64 = p.p - (offset % Uint::from(p.p)).to_u64().unwrap();
     SievePrime {
         p: p.p,
@@ -58,9 +74,13 @@ pub fn simple_prime(p: Prime, offset: Uint) -> SievePrime {
 
 #[test]
 fn test_simple_prime() {
-    let p = Prime { p: 10223, r: 4526 };
+    let p = Prime {
+        p: 10223,
+        r: 4526,
+        div: arith::Dividers::new(10223),
+    };
     let nsqrt = Uint::from_str("13697025762053691031049747437678526773503028576").unwrap();
-    let sp = simple_prime(p, nsqrt);
+    let sp = simple_prime(&p, nsqrt);
     let rr = nsqrt + Uint::from(sp.roots[0]);
     assert_eq!((rr * rr) % p.p, (p.r * p.r) % p.p);
     let rr = nsqrt + Uint::from(sp.roots[1]);
@@ -133,7 +153,7 @@ pub struct Poly {
 }
 
 impl Poly {
-    pub fn prepare_prime(&self, p: Prime) -> SievePrime {
+    pub fn prepare_prime(&self, p: &Prime) -> SievePrime {
         // If p == 2, (2A+B)^2 is always equal to n
         if p.p == 2 {
             return SievePrime {
@@ -143,15 +163,15 @@ impl Poly {
             };
         }
         // Transform roots as: r -> (r - B) / 2A
-        let a: u64 = self.a % p.p;
-        let ainv = inv_mod64(a, p.p).unwrap();
-        let bp = self.b % p.p;
+        let a: u64 = p.div.divmod_uint(&self.a).1;
+        let b: u64 = p.div.divmod_uint(&self.b).1;
+        let ainv = p.div.inv(a).unwrap();
         SievePrime {
             p: p.p,
             r: p.r,
             roots: [
-                ((p.r + p.p - bp) * ainv) % p.p,
-                ((p.p - p.r + p.p - bp) * ainv) % p.p,
+                p.div.divmod64((p.p + p.r - b) * ainv).1,
+                p.div.divmod64((p.p - p.r + p.p - b) * ainv).1,
             ],
         }
     }
@@ -159,13 +179,17 @@ impl Poly {
 
 #[test]
 fn test_poly_prime() {
-    let p = Prime { p: 10223, r: 4526 };
+    let p = Prime {
+        p: 10223,
+        r: 4526,
+        div: arith::Dividers::new(10223),
+    };
     let poly = Poly {
         a: Uint::from_str("13628964805482736048449433716121").unwrap(),
         b: Uint::from_str("2255304218805619815720698662795").unwrap(),
         d: Uint::from(3691742787015739u64),
     };
-    let sp = poly.prepare_prime(p);
+    let sp = poly.prepare_prime(&p);
     let x1: Uint = poly.a * Uint::from(sp.roots[0]) + poly.b;
     let x1p: u64 = (x1 % Uint::from(p.p)).to_u64().unwrap();
     assert_eq!(pow_mod(x1p, 2, p.p), pow_mod(p.r, 2, p.p));

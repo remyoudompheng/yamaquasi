@@ -160,6 +160,174 @@ fn mulmod<T: Num>(a: T, b: T, p: T) -> T {
     (a * b) % p
 }
 
+#[derive(Clone, Debug)]
+pub struct Dividers {
+    p: u32,
+    // Multiplier for 32-bit division
+    m32: u32,
+    s32: usize,
+    // Multiplier for 64-bit division
+    m64: u64,
+    r64: u64,
+    s64: usize,
+}
+
+impl Dividers {
+    // Compute m and s such that x/p = (x*m) >> s
+    // p is assumed to be a prime number.
+    //
+    // https://gmplib.org/~tege/divcnst-pldi94.pdf
+    //
+    // m must be 33 bit for u32 and 65-bit for u64
+    // to obtain correct results. We use 32-bit/64-bit mantissas
+    // and thus need to correct the result.
+    pub fn new(p: u32) -> Self {
+        if p == 2 {
+            return Dividers {
+                p,
+                m32: 1,
+                s32: 1,
+                m64: 1,
+                r64: 0,
+                s64: 1,
+            };
+        }
+        // Compute 2^k / p rounded up
+        let m128: U256 = (U256::one() << 128) / (p as u64);
+        let sz = m128.bits();
+        let m32 = (m128 >> (sz - 32)).low_u64() as u32 + 1; // 32 bits
+        let s32 = 128 + 32 - sz as usize; // m32 >> s32 = m128 >> 128
+        let m64 = (m128 >> (sz - 64)).low_u64() + 1; // 64 bits
+        let r64 = (U256::one() << 64) % (p as u64);
+        let s64 = 128 + 64 - sz as usize; // m64 >> s64 = m128 >> 128
+        Dividers {
+            p,
+            m32,
+            s32,
+            m64,
+            r64,
+            s64,
+        }
+    }
+
+    pub fn divmod32(&self, n: u32) -> (u32, u32) {
+        let nm = (n as u64) * (self.m32 as u64);
+        let q = (nm >> self.s32) as u32;
+        let qp = q * self.p;
+        if qp > n {
+            (q - 1, self.p - (qp - n))
+        } else {
+            (q, n - qp)
+        }
+    }
+
+    pub fn divmod64(&self, n: u64) -> (u64, u64) {
+        let nm = (n as u128) * (self.m64 as u128);
+        let q = (nm >> self.s64) as u64;
+        let qp = q * self.p as u64;
+        if qp > n {
+            (q - 1, self.p as u64 - (qp - n))
+        } else {
+            (q, n - qp)
+        }
+    }
+
+    pub fn divmod_uint<const N: usize>(&self, n: &BUint<N>) -> (BUint<N>, u64) {
+        if self.p == 2 {
+            return (n >> 1, n.low_u64() & 1);
+        }
+        let mut digits = n.digits().clone();
+        let mut carry: u64 = 0;
+        for i in 0..N {
+            let i = N - 1 - i;
+            let d = digits[i];
+            if d == 0 && carry == 0 {
+                continue;
+            }
+            let (mut q, r) = self.divmod64(d);
+            debug_assert!(q == d / self.p as u64);
+            if carry != 0 {
+                q += carry * (self.m64 >> (self.s64 - 64));
+                let (cq, cr) = self.divmod64(carry * self.r64 + r);
+                q += cq;
+                carry = cr;
+            } else {
+                carry = r;
+            }
+            digits[i] = q;
+        }
+        debug_assert!((n % BUint::<N>::from(self.p)).low_u64() == carry);
+        (BUint::<N>::from_digits(digits), carry)
+    }
+
+    /// Modular inverse. Prime number is supposed to be small (<= 32 bits).
+    pub fn inv(&self, k: u64) -> Option<u64> {
+        if self.p == 2 {
+            if k % 2 == 0 {
+                return None;
+            } else {
+                return Some(1);
+            }
+        }
+        let k = if k >= self.p as u64 {
+            self.divmod64(k).1
+        } else {
+            k
+        };
+        if k == 0 {
+            return None;
+        }
+        // x and y can never be both divisible by 2.
+        // x is always less than y
+        let (mut x, mut y) = (k, self.p as u64);
+        let (mut a, mut b) = (1i64, 0i64); // x = ak + bp
+        let (mut c, mut d) = (0i64, 1i64); // y = ck + dp
+
+        let k = k as i64;
+        let p = self.p as i64;
+
+        // Use hardware division if bit size is very different.
+        while x != 1 && y > (x << 8) {
+            let (q, r) = (y as u32 / x as u32, y as u32 % x as u32);
+            let q = q as i64;
+            (x, y) = (r as u64, x);
+            (a, b, c, d) = (c - q * a, d - q * b, a, b);
+        }
+        loop {
+            debug_assert!(x as i64 == a * k + b * p);
+            debug_assert!(y as i64 == c * k + d * p);
+            if x == 1 {
+                while a < 0 {
+                    a += p;
+                }
+                return Some(a as u64);
+            } else if x > y {
+                (x, y) = (y, x);
+                (a, b, c, d) = (c, d, a, b);
+            } else if x % 2 == 0 {
+                x >>= 1;
+                if a % 2 == 0 {
+                    // both a, b even
+                    (a, b) = (a >> 1, b >> 1);
+                } else {
+                    // adjust by an odd term, both become even
+                    (a, b) = ((a + p) / 2, (b - k) / 2);
+                }
+            } else if y % 2 == 0 {
+                y >>= 1;
+                if c % 2 == 0 {
+                    (c, d) = (c >> 1, d >> 1);
+                } else {
+                    (c, d) = ((c + p) / 2, (d - k) / 2);
+                }
+            } else {
+                (x, y) = (x, y - x);
+                (a, b, c, d) = (a, b, c - a, d - b);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,6 +396,60 @@ mod tests {
             assert_eq!(isqrt(n * n), n);
             assert_eq!(isqrt(n * n + U256::one()), n);
             assert_eq!(isqrt(n * n - U256::one()), n - U256::one());
+        }
+    }
+
+    #[test]
+    fn test_dividers() {
+        const M32: u32 = 100_000_000;
+        const M64: u64 = 100_000_000_000_000_000;
+        use crate::poly::primes;
+        let ps = primes(2000);
+        for p in ps {
+            let d = Dividers::new(p);
+            for n in M32..M32 + std::cmp::max(1000, 2 * p) {
+                let n = n as u32;
+                assert_eq!((n / p, n % p), d.divmod32(n as u32));
+            }
+            let p = p as u64;
+            for n in M64..M64 + std::cmp::max(1000, 2 * p) {
+                assert_eq!((n / p, n % p), d.divmod64(n));
+            }
+        }
+    }
+
+    #[test]
+    fn test_dividers_uint() {
+        use crate::poly::primes;
+
+        let n0: U1024 = pow_mod(
+            U1024::from(65537u64),
+            U1024::from(1_234_567_890u64),
+            (U1024::one() << 384) + U1024::one(),
+        );
+        let ps = primes(2000);
+        for p in ps {
+            let d = Dividers::new(p);
+            for i in 0..100u64 {
+                let n = n0 + U1024::from(i);
+                assert_eq!((n / (p as u64), n % (p as u64)), d.divmod_uint(&n));
+            }
+        }
+    }
+
+    #[test]
+    fn test_dividers_inv() {
+        use crate::poly::primes;
+        let ps = primes(200);
+        for p in ps {
+            let d = Dividers::new(p);
+            let p = p as u64;
+            for i in 0..=2 * p {
+                match d.inv(i) {
+                    None => assert_eq!(i % p, 0),
+                    Some(j) => assert_eq!((i * j) % p, 1),
+                }
+            }
         }
     }
 }

@@ -49,4 +49,14 @@ brunch::benches! {
             assert!(90 < v.len() && v.len() < 110);
         })
     },
+    // Prepare primes
+    {
+        let n = Uint::from_str(PQ256).unwrap();
+        let primes = poly::primes(10000);
+        let fb = poly::prepare_factor_base(&n, &primes[..]);
+        let polybase: Uint = isqrt(isqrt(n));
+        let pol = poly::select_poly(polybase, 0, n);
+        Bench::new("prepare 5000 primes for poly (n: 256 bit)")
+        .run_seeded((&pol, &fb), |(pol, fb)| fb.iter().map(|p| pol.prepare_prime(p)).collect::<Vec<_>>())
+    }
 }

@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use yamaquasi::arith::{inv_mod, isqrt, sqrt_mod, Num, U1024};
+use yamaquasi::arith::{inv_mod, isqrt, Num, U1024};
 use yamaquasi::params::{self, large_prime_factor, BLOCK_SIZE};
 use yamaquasi::poly::{self, Poly, Prime, SievePrime};
 use yamaquasi::relations::{combine_large_relation, final_step, relation_gap, Relation};
@@ -63,19 +63,13 @@ fn main() {
     eprintln!("Smoothness bound {}", primes.last().unwrap());
     eprintln!("All primes {}", primes.len());
     // Prepare factor base
-    let primes: Vec<Prime> = primes
-        .into_iter()
-        .filter_map(|&p| {
-            let nk: u64 = (n * Uint::from(k)) % (p as u64);
-            let r = sqrt_mod(nk, p as u64)?;
-            Some(Prime { p: p as u64, r: r })
-        })
-        .collect();
+    let nk = n * Uint::from(k);
+    let primes: Vec<Prime> = poly::prepare_factor_base(&nk, primes);
     let smallprimes: Vec<u64> = primes.iter().map(|f| f.p).take(10).collect();
     eprintln!("Factor base size {} ({:?})", primes.len(), smallprimes);
 
     if &mode == "qs" {
-        sieve(n * Uint::from(k), &primes)
+        sieve(nk, &primes)
     } else {
         let mut pool: Option<_> = None;
         if let Some(t) = threads {
@@ -193,7 +187,7 @@ fn sieve(n: Uint, primes: &[Prime]) {
     let nsqrt = isqrt(n);
     let sprimes: Vec<SievePrime> = primes
         .iter()
-        .map(|&p| poly::simple_prime(p, nsqrt))
+        .map(|p| poly::simple_prime(p, nsqrt))
         .collect();
     let maxlarge: u64 = primes.last().unwrap().p * large_prime_factor(&n);
     eprintln!("Max cofactor {}", maxlarge);
@@ -386,7 +380,7 @@ fn sieve_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Rela
     let dinv = inv_mod(pol.d, n).unwrap();
 
     // Precompute factor base extra information.
-    let sprimes: Vec<_> = primes.into_iter().map(|&p| pol.prepare_prime(p)).collect();
+    let sprimes: Vec<_> = primes.into_iter().map(|p| pol.prepare_prime(p)).collect();
 
     // Sieve from -M to M
     let nsqrt = isqrt(n);

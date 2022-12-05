@@ -1,7 +1,7 @@
 use brunch::Bench;
 use std::str::FromStr;
 use std::time::Duration;
-use yamaquasi::arith::{inv_mod, isqrt, sqrt_mod, U1024, U256, U512};
+use yamaquasi::arith::{self, inv_mod, isqrt, sqrt_mod, U1024, U256, U512};
 use yamaquasi::Uint;
 
 const N256: &str = "23374454829417248628572084580131596971714744792262629806178559231363799527559";
@@ -13,6 +13,52 @@ const PQ256: &str =
 brunch::benches! {
     Bench::new("isqrt(u256)").run_seeded(U256::from_str(N256).unwrap(), isqrt),
     Bench::new("isqrt(u1024)").run_seeded(U1024::from_str(N1024).unwrap(), isqrt),
+    // Small modular inverses
+        {
+        Bench::new("1000x inv_mod(17, 257)")
+        .with_timeout(Duration::from_secs(1))
+        .run_seeded((17, 257), |(k, p)| for _ in 0..1000 { arith::inv_mod64(k, p); })
+    },
+    {
+        Bench::new("1000x inv_mod(17, 65537)")
+        .with_timeout(Duration::from_secs(1))
+        .run_seeded((17, 65537), |(k, p)| for _ in 0..1000 { arith::inv_mod64(k, p); })
+    },
+    {
+        Bench::new("1000x inv_mod(40507, 65537)")
+        .with_timeout(Duration::from_secs(1))
+        .run_seeded((40507, 65537), |(k, p)| for _ in 0..1000 { arith::inv_mod64(k, p); })
+    },
+    {
+        Bench::new("1000x inv_mod(4057, 1048583)")
+        .with_timeout(Duration::from_secs(1))
+        .run_seeded((4057, 1048583), |(k, p)| for _ in 0..1000 { arith::inv_mod64(k, p); })
+    },
+       {
+        let div = arith::Dividers::new(257);
+        Bench::new("1000x inv_mod binary(17, 257)")
+        .with_timeout(Duration::from_secs(1))
+        .run_seeded((17, &div), |(k, div)| for _ in 0..1000 { div.inv(k); })
+    },
+    {
+        let div = arith::Dividers::new(65537);
+        Bench::new("1000x inv_mod binary(17, 65537)")
+        .with_timeout(Duration::from_secs(1))
+        .run_seeded((17, &div), |(k, div)| for _ in 0..1000 { div.inv(k); })
+    },
+    {
+        let div = arith::Dividers::new(65537);
+        Bench::new("1000x inv_mod binary(40507, 65537)")
+        .with_timeout(Duration::from_secs(1))
+        .run_seeded((40507, &div), |(k, div)| for _ in 0..1000 { div.inv(k); })
+    },
+    {
+        let div = arith::Dividers::new(1048583);
+        Bench::new("1000x inv_mod binary(4057, 1048583)")
+        .with_timeout(Duration::from_secs(1))
+        .run_seeded((4057, &div), |(k, div)| for _ in 0..1000 { div.inv(k); })
+    },
+    // Large modular inverses
     {
         let prime160 = U512::from_str(P160).unwrap();
         Bench::new("inv_mod(3, 160-bit prime) = Some(...)")
@@ -50,4 +96,18 @@ brunch::benches! {
         .with_timeout(Duration::from_secs(1))
         .run_seeded(3, |k: u64| sqrt_mod(U1024::from(k), prime160))
     },
+    // Wide division
+    {
+        let n = U1024::from_str(PQ256).unwrap();
+        Bench::new("1000x mod(u256, 65537)")
+        .with_samples(5_000)
+        .run_seeded((n, 65537), |(n, p)| for _ in 0..1000 { let _ = n % p as u64; })
+    },
+    {
+        let n = U1024::from_str(PQ256).unwrap();
+        let d = arith::Dividers::new(65537);
+        Bench::new("1000x mod const(u256, 65537)")
+        .with_samples(50_000)
+        .run_seeded((&n, &d), |(n, d)| for _ in 0..1000 { d.divmod_uint(n).1; })
+    }
 }
