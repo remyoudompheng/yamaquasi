@@ -25,7 +25,7 @@ Benchmarks on Ryzen 5500U
 | 280 bits | 480s     | 500-600s |  —    |   — | — |
 | 300 bits | 1400s    |  2300s   |  —    |   — | — |
 | 320 bits | 5400s    | 20700s   |  —    |   — | — |
-| RSA-100  | 11400s   |  — | — | — | —  |
+| RSA-100  | 11400s   | 41400s   | — | — | —  |
 
 flintqs rejects inputs smaller than 40 decimal digits.
 

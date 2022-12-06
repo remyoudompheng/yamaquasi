@@ -405,16 +405,60 @@ fn mpqs_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Relat
         dinv,
         d2inv,
     };
+    // Construct initial state.
+    let mut st_primes = vec![];
+    let mut st_logs = vec![];
+    let mut st_hi = vec![];
+    let mut st_lo = vec![];
+    let start_offset = -(1 << mlog);
+    for (p, sp) in primes.iter().zip(&sprimes) {
+        assert_eq!(p.p >> 24, 0);
+        let [s1, s2] = sieve_starts(p, sp, start_offset);
+        let logp = (32 - u32::leading_zeros(p.p as u32)) as u8;
+        st_primes.push(p.p as u32);
+        st_logs.push(logp);
+        st_hi.push((s1 / BLOCK_SIZE as u64) as u8);
+        st_lo.push((s1 % BLOCK_SIZE as u64) as u16);
+        if p.r != 0 {
+            // 2 roots
+            st_primes.push(p.p as u32);
+            st_logs.push(logp);
+            st_hi.push((s2 / BLOCK_SIZE as u64) as u8);
+            st_lo.push((s2 % BLOCK_SIZE as u64) as u16);
+        }
+    }
+    // Make st_hi size a multiple of 16.
+    st_hi.reserve(16 - st_hi.len() % 16);
+    let mut state = StateMPQS {
+        idx15: st_primes
+            .iter()
+            .position(|&p| p > BLOCK_SIZE as u32)
+            .unwrap_or(st_primes.len()),
+        primes: st_primes,
+        logs: st_logs,
+        hi: st_hi,
+        lo: st_lo,
+    };
     if nblocks == 0 {
-        return sieve_block_poly(&sieve, -(1 << mlog), 2 << mlog);
+        return sieve_block_poly(&sieve, -(1 << mlog), 2 << mlog, &mut state);
     }
     let mut result: Vec<Relation> = vec![];
     let mut extras: Vec<Relation> = vec![];
     let nblocks = nblocks as i64;
     for i in -nblocks..nblocks {
-        let (mut x, mut y) = sieve_block_poly(&sieve, i * BLOCK_SIZE as i64, BLOCK_SIZE);
+        let (mut x, mut y) =
+            sieve_block_poly(&sieve, i * BLOCK_SIZE as i64, BLOCK_SIZE, &mut state);
         result.append(&mut x);
         extras.append(&mut y);
+        // Decrement MSB by 1.
+        let mut idx: usize = 0;
+        while idx < state.hi.len() {
+            unsafe {
+                let p = (&mut state.hi[idx]) as *mut u8 as *mut wide::u8x16;
+                *p = (*p).min(*p - 1);
+            }
+            idx += 16;
+        }
     }
     (result, extras)
 }
@@ -426,6 +470,21 @@ struct SieveMPQS<'a> {
     pol: &'a Poly,
     dinv: Uint,
     d2inv: Uint,
+}
+
+// The sieve makes an array of offset progress through the
+// sieve interval.
+// The offsets are relative to the block offset.
+// They are stored as hi<<B + lo
+// so that an offset if in the current block iff hi==0.
+struct StateMPQS {
+    idx15: usize, // Offset of prime > 32768
+    primes: Vec<u32>,
+    logs: Vec<u8>,
+    // The MSB of the offset for each cursor.
+    hi: Vec<u8>,
+    // The LSB of the offset for each cursor.
+    lo: Vec<u16>,
 }
 
 // Compute sieving offsets i,j such that offset+i,j are roots
@@ -443,48 +502,65 @@ fn sieve_starts(p: &Prime, sp: &SievePrime, offset: i64) -> [u64; 2] {
 }
 
 // Sieve using a selected polynomial
-fn sieve_block_poly(s: &SieveMPQS, offset: i64, len: usize) -> (Vec<Relation>, Vec<Relation>) {
+fn sieve_block_poly(
+    s: &SieveMPQS,
+    offset: i64,
+    len: usize,
+    st: &mut StateMPQS,
+) -> (Vec<Relation>, Vec<Relation>) {
     let mut blk = vec![0u8; len];
-    let mut starts = vec![[0u64, 0u64]; s.primes.len()];
-    for (idx, (p, sp)) in s.primes.iter().zip(s.sprimes).enumerate() {
-        starts[idx] = sieve_starts(p, sp, offset);
-    }
-    for (idx, item) in s.sprimes.iter().enumerate() {
-        let size = (u64::BITS - u64::leading_zeros(item.p)) as u8;
-        let p = item.p as usize;
-        let [s1, s2] = starts[idx];
-        if p == 2 {
-            let mut i = s1 as usize;
-            while i < blk.len() {
-                blk[i] += 1;
-                i += 2;
+    unsafe {
+        for i in 0..st.idx15 {
+            let i = i as usize;
+            let p = *st.primes.get_unchecked(i);
+            // Small primes always have a hit.
+            debug_assert!(st.hi[i] == 0);
+            let mut off: usize = *st.lo.get_unchecked(i) as usize;
+            let size = *st.logs.get_unchecked(i);
+            if p < 1024 {
+                let ll = len - 4 * p as usize;
+                while off < ll {
+                    *blk.get_unchecked_mut(off) += size;
+                    off += p as usize;
+                    *blk.get_unchecked_mut(off) += size;
+                    off += p as usize;
+                    *blk.get_unchecked_mut(off) += size;
+                    off += p as usize;
+                    *blk.get_unchecked_mut(off) += size;
+                    off += p as usize;
+                }
             }
-        } else {
-            let (s1, s2) = (s1 as usize, s2 as usize);
-            let (s1, s2) = if s1 < s2 { (s1, s2) } else { (s2, s1) };
-            let mut ip: usize = 0;
-            while ip + s2 < blk.len() {
-                blk[ip + s1] += size;
-                blk[ip + s2] += size;
-                ip += p;
+            while off < len {
+                *blk.get_unchecked_mut(off) += size;
+                off += p as usize;
             }
-            if ip + s1 < blk.len() {
-                blk[ip + s1] += size;
-            }
-            if ip + s2 < blk.len() {
-                blk[ip + s2] += size;
-            }
+            // Update state. No need to set hi=1.
+            st.lo[i] = (off % BLOCK_SIZE) as u16;
         }
     }
-    sieve_result(s, offset, len, &blk, &starts[..])
+    for i in st.idx15..st.primes.len() {
+        // Large primes have at most 1 hit.
+        if st.hi[i] != 0 {
+            continue;
+        }
+        let i = i as usize;
+        let p = st.primes[i];
+        blk[st.lo[i] as usize] += st.logs[i];
+        let off = st.lo[i] as usize + p as usize;
+        debug_assert!(off > BLOCK_SIZE);
+        st.hi[i] = (off / BLOCK_SIZE) as u8;
+        st.lo[i] = (off % BLOCK_SIZE) as u16;
+    }
+
+    sieve_result(s, st, offset, len, &blk)
 }
 
 fn sieve_result(
     s: &SieveMPQS,
+    st: &StateMPQS,
     offset: i64,
     len: usize,
     blk: &[u8],
-    starts: &[[u64; 2]],
 ) -> (Vec<Relation>, Vec<Relation>) {
     let maxprime = s.primes.last().unwrap().p;
     let maxlarge = maxprime * large_prime_factor(&s.n);
@@ -505,8 +581,9 @@ fn sieve_result(
                 factors.push((-1, 1));
             }
             let mut cofactor: Uint = cabs;
+            let arg = offset + i as i64;
             for (idx, item) in s.primes.iter().enumerate() {
-                if starts[idx].contains(&item.div.divmod64(i as u64).1) {
+                if s.sprimes[idx].roots.contains(&item.div.modi64(arg)) {
                     let mut exp = 0;
                     loop {
                         let (q, r) = item.div.divmod_uint(&cofactor);
@@ -524,17 +601,18 @@ fn sieve_result(
             if cofactor > maxlarge {
                 continue;
             }
+            let sabs = (x.abs().to_bits() * dinv) % n;
+            let xrel = if candidate.is_negative() {
+                n - sabs
+            } else {
+                sabs
+            };
             if cofactor == 1 {
                 if DEBUG {
                     eprintln!("i={} smooth {}", i, cabs);
                 }
-                let sabs = (x.abs().to_bits() * dinv) % n;
                 result.push(Relation {
-                    x: if candidate.is_negative() {
-                        n - sabs
-                    } else {
-                        sabs
-                    },
+                    x: xrel,
                     cofactor: 1,
                     factors,
                 });
@@ -542,13 +620,8 @@ fn sieve_result(
                 if DEBUG {
                     eprintln!("i={} smooth {} cofactor {}", i, cabs, cofactor);
                 }
-                let sabs = (x.abs().to_bits() * dinv) % n;
                 extras.push(Relation {
-                    x: if candidate.is_negative() {
-                        n - sabs
-                    } else {
-                        sabs
-                    },
+                    x: xrel,
                     cofactor: cofactor,
                     factors,
                 });

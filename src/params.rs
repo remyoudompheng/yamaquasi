@@ -58,8 +58,8 @@ pub fn mpqs_interval_logsize(n: &Uint) -> u32 {
         // Otherwise, choose rather small intervals to maximize
         // smooth density. We can change polynomials very often.
         100..=119 => 15,
-        120..=239 => 13 + sz / 40, // 16..18
-        _ => 19,
+        120..=330 => 13 + sz / 40, // 16..21
+        _ => 21,
     }
 }
 

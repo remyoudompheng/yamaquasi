@@ -236,6 +236,18 @@ impl Dividers {
         }
     }
 
+    pub fn modi64(&self, n: i64) -> u64 {
+        if n < 0 {
+            let m = self.divmod64((-n) as u64).1;
+            if m == 0 {
+                return 0;
+            }
+            self.p as u64 - m
+        } else {
+            self.divmod64(n as u64).1
+        }
+    }
+
     pub fn divmod_uint<const N: usize>(&self, n: &BUint<N>) -> (BUint<N>, u64) {
         if self.p == 2 {
             return (n >> 1, n.low_u64() & 1);
@@ -300,8 +312,9 @@ impl Dividers {
         loop {
             debug_assert!(x as i64 == a * k + b * p);
             debug_assert!(y as i64 == c * k + d * p);
+            debug_assert!(-p < a && a < p);
             if x == 1 {
-                while a < 0 {
+                if a < 0 {
                     a += p;
                 }
                 return Some(a as u64);
@@ -315,14 +328,22 @@ impl Dividers {
                     (a, b) = (a >> 1, b >> 1);
                 } else {
                     // adjust by an odd term, both become even
-                    (a, b) = ((a + p) / 2, (b - k) / 2);
+                    if a < 0 {
+                        (a, b) = ((a + p) / 2, (b - k) / 2);
+                    } else {
+                        (a, b) = ((a - p) / 2, (b + k) / 2);
+                    }
                 }
             } else if y % 2 == 0 {
                 y >>= 1;
                 if c % 2 == 0 {
                     (c, d) = (c >> 1, d >> 1);
                 } else {
-                    (c, d) = ((c + p) / 2, (d - k) / 2);
+                    if c < 0 {
+                        (c, d) = ((c + p) / 2, (d - k) / 2);
+                    } else {
+                        (c, d) = ((c - p) / 2, (d + k) / 2);
+                    }
                 }
             } else {
                 (x, y) = (x, y - x);
@@ -418,6 +439,13 @@ mod tests {
             let p = p as u64;
             for n in M64..M64 + std::cmp::max(1000, 2 * p) {
                 assert_eq!((n / p, n % p), d.divmod64(n));
+            }
+            let signed = -(M64 as i64);
+            let p = p as i64;
+            if p != 2 && p != 5 {
+                assert_eq!(p + (signed % p), d.modi64(signed) as i64);
+            } else {
+                assert_eq!(d.modi64(signed), 0);
             }
         }
     }
