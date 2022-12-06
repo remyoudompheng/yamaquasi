@@ -8,20 +8,24 @@ of similar size).
 
 Benchmarks on Ryzen 5500U
 
-| Input size | msieve | flintqs | ymqs | ymqs (6 cores) |
-| --- | --- | --- | --- | --- |
-|  40 bits |   2-3ms | — |  15-30ms | — |
-|  60 bits |  5-10ms | — |   5-10ms | — |
-|  80 bits |  5-10ms | — |   5-10ms | — |
-| 100 bits | 30-35ms | — |  10-30ms | 10-150ms |
-| 120 bits | 40-50ms | — | 30-130ms | 15-70ms |
-| 140 bits | 75-90ms |  130-200ms| 100-400ms | 60-200ms |
-| 160 bits | 170-190ms| 300-450ms| 0.5-2.5s | 0.2-1.2s |
-| 180 bits | 400-600ms| 0.9-1.1s | 3-10s | 1-5s |
-| 200 bits | 2.0-3.5s |  3-4s    | 10-40s | 5-20s |
-| 220 bits | 8-12s    | 11-15s   | 60-100s | 15-60s |
-| 240 bits | 25-40s   | 40-60s   | — | 100-160s |
-| 260 bits | — | — | — | 1000s |
+| Input size | msieve | flintqs | ymqs (QS) | ymqs | ymqs (6 cores) |
+| -------- | ------- | ------- | ------- | ------- | -------------- |
+|  40 bits |   2-3ms | —       |  3-4ms  | 25-60ms |  |
+|  60 bits |  5-10ms | —       |  3-5ms  |  6-10ms | — |
+|  80 bits |  5-10ms | —       |  5-7ms  |  5-10ms | — |
+| 100 bits | 30-35ms | —       |10-25ms  | 10-25ms |  8-20ms  |
+| 120 bits | 40-50ms | —       |50-150ms | 20-75ms | 15-30ms  |
+| 140 bits | 75-90ms |  130-200ms| 0.5-1s|100-300ms| 50-100ms |
+| 160 bits | 170-190ms| 300-450ms| 4-8s  |0.4-1.3s | 150-350ms|
+| 180 bits | 400-600ms| 0.9-1.1s |  —    | 2.5-7s  | 0.7-2.0s |
+| 200 bits | 2.0-3.5s |  3-4s    |  —    |   — |  3-5s |
+| 220 bits | 8-12s    | 11-15s   |  —    |   — | 15-30s |
+| 240 bits | 25-40s   | 40-60s   |  —    |   — | 100-160s |
+| 260 bits | 120s     |   160s   |  —    |   — | — |
+| 280 bits | 480s     | 500-600s |  —    |   — | — |
+| 300 bits | 1400s    |  2300s   |  —    |   — | — |
+| 320 bits | 5400s    | 20700s   |  —    |   — | — |
+| RSA-100  | 11400s   |  — | — | — | —  |
 
 flintqs rejects inputs smaller than 40 decimal digits.
 
@@ -31,6 +35,12 @@ The linear algebra implementation of yamaquasi is single-threaded.
 
 The chosen parameters received tweaks to accomodate very small
 inputs for which the quadratic sieve is not efficient (under 100 bits).
+
+A maximum input size (500 bits) is enforced and data structures assume
+that bound.
+
+The sieve assumes that the factor base can be represented by 24-bit
+integers (enough for the first million prime numbers).
 
 # Implementation
 
