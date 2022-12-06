@@ -45,13 +45,13 @@ impl Relation {
         }
     }
 
-    pub fn verify(&self, n: Uint) -> bool {
-        let mut prod = Uint::one();
+    pub fn verify(&self, n: &Uint) -> bool {
+        let mut prod = Uint::from(self.cofactor);
         for &(p, k) in self.factors.iter() {
             if p == -1 && k % 2 == 1 {
                 prod = n - prod;
             } else {
-                prod = (prod * pow_mod(Uint::from(p as u64), Uint::from(k), n)) % n;
+                prod = (prod * pow_mod(Uint::from(p as u64), Uint::from(k), *n)) % n;
             }
         }
         (self.x * self.x) % n == prod
@@ -91,7 +91,7 @@ pub fn relation_gap(_: Uint, rels: &[Relation]) -> usize {
 
 pub fn final_step(n: Uint, rels: &[Relation]) {
     for r in rels {
-        debug_assert!(r.verify(n));
+        debug_assert!(r.verify(&n));
     }
     // Collect occurrences
     let mut occs = HashMap::<i64, u64>::new();

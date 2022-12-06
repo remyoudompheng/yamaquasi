@@ -58,6 +58,9 @@ The implementation is a "textbook" implementation following the papers:
 [Robert D. Silverman, The multiple polynomial quadratic sieve
 ,Math. Comp. 48, 1987](https://doi.org/10.1090/S0025-5718-1987-0866119-8)
 
+Alford, Pomerance, Implementing the self-initializing quadratic sieve
+https://math.dartmouth.edu/~carlp/implementing.pdf
+
 [Wikipedia page](https://en.wikipedia.org/wiki/Quadratic_sieve)
 
 ## Integer arithmetic

@@ -11,6 +11,7 @@ pub mod relations;
 // Implementations
 pub mod mpqs;
 pub mod qsieve;
+pub mod siqs;
 
 // We need to perform modular multiplication modulo the input number.
 pub type Int = arith::I1024;

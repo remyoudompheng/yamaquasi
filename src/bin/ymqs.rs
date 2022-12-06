@@ -18,7 +18,7 @@ use yamaquasi::arith::U1024;
 use yamaquasi::fbase::{self, prepare_factor_base, Prime};
 use yamaquasi::relations::final_step;
 use yamaquasi::Uint;
-use yamaquasi::{mpqs, params, qsieve};
+use yamaquasi::{mpqs, params, qsieve, siqs};
 
 fn main() {
     let arg = arguments::parse(std::env::args()).unwrap();
@@ -66,10 +66,14 @@ fn main() {
     let smallprimes: Vec<u64> = primes.iter().map(|f| f.p).take(10).collect();
     eprintln!("Factor base size {} ({:?})", primes.len(), smallprimes);
 
-    let rels = if &mode == "qs" {
-        qsieve::qsieve(nk, &primes)
-    } else {
-        mpqs::mpqs(nk, &primes, threads)
+    let rels = match &mode[..] {
+        "qs" => qsieve::qsieve(nk, &primes),
+        "mpqs" => mpqs::mpqs(nk, &primes, threads),
+        "siqs" => siqs::siqs(&nk, &primes),
+        _ => {
+            eprintln!("Invalid operation mode {:?}", mode);
+            return;
+        }
     };
     final_step(n, &rels);
 }

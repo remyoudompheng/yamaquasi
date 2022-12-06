@@ -225,6 +225,7 @@ impl Dividers {
         }
     }
 
+    #[inline]
     pub fn divmod64(&self, n: u64) -> (u64, u64) {
         let nm = (n as u128) * (self.m64 as u128);
         let q = (nm >> self.s64) as u64;
@@ -253,6 +254,21 @@ impl Dividers {
             return (n >> 1, n.low_u64() & 1);
         }
         let mut digits = n.digits().clone();
+        let rem = self.divmod_uint_inplace(&mut digits);
+        debug_assert!((n % BUint::<N>::from(self.p)).low_u64() == rem);
+        (BUint::from_digits(digits), rem)
+    }
+
+    pub fn mod_uint<const N: usize>(&self, n: &BUint<N>) -> u64 {
+        if self.p == 2 {
+            return n.low_u64() & 1;
+        }
+        let mut digits = n.digits().clone();
+        self.divmod_uint_inplace(&mut digits)
+    }
+
+    #[inline]
+    fn divmod_uint_inplace<const N: usize>(&self, digits: &mut [u64; N]) -> u64 {
         let mut carry: u64 = 0;
         for i in 0..N {
             let i = N - 1 - i;
@@ -272,8 +288,7 @@ impl Dividers {
             }
             digits[i] = q;
         }
-        debug_assert!((n % BUint::<N>::from(self.p)).low_u64() == carry);
-        (BUint::<N>::from_digits(digits), carry)
+        carry
     }
 
     /// Modular inverse. Prime number is supposed to be small (<= 32 bits).

@@ -2,7 +2,7 @@ use brunch::Bench;
 use std::str::FromStr;
 use yamaquasi::arith::isqrt;
 use yamaquasi::Uint;
-use yamaquasi::{fbase, mpqs};
+use yamaquasi::{fbase, mpqs, siqs};
 
 const PQ128: &str = "138775954839724585441297917764657773201";
 const PQ256: &str =
@@ -56,7 +56,32 @@ brunch::benches! {
         let fb = fbase::prepare_factor_base(&n, &primes[..]);
         let polybase: Uint = isqrt(isqrt(n));
         let pol = mpqs::select_poly(polybase, 0, n);
-        Bench::new("prepare 5000 primes for poly (n: 256 bit)")
+        Bench::new("prepare 5000 primes for MPQS poly (n: 256 bit)")
         .run_seeded((&pol, &fb), |(pol, fb)| fb.iter().map(|p| pol.prepare_prime(p)).collect::<Vec<_>>())
+    },
+    // SIQS primitives
+    {
+        // Prepare 40 A (amortized cost for 10000 polynomials)
+        let n = Uint::from_str(PQ256).unwrap();
+        let primes = fbase::primes(10000);
+        let fb = fbase::prepare_factor_base(&n, &primes[..]);
+        Bench::new("prepare 50 A values for SIQS (n = 256 bits)")
+        .run_seeded((&fb, &n), |(fb, n)| {
+            let f = siqs::select_siqs_factors(fb, n, 9);
+            siqs::prepare_as(&f, fb, 40);
+        })
+    },
+    {
+        // Fully prepare one polynomial for a given A.
+        // It is 6 times faster than MPQS preparation.
+        let n = Uint::from_str(PQ256).unwrap();
+        let primes = fbase::primes(10000);
+        let fb = fbase::prepare_factor_base(&n, &primes[..]);
+        let f = siqs::select_siqs_factors(&fb[..], &n, 9);
+        let a_s = siqs::prepare_as(&f, &fb, 40);
+        Bench::new("prepare 1 SIQS polynomial (n = 256 bits)")
+        .run_seeded((&n, &fb, a_s.first().unwrap()), |(n, fb, a)| {
+            siqs::make_polynomial(n, fb, a, 123);
+        })
     }
 }
