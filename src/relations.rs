@@ -70,7 +70,7 @@ pub fn combine_large_relation(
     }
 }
 
-pub fn relation_gap(n: Uint, rels: &[Relation]) -> usize {
+pub fn relation_gap(_: Uint, rels: &[Relation]) -> usize {
     let mut occs = HashMap::<i64, u64>::new();
     for r in rels {
         for (f, k) in r.factors.iter() {

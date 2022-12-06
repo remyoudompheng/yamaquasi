@@ -403,7 +403,7 @@ mod tests {
     fn test_dividers() {
         const M32: u32 = 100_000_000;
         const M64: u64 = 100_000_000_000_000_000;
-        use crate::poly::primes;
+        use crate::fbase::primes;
         let ps = primes(2000);
         for p in ps {
             let d = Dividers::new(p);
@@ -420,7 +420,7 @@ mod tests {
 
     #[test]
     fn test_dividers_uint() {
-        use crate::poly::primes;
+        use crate::fbase::primes;
 
         let n0: U1024 = pow_mod(
             U1024::from(65537u64),
@@ -439,7 +439,7 @@ mod tests {
 
     #[test]
     fn test_dividers_inv() {
-        use crate::poly::primes;
+        use crate::fbase::primes;
         let ps = primes(200);
         for p in ps {
             let d = Dividers::new(p);
