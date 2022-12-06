@@ -94,7 +94,7 @@ pub fn select_multiplier(n: Uint) -> (u32, f64) {
     for k in 1..100 {
         let mag = expected_smooth_magnitude(&(n * Uint::from(k)));
         let mag = (mag - 0.5 * (k as f64).ln()) / std::f64::consts::LN_2;
-        if mag > best_score && k % 2 == 1 {
+        if mag > best_score {
             best_score = mag;
             best = k;
         }

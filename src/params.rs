@@ -1,7 +1,7 @@
 use crate::Uint;
 
-// Fits cache size per core on most reasonable CPUs.
-pub const BLOCK_SIZE: usize = 512 * 1024;
+// Fits L1 cache size per core on most reasonable CPUs.
+pub const BLOCK_SIZE: usize = 32 * 1024;
 
 pub fn factor_base_size(n: Uint) -> u32 {
     let sz = n.bits();
@@ -55,26 +55,11 @@ pub fn mpqs_interval_logsize(n: &Uint) -> u32 {
         // sieve large intervals
         0..=79 => 17,
         60..=99 => 16,
-        // Ordinary growth
-        100..=119 => 16 + sz / 30, // 16..19
-        120..=239 => 17 + sz / 40, // 20..22
-        _ => 23,
-    }
-}
-
-pub fn target_size(n: &Uint) -> u32 {
-    // Target smooth factor size during sieve
-    // When smooths are abundant, don't try too much
-    // to find large factors.
-    let sz = n.bits();
-    match sz {
-        // Large factor can be 10-16 bits
-        0..=127 => sz / 2 + 4,
-        // Large factor is about 20 bits
-        // Target lower than expected sz/2+8
-        128..=192 => sz / 2,
-        // Lower target for large sizes
-        _ => sz / 2 + 10 - sz / 20,
+        // Otherwise, choose rather small intervals to maximize
+        // smooth density. We can change polynomials very often.
+        100..=119 => 15,
+        120..=239 => 13 + sz / 40, // 16..18
+        _ => 19,
     }
 }
 
