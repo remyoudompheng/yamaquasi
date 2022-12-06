@@ -383,108 +383,117 @@ fn sieve_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Rela
     let sprimes: Vec<_> = primes.into_iter().map(|p| pol.prepare_prime(p)).collect();
 
     // Sieve from -M to M
-    let nsqrt = isqrt(n);
+    let sieve = SieveMPQS {
+        n,
+        primes,
+        sprimes: &sprimes,
+        pol,
+        dinv,
+        d2inv,
+    };
     if nblocks == 0 {
-        return sieve_block_poly(
-            Block {
-                offset: -(1 << mlog),
-                len: 2 << mlog,
-                n: n,
-                nsqrt: nsqrt,
-            },
-            &sprimes,
-            &pol,
-            d2inv,
-            dinv,
-        );
+        return sieve_block_poly(&sieve, -(1 << mlog), 2 << mlog);
     }
     let mut result: Vec<Relation> = vec![];
     let mut extras: Vec<Relation> = vec![];
     let nblocks = nblocks as i64;
     for i in -nblocks..nblocks {
-        let (mut x, mut y) = sieve_block_poly(
-            Block {
-                offset: i * BLOCK_SIZE as i64,
-                len: BLOCK_SIZE,
-                n: n,
-                nsqrt: nsqrt,
-            },
-            &sprimes,
-            &pol,
-            d2inv,
-            dinv,
-        );
+        let (mut x, mut y) = sieve_block_poly(&sieve, i * BLOCK_SIZE as i64, BLOCK_SIZE);
         result.append(&mut x);
         extras.append(&mut y);
     }
     (result, extras)
 }
 
-// Sieve using a selected polynomial
-fn sieve_block_poly(
-    b: Block,
-    primes: &[SievePrime],
-    pol: &Poly,
-    d2inv: Uint,
+struct SieveMPQS<'a> {
+    n: Uint,
+    primes: &'a [Prime],
+    sprimes: &'a [SievePrime],
+    pol: &'a Poly,
     dinv: Uint,
-) -> (Vec<Relation>, Vec<Relation>) {
-    let mut blk = vec![0u8; b.len];
-    for item in primes {
+    d2inv: Uint,
+}
+
+// Compute sieving offsets i,j such that offset+i,j are roots
+fn sieve_starts(p: &Prime, sp: &SievePrime, offset: i64) -> [u64; 2] {
+    let [r1, r2] = sp.roots;
+    let off: u64 = if offset < 0 {
+        sp.p - p.div.divmod64((-offset) as u64).1
+    } else {
+        p.div.divmod64(offset as u64).1
+    };
+    [
+        if r1 < off { r1 + p.p - off } else { r1 - off },
+        if r2 < off { r2 + p.p - off } else { r2 - off },
+    ]
+}
+
+// Sieve using a selected polynomial
+fn sieve_block_poly(s: &SieveMPQS, offset: i64, len: usize) -> (Vec<Relation>, Vec<Relation>) {
+    let mut blk = vec![0u8; len];
+    let mut starts = vec![[0u64, 0u64]; s.primes.len()];
+    for (idx, (p, sp)) in s.primes.iter().zip(s.sprimes).enumerate() {
+        starts[idx] = sieve_starts(p, sp, offset);
+    }
+    for (idx, item) in s.sprimes.iter().enumerate() {
         let size = (u64::BITS - u64::leading_zeros(item.p)) as u8;
         let p = item.p as usize;
-        let [s1, s2] = &b.starts(&item);
+        let [s1, s2] = starts[idx];
         if p == 2 {
-            let mut i = *s1 as usize;
+            let mut i = s1 as usize;
             while i < blk.len() {
                 blk[i] += 1;
                 i += 2;
             }
         } else {
-            let (s1, s2) = (*s1 as usize, *s2 as usize);
+            let (s1, s2) = (s1 as usize, s2 as usize);
+            let (s1, s2) = if s1 < s2 { (s1, s2) } else { (s2, s1) };
             let mut ip: usize = 0;
-            while ip < blk.len() {
-                if ip + s1 < blk.len() {
-                    blk[ip + s1] += size;
-                }
-                if ip + s2 < blk.len() {
-                    blk[ip + s2] += size;
-                }
+            while ip + s2 < blk.len() {
+                blk[ip + s1] += size;
+                blk[ip + s2] += size;
                 ip += p;
+            }
+            if ip + s1 < blk.len() {
+                blk[ip + s1] += size;
+            }
+            if ip + s2 < blk.len() {
+                blk[ip + s2] += size;
             }
         }
     }
 
-    let maxprime = primes.last().unwrap().p;
-    let maxlarge = maxprime * large_prime_factor(&b.n);
+    let maxprime = s.primes.last().unwrap().p;
+    let maxlarge = maxprime * large_prime_factor(&s.n);
     let mut result = vec![];
     let mut extras = vec![];
 
-    const EXTRABITS: u32 = 8;
-    let target = b.nsqrt.bits() + EXTRABITS - maxlarge.bits() / 3;
-    for i in 0..b.len {
+    let target = s.n.bits() / 2 + params::mpqs_interval_logsize(&s.n) - maxlarge.bits();
+    let (pol, n, dinv, d2inv) = (s.pol, &s.n, &s.dinv, &s.d2inv);
+    for i in 0..len {
         if blk[i] as u32 >= target {
             let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
             // Evaluate polynomial
-            let s: Int = Int::from_bits(pol.a) * Int::from(b.offset + (i as i64));
-            let s = s + Int::from_bits(pol.b);
-            let candidate: Int = s * s - Int::from_bits(b.n);
+            let x: Int = Int::from_bits(pol.a) * Int::from(offset + (i as i64));
+            let x = x + Int::from_bits(pol.b);
+            let candidate: Int = x * x - Int::from_bits(*n);
             // In the case of very small inputs (< 50 bits)
             // Sieved numbers can be absurdly large.
             let gap = candidate.abs().bits() as i32 - blk[i] as i32 - maxlarge.bits() as i32;
-            if gap > 10 + (b.n.bits() / 4) as i32 {
+            if gap > 10 + (n.bits() / 4) as i32 {
                 continue;
             }
-            let cabs = (candidate.abs().to_bits() * d2inv) % b.n;
+            let cabs = (candidate.abs().to_bits() * d2inv) % n;
             if candidate.is_negative() {
                 factors.push((-1, 1));
             }
             let mut cofactor: Uint = cabs;
-            for item in primes {
-                if b.matches(i, item) {
+            for (idx, item) in s.primes.iter().enumerate() {
+                if starts[idx].contains(&item.div.divmod64(i as u64).1) {
                     let mut exp = 0;
                     loop {
-                        let (q, r) = div_rem(cofactor, Uint::from(item.p));
-                        if r.is_zero() {
+                        let (q, r) = item.div.divmod_uint(&cofactor);
+                        if r == 0 {
                             cofactor = q;
                             exp += 1;
                         } else {
@@ -502,10 +511,10 @@ fn sieve_block_poly(
                 if DEBUG {
                     eprintln!("i={} smooth {}", i, cabs);
                 }
-                let sabs = (s.abs().to_bits() * dinv) % b.n;
+                let sabs = (x.abs().to_bits() * dinv) % n;
                 result.push(Relation {
                     x: if candidate.is_negative() {
-                        b.n - sabs
+                        n - sabs
                     } else {
                         sabs
                     },
@@ -516,10 +525,10 @@ fn sieve_block_poly(
                 if DEBUG {
                     eprintln!("i={} smooth {} cofactor {}", i, cabs, cofactor);
                 }
-                let sabs = (s.abs().to_bits() * dinv) % b.n;
+                let sabs = (x.abs().to_bits() * dinv) % n;
                 extras.push(Relation {
                     x: if candidate.is_negative() {
-                        b.n - sabs
+                        n - sabs
                     } else {
                         sabs
                     },

@@ -58,7 +58,6 @@ pub struct Prime {
 
 pub struct SievePrime {
     pub p: u64,          // prime number
-    pub r: u64,          // square root of N
     pub roots: [u64; 2], // polynomial roots
 }
 
@@ -67,7 +66,6 @@ pub fn simple_prime(p: &Prime, offset: Uint) -> SievePrime {
     let shift: u64 = p.p - (offset % Uint::from(p.p)).to_u64().unwrap();
     SievePrime {
         p: p.p,
-        r: p.r,
         roots: [(p.r + shift) % p.p, (p.p - p.r + shift) % p.p],
     }
 }
@@ -158,7 +156,6 @@ impl Poly {
         if p.p == 2 {
             return SievePrime {
                 p: p.p,
-                r: p.r,
                 roots: [0, 1],
             };
         }
@@ -168,7 +165,6 @@ impl Poly {
         let ainv = p.div.inv(a).unwrap();
         SievePrime {
             p: p.p,
-            r: p.r,
             roots: [
                 p.div.divmod64((p.p + p.r - b) * ainv).1,
                 p.div.divmod64((p.p - p.r + p.p - b) * ainv).1,
