@@ -1,3 +1,7 @@
+// Copyright 2022 Rémy Oudompheng. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 //! Routines related to the quadratic sieve factor base.
 //! This file is common to all variants (QS, MPQS, SIQS).
 

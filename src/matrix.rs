@@ -1,3 +1,7 @@
+// Copyright 2022 Rémy Oudompheng. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // Note that crate bitvec 1.0 generates slow code for our purpose.
 
 use std::default::Default;

@@ -1,4 +1,12 @@
+// Copyright 2022 Rémy Oudompheng. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 //! The classical quadratic sieve (using polynomial (x + Nsqrt)^2 - N).
+//!
+//! Bibliography:
+//! J. Gerver, Factoring Large Numbers with a Quadratic Sieve
+//! https://www.jstor.org/stable/2007781
 
 use std::collections::HashMap;
 

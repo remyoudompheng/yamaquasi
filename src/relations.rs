@@ -1,9 +1,11 @@
+// Copyright 2022 Rémy Oudompheng. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 //! Relations describe an equation:
 //! x^2 = product(pi^ki) mod n
 //!
 //! where pi = -1 or a prime in the factor base
-//!
-//!
 
 use std::collections::HashMap;
 
