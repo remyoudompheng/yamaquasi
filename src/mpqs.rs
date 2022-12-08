@@ -476,7 +476,16 @@ fn sieve_block_poly(s: &SieveMPQS, offset: i64, len: usize) -> (Vec<Relation>, V
             }
         }
     }
+    sieve_result(s, offset, len, &blk, &starts[..])
+}
 
+fn sieve_result(
+    s: &SieveMPQS,
+    offset: i64,
+    len: usize,
+    blk: &[u8],
+    starts: &[[u64; 2]],
+) -> (Vec<Relation>, Vec<Relation>) {
     let maxprime = s.primes.last().unwrap().p;
     let maxlarge = maxprime * large_prime_factor(&s.n);
     let mut result = vec![];
