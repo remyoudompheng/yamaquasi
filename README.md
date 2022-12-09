@@ -1,5 +1,5 @@
-Yamaquasi is a Rust implementation of the Quadratic sieve and its multiple
-polynomial variant (MPQS) aiming at a balance between efficiency and readability.
+Yamaquasi is a Rust implementation of several variants of the Quadratic sieve
+factorisation method. It attempts to balance efficiency and readability.
 
 # Performance
 
@@ -8,33 +8,35 @@ of similar size).
 
 Benchmarks on Ryzen 5500U
 
-| Input size | msieve | flintqs | ymqs (QS) | ymqs | ymqs (6 cores) |
-| -------- | ------- | ------- | ------- | ------- | -------------- |
-|  40 bits |   2-3ms | —       |  3-4ms  | 25-60ms |  |
-|  60 bits |  5-10ms | —       |  3-5ms  |  6-10ms | — |
-|  80 bits |  5-10ms | —       |  5-7ms  |  5-10ms | — |
-| 100 bits | 30-35ms | —       |10-25ms  | 10-25ms |  8-20ms  |
-| 120 bits | 40-50ms | —       |50-150ms | 20-75ms | 15-30ms  |
-| 140 bits | 75-90ms |  130-200ms| 0.5-1s|100-300ms| 50-100ms |
-| 160 bits | 170-190ms| 300-450ms| 4-8s  |0.4-1.3s | 150-350ms|
-| 180 bits | 400-600ms| 0.9-1.1s |  —    | 2.5-7s  | 0.7-2.0s |
-| 200 bits | 2.0-3.5s |  3-4s    |  —    |   — |  3-5s |
-| 220 bits | 8-12s    | 11-15s   |  —    |   — | 15-30s |
-| 240 bits | 25-40s   | 40-60s   |  —    |   — | 100-160s |
-| 260 bits | 120s     |   160s   |  —    |   — | — |
-| 280 bits | 480s     | 500-600s |  —    |   — | — |
-| 300 bits | 1400s    |  2300s   |  —    |   — | — |
-| 320 bits | 5400s    | 20700s   |  —    |   — | — |
-| RSA-100  | 11400s   | 41400s   | — | — | —  |
+|Input size| msieve  | flintqs |   QS    |  MPQS   |  SIQS   | MPQS (6 cores) |
+| -------- | ------- | ------- | ------- | ------- | ------- | ------- |
+|  40 bits |   2-3ms | —       |   4-6ms | 40-80ms |  5-7ms  |    —    |
+|  60 bits |   4-6ms | —       |   3-5ms |  6-10ms |  5-7ms  |    —    |
+|  80 bits |   5-8ms | —       |   6-8ms |  5-10ms |  12-15ms|    —    |
+| 100 bits | 30-35ms | —       | 15-30ms | 10-20ms |  15-35ms|   8-20ms|
+| 120 bits | 40-50ms | —       |70-170ms | 30-60ms |  40-70ms|  15-30ms|
+| 140 bits | 75-90ms |120-160ms| 0.5-1.3s|140-230ms|150-250ms| 50-100ms|
+| 160 bits |150-190ms|300-340ms|    3-9s | 0.4-1.1s|500-900ms|200-300ms|
+| 180 bits | 0.5-0.7s| 0.8-1.1s|  20-50s | 2.5-4.5s| 2.3-3.1s| 0.7-1.3s|
+| 200 bits | 2.2-3.1s| 2.6-4.9s|140-220s | 10-20s  | 9.5-14s |  3-4.5s |
+| 220 bits | 10-14s  |  13-19s | ~1000s  |  ~100s  |  45-55s |  15-25s |
+| 240 bits | 25-40s  | 40-60s  |    —    |    —    |   ­     |100-160s |
+| 260 bits | 120s    |   160s  |    —    |    —    |   ­     |    —    |
+| 280 bits | 480s    |   ~500s |    —    |    —    |   ­     |    —    |
+| 300 bits | 1400s   |  ~2000s |    —    |    —    |   ­     |    —    |
+| 320 bits | 5400s   | ~20000s |    —    |    —    |   ­     |    —    |
+| RSA-100  | 11400s  |  41400s |    —    |    —    |   ­     |    —    |
 
-flintqs rejects inputs smaller than 40 decimal digits.
+`msieve` uses SQUFOF and ordinary quadratic sieve below 85 bits.
+`flintqs` rejects inputs smaller than 40 decimal digits.
 
 The linear algebra implementation of yamaquasi is single-threaded.
 
 # Choice of thresholds and parameters
 
 The chosen parameters received tweaks to accomodate very small
-inputs for which the quadratic sieve is not efficient (under 100 bits).
+inputs (under 100 bits) for which the quadratic sieve
+is not the most effective method.
 
 A maximum input size (500 bits) is enforced and data structures assume
 that bound.
@@ -58,8 +60,8 @@ The implementation is a "textbook" implementation following the papers:
 [Robert D. Silverman, The multiple polynomial quadratic sieve
 ,Math. Comp. 48, 1987](https://doi.org/10.1090/S0025-5718-1987-0866119-8)
 
-Alford, Pomerance, Implementing the self-initializing quadratic sieve
-https://math.dartmouth.edu/~carlp/implementing.pdf
+[W. R. Alford, Carl Pomerance, Implementing the self-initializing quadratic sieve
+](https://math.dartmouth.edu/~carlp/implementing.pdf)
 
 [Wikipedia page](https://en.wikipedia.org/wiki/Quadratic_sieve)
 
@@ -70,7 +72,7 @@ than 512 bits, yamaquasi uses fixed width 1024-bit arithmetic for
 modular arithmetic provided by the `bnum` crate, and 64-bit arithmetic
 for computations involving the factor base.
 
-## Polynomial selection
+## Polynomial selection (MPQS)
 
 The polynomial selection looks for pseudoprimes D such that the input number
 N is a quadratic residue modulo D. The search uses slight sieving to
