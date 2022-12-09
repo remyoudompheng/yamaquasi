@@ -33,16 +33,6 @@ pub fn large_prime_factor(n: &Uint) -> u64 {
     }
 }
 
-pub fn qs_blocksize(n: &Uint) -> usize {
-    let sz = n.bits();
-    match sz {
-        // QS converges quickly for small inputs
-        0..=59 => 1 << 13,
-        60..=84 => 1 << (2 + sz / 5), // 14..18
-        _ => BLOCK_SIZE,
-    }
-}
-
 pub fn mpqs_interval_logsize(n: &Uint) -> u32 {
     // 90 bits => 512k
     // 120 bits => 1M
