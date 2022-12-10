@@ -73,7 +73,7 @@ pub fn mpqs(n: Uint, primes: &[Prime], threads: Option<usize>) -> Vec<Relation> 
     loop {
         // Pop next polynomial.
         if polyidx == polys.len() {
-            let gap = relation_gap(n, &relations);
+            let gap = relation_gap(&relations);
             if gap == 0 {
                 eprintln!("Found enough relations");
                 break;
@@ -119,7 +119,7 @@ pub fn mpqs(n: Uint, primes: &[Prime], threads: Option<usize>) -> Vec<Relation> 
             }
         }
         if relations.len() >= target {
-            let gap = relation_gap(n, &relations);
+            let gap = relation_gap(&relations);
             if gap == 0 {
                 eprintln!("Found enough relations");
                 break;

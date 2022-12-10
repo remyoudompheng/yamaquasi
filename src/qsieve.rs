@@ -112,7 +112,7 @@ pub fn qsieve(n: Uint, primes: &[Prime]) -> Vec<Relation> {
         if found.len() > primes.len() + 16 {
             // Too many relations! May happen for very small inputs.
             relations.extend_from_slice(&mut found[..primes.len() + 16]);
-            let gap = relation_gap(n, &relations);
+            let gap = relation_gap(&relations);
             if gap == 0 {
                 println!("Found enough relations");
                 break;
@@ -151,7 +151,7 @@ pub fn qsieve(n: Uint, primes: &[Prime]) -> Vec<Relation> {
         // For small n the sieve must stop quickly:
         // test whether we already have enough relations.
         if n.bits() < 64 || relations.len() >= target {
-            let gap = relation_gap(n, &relations);
+            let gap = relation_gap(&relations);
             if gap == 0 {
                 println!("Found enough relations");
                 break;

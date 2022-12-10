@@ -43,7 +43,7 @@ fn main() {
     eprintln!("Selected multiplier {} (score {:.2}/8)", k, score);
     // Choose factor base. Sieve twice the number of primes
     // (n will be a quadratic residue for only half of them)
-    let fb = params::factor_base_size(n);
+    let fb = params::factor_base_size(&n);
     let primes = fbase::primes(std::cmp::max(2 * fb, 1000));
     eprintln!("Testing small prime divisors");
     let mut n = n;
@@ -75,5 +75,5 @@ fn main() {
             return;
         }
     };
-    final_step(n, &rels);
+    final_step(&n, &rels);
 }

@@ -3,7 +3,7 @@ use crate::Uint;
 // Fits L1 cache size per core on most reasonable CPUs.
 pub const BLOCK_SIZE: usize = 32 * 1024;
 
-pub fn factor_base_size(n: Uint) -> u32 {
+pub fn factor_base_size(n: &Uint) -> u32 {
     let sz = n.bits();
     if sz < 160 {
         // Factor bases from Silverman's article
@@ -55,9 +55,9 @@ pub fn mpqs_interval_logsize(n: &Uint) -> u32 {
 
 #[test]
 fn test_factor_base_size() {
-    let b80 = factor_base_size(Uint::from(1u64) << 80);
-    let b100 = factor_base_size(Uint::from(1u64) << 100);
-    let b120 = factor_base_size(Uint::from(1u64) << 120);
+    let b80 = factor_base_size(&(Uint::from(1u64) << 80));
+    let b100 = factor_base_size(&(Uint::from(1u64) << 100));
+    let b120 = factor_base_size(&(Uint::from(1u64) << 120));
     eprintln!("Bound 80-bit: {}", b80);
     eprintln!("Bound 100-bit: {}", b100);
     eprintln!("Bound 120-bit: {}", b120);
@@ -65,10 +65,10 @@ fn test_factor_base_size() {
     assert!(160 <= b100 && b100 <= 240);
     assert!(320 <= b120 && b120 <= 480);
 
-    let b160 = factor_base_size(Uint::from(1u64) << 160);
-    let b192 = factor_base_size(Uint::from(1u64) << 192);
-    let b224 = factor_base_size(Uint::from(1u64) << 224);
-    let b256 = factor_base_size(Uint::from(1u64) << 256);
+    let b160 = factor_base_size(&(Uint::from(1u64) << 160));
+    let b192 = factor_base_size(&(Uint::from(1u64) << 192));
+    let b224 = factor_base_size(&(Uint::from(1u64) << 224));
+    let b256 = factor_base_size(&(Uint::from(1u64) << 256));
     eprintln!("Bound 160-bit: {}", b160);
     eprintln!("Bound 192-bit: {}", b192);
     eprintln!("Bound 224-bit: {}", b224);

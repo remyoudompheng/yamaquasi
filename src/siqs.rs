@@ -92,7 +92,7 @@ pub fn siqs(n: &Uint, primes: &[Prime]) -> Vec<Relation> {
             polys_done += 1;
 
             if relations.len() >= target {
-                gap = relation_gap(*n, &relations);
+                gap = relation_gap(&relations);
                 if gap == 0 {
                     eprintln!("Found enough relations");
                     break;
@@ -660,7 +660,7 @@ fn test_poly_a() {
         // Divide by 20 to obtain faster tests.
         let want = if want > 50 { want / 20 } else { want };
 
-        let fb_size = params::factor_base_size(*n);
+        let fb_size = params::factor_base_size(n);
         let ps = fbase::primes(fb_size);
         let fb = fbase::prepare_factor_base(n, &ps);
 

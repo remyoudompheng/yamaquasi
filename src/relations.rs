@@ -72,7 +72,7 @@ pub fn combine_large_relation(
     }
 }
 
-pub fn relation_gap(_: Uint, rels: &[Relation]) -> usize {
+pub fn relation_gap(rels: &[Relation]) -> usize {
     let mut occs = HashMap::<i64, u64>::new();
     for r in rels {
         for (f, k) in r.factors.iter() {
@@ -89,9 +89,9 @@ pub fn relation_gap(_: Uint, rels: &[Relation]) -> usize {
     }
 }
 
-pub fn final_step(n: Uint, rels: &[Relation]) {
+pub fn final_step(n: &Uint, rels: &[Relation]) {
     for r in rels {
-        debug_assert!(r.verify(&n));
+        debug_assert!(r.verify(n));
     }
     // Collect occurrences
     let mut occs = HashMap::<i64, u64>::new();
@@ -182,7 +182,7 @@ pub fn final_step(n: Uint, rels: &[Relation]) {
 }
 
 /// Combine relations into an identity a^2 = b^2
-fn combine(n: Uint, rels: &[Relation]) -> (Uint, Uint) {
+fn combine(n: &Uint, rels: &[Relation]) -> (Uint, Uint) {
     // Check that the product is a square
     let mut a = Uint::one();
     for r in rels {
@@ -202,31 +202,31 @@ fn combine(n: Uint, rels: &[Relation]) -> (Uint, Uint) {
         if p == -1 {
             continue;
         }
-        b = (b * pow_mod(Uint::from(p as u64), Uint::from(k / 2), n)) % n;
+        b = (b * pow_mod(Uint::from(p as u64), Uint::from(k / 2), *n)) % n;
     }
     assert_eq!((a * a) % n, (b * b) % n);
     (a, b)
 }
 
 /// Using a^2 = b^2 mod n, try to factor n
-fn try_factor(n: Uint, a: Uint, b: Uint) -> Option<(Uint, Uint)> {
-    if a == b || a + b == n {
+fn try_factor(n: &Uint, a: Uint, b: Uint) -> Option<(Uint, Uint)> {
+    if a == b || a + b == *n {
         // Trivial square relation
         return None;
     }
-    let e = Integer::extended_gcd(&Int::from_bits(n), &Int::from_bits(a + b));
+    let e = Integer::extended_gcd(&Int::from_bits(*n), &Int::from_bits(a + b));
     if e.gcd > Int::one() {
         let p = e.gcd.to_bits();
         let q = n / p;
-        assert!(p * q == n);
+        assert!(p * q == *n);
         assert!(p.bits() > 1 && q.bits() > 1);
         return Some((p, q));
     }
-    let e = Integer::extended_gcd(&Int::from_bits(n), &Int::from_bits(n + a - b));
+    let e = Integer::extended_gcd(&Int::from_bits(*n), &Int::from_bits(n + a - b));
     if e.gcd > Int::one() {
         let p = e.gcd.to_bits();
         let q = n / p;
-        assert!(p * q == n);
+        assert!(p * q == *n);
         assert!(p.bits() > 1 && q.bits() > 1);
         return Some((p, q));
     }
