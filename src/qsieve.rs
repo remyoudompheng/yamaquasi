@@ -14,6 +14,7 @@ use crate::arith::{isqrt, Num};
 use crate::fbase::Prime;
 use crate::params::{large_prime_factor, BLOCK_SIZE};
 use crate::relations::{combine_large_relation, relation_gap, Relation};
+use crate::sieve;
 use crate::{Int, Uint};
 
 pub fn qsieve(n: Uint, primes: &[Prime]) -> Vec<Relation> {
@@ -43,72 +44,9 @@ pub fn qsieve(n: Uint, primes: &[Prime]) -> Vec<Relation> {
     let mut extras = 0;
     let sieve = SieveQS { n, nsqrt };
     // Construct 2 initial states, forward and backwards.
-    let mut st_primes = vec![];
-    let mut st_logs = vec![];
-    let mut st_hi1 = vec![];
-    let mut st_lo1 = vec![];
-    let mut st_hi2 = vec![];
-    let mut st_lo2 = vec![];
-    for p in primes {
-        assert_eq!(p.p >> 24, 0);
-        let rp = p.div.mod_uint(&nsqrt);
-        let logp = (32 - u32::leading_zeros(p.p as u32)) as u8;
-        st_primes.push(p);
-        st_logs.push(logp);
-        // Forward sieve
-        let s1 = p.div.divmod64(p.r + p.p - rp).1;
-        let s2 = p.div.divmod64(p.p - p.r + p.p - rp).1;
-        st_hi1.push((s1 / BLOCK_SIZE as u64) as u8);
-        st_lo1.push((s1 % BLOCK_SIZE as u64) as u16);
-        if p.r != 0 {
-            // 2 roots
-            st_primes.push(p);
-            st_logs.push(logp);
-            st_hi1.push((s2 / BLOCK_SIZE as u64) as u8);
-            st_lo1.push((s2 % BLOCK_SIZE as u64) as u16);
-        }
-        let x1 = nsqrt + Uint::from(s1);
-        let x2 = nsqrt + Uint::from(s2);
-        assert_eq!(p.div.mod_uint(&(x1 * x1)), p.div.mod_uint(&n));
-        assert_eq!(p.div.mod_uint(&(x2 * x2)), p.div.mod_uint(&n));
-        // Backward sieve
-        let rp = if rp == 0 { p.p - 1 } else { rp - 1 };
-        let s1 = p.div.divmod64(p.r + rp).1;
-        let s2 = p.div.divmod64(p.p - p.r + rp).1;
-        st_hi2.push((s1 / BLOCK_SIZE as u64) as u8);
-        st_lo2.push((s1 % BLOCK_SIZE as u64) as u16);
-        if p.r != 0 {
-            // 2 roots
-            st_hi2.push((s2 / BLOCK_SIZE as u64) as u8);
-            st_lo2.push((s2 % BLOCK_SIZE as u64) as u16);
-        }
-        let x1 = nsqrt - Uint::from(s1 + 1);
-        let x2 = nsqrt - Uint::from(s2 + 1);
-        assert_eq!(p.div.mod_uint(&(x1 * x1)), p.div.mod_uint(&n));
-        assert_eq!(p.div.mod_uint(&(x2 * x2)), p.div.mod_uint(&n));
-    }
-    let idx15 = st_primes
-        .iter()
-        .position(|&p| p.p > BLOCK_SIZE as u64)
-        .unwrap_or(st_primes.len());
-    let mut st_fwd = StateQS {
-        offset: 0,
-        idx15,
-        primes: &st_primes[..],
-        logs: &st_logs,
-        hi: st_hi1,
-        lo: st_lo1,
-    };
-    let mut st_bck = StateQS {
-        offset: 0,
-        idx15,
-        primes: &st_primes[..],
-        logs: &st_logs,
-        hi: st_hi2,
-        lo: st_lo2,
-    };
+    let (mut s_fwd, mut s_bck) = init_sieves(primes, nsqrt);
     loop {
-        let (mut found, foundlarge) = sieve_block(&sieve, &mut st_fwd, false);
+        let (mut found, foundlarge) = sieve_block(&sieve, &mut s_fwd, false);
         if found.len() > primes.len() + 16 {
             // Too many relations! May happen for very small inputs.
             relations.extend_from_slice(&mut found[..primes.len() + 16]);
@@ -118,10 +56,10 @@ pub fn qsieve(n: Uint, primes: &[Prime]) -> Vec<Relation> {
                 break;
             } else {
                 println!("Need {} additional relations", gap);
-                target = relations.len() + gap + 10;
+                target = relations.len() + gap + 16;
             }
         }
-        st_fwd.next_block();
+        s_fwd.next_block();
         relations.append(&mut found);
         for r in foundlarge {
             if let Some(rr) = combine_large_relation(&mut larges, &r, &n) {
@@ -129,8 +67,8 @@ pub fn qsieve(n: Uint, primes: &[Prime]) -> Vec<Relation> {
                 extras += 1;
             }
         }
-        let (mut found, foundlarge) = sieve_block(&sieve, &mut st_bck, true);
-        st_bck.next_block();
+        let (mut found, foundlarge) = sieve_block(&sieve, &mut s_bck, true);
+        s_bck.next_block();
         relations.append(&mut found);
         for r in foundlarge {
             if let Some(rr) = combine_large_relation(&mut larges, &r, &n) {
@@ -138,7 +76,7 @@ pub fn qsieve(n: Uint, primes: &[Prime]) -> Vec<Relation> {
                 extras += 1;
             }
         }
-        let sieved = st_fwd.offset + st_bck.offset;
+        let sieved = s_fwd.offset + s_bck.offset;
         if sieved % (10 << 20) == 0 {
             println!(
                 "Sieved {}M found {} smooths (cofactors: {} combined, {} pending)",
@@ -161,7 +99,7 @@ pub fn qsieve(n: Uint, primes: &[Prime]) -> Vec<Relation> {
             }
         }
     }
-    let sieved = st_fwd.offset + st_bck.offset;
+    let sieved = s_fwd.offset + s_bck.offset;
     println!(
         "Sieved {:.1}M found {} smooths (cofactors: {} combined, {} pending)",
         (sieved as f64) / ((1 << 20) as f64),
@@ -172,91 +110,82 @@ pub fn qsieve(n: Uint, primes: &[Prime]) -> Vec<Relation> {
     relations
 }
 
+pub fn init_sieves(fb: &[Prime], nsqrt: Uint) -> (sieve::Sieve, sieve::Sieve) {
+    let mut st_primes = vec![];
+    let mut st_logs = vec![];
+    let mut st_hi = vec![];
+    let mut st_lo = vec![];
+    let mut st_hi2 = vec![];
+    let mut st_lo2 = vec![];
+    for p in fb.iter() {
+        assert_eq!(p.p >> 24, 0);
+        let rp = p.div.mod_uint(&nsqrt);
+        let logp = (32 - u32::leading_zeros(p.p as u32)) as u8;
+        st_primes.push(p);
+        st_logs.push(logp);
+        let s1 = p.div.divmod64(p.r + p.p - rp).1;
+        let s2 = p.div.divmod64(p.p - p.r + p.p - rp).1;
+        st_hi.push((s1 / BLOCK_SIZE as u64) as u8);
+        st_lo.push((s1 % BLOCK_SIZE as u64) as u16);
+        if p.r != 0 {
+            st_primes.push(p);
+            st_logs.push(logp);
+            st_hi.push((s2 / BLOCK_SIZE as u64) as u8);
+            st_lo.push((s2 % BLOCK_SIZE as u64) as u16);
+        }
+        // Backward sieve
+        let rp = if rp == 0 { p.p - 1 } else { rp - 1 };
+        let s1 = p.div.divmod64(p.r + rp).1;
+        let s2 = p.div.divmod64(p.p - p.r + rp).1;
+        st_hi2.push((s1 / BLOCK_SIZE as u64) as u8);
+        st_lo2.push((s1 % BLOCK_SIZE as u64) as u16);
+        if p.r != 0 {
+            // 2 roots
+            st_hi2.push((s2 / BLOCK_SIZE as u64) as u8);
+            st_lo2.push((s2 % BLOCK_SIZE as u64) as u16);
+        }
+    }
+
+    let idx15 = st_primes
+        .iter()
+        .position(|&p| p.p > BLOCK_SIZE as u64)
+        .unwrap_or(st_primes.len());
+
+    let s1 = sieve::Sieve {
+        offset: 0,
+        idx15,
+        primes: st_primes.clone(),
+        logs: st_logs.clone(),
+        hi: st_hi,
+        lo: st_lo,
+        starts: vec![],
+        blk: [0u8; BLOCK_SIZE],
+    };
+    let s2 = sieve::Sieve {
+        offset: 0,
+        idx15,
+        primes: st_primes,
+        logs: st_logs,
+        hi: st_hi2,
+        lo: st_lo2,
+        starts: vec![],
+        blk: [0u8; BLOCK_SIZE],
+    };
+    (s1, s2)
+}
+
 struct SieveQS {
     n: Uint,
     nsqrt: Uint,
 }
 
-struct StateQS<'a> {
-    offset: u64,
-    idx15: usize, // Offset of prime > 32768
-    primes: &'a [&'a Prime],
-    logs: &'a [u8],
-    // The MSB of the offset for each cursor.
-    hi: Vec<u8>,
-    // The LSB of the offset for each cursor.
-    lo: Vec<u16>,
-}
-
-impl<'a> StateQS<'a> {
-    fn next_block(&mut self) {
-        self.offset += BLOCK_SIZE as u64;
-        for i in 0..self.hi.len() {
-            let m = self.hi[i];
-            if m > 0 {
-                self.hi[i] = m - 1;
-            }
-        }
-    }
-}
-
-fn sieve_block(s: &SieveQS, st: &mut StateQS, backward: bool) -> (Vec<Relation>, Vec<Relation>) {
-    let len: usize = BLOCK_SIZE;
-    let mut blk = vec![0u8; len];
-    let starts = st.lo.clone();
-    unsafe {
-        for i in 0..st.idx15 {
-            let i = i as usize;
-            let p = st.primes.get_unchecked(i).p;
-            // Small primes always have a hit.
-            debug_assert!(st.hi[i] == 0);
-            let mut off: usize = *st.lo.get_unchecked(i) as usize;
-            let size = *st.logs.get_unchecked(i);
-            if p < 1024 {
-                let ll = len - 4 * p as usize;
-                while off < ll {
-                    *blk.get_unchecked_mut(off) += size;
-                    off += p as usize;
-                    *blk.get_unchecked_mut(off) += size;
-                    off += p as usize;
-                    *blk.get_unchecked_mut(off) += size;
-                    off += p as usize;
-                    *blk.get_unchecked_mut(off) += size;
-                    off += p as usize;
-                }
-            }
-            while off < len {
-                *blk.get_unchecked_mut(off) += size;
-                off += p as usize;
-            }
-            // Update state. No need to set hi=1.
-            st.lo[i] = (off % BLOCK_SIZE) as u16;
-        }
-    }
-    for i in st.idx15..st.primes.len() {
-        // Large primes have at most 1 hit.
-        if st.hi[i] != 0 {
-            continue;
-        }
-        let i = i as usize;
-        let p = st.primes[i].p;
-        blk[st.lo[i] as usize] += st.logs[i];
-        let off = st.lo[i] as usize + p as usize;
-        debug_assert!(off > BLOCK_SIZE);
-        st.hi[i] = (off / BLOCK_SIZE) as u8;
-        st.lo[i] = (off % BLOCK_SIZE) as u16;
-    }
-    sieve_result(s, st, &blk, &starts[..], backward)
-}
-
-fn sieve_result(
+fn sieve_block(
     s: &SieveQS,
-    st: &StateQS,
-    blk: &[u8],
-    starts: &[u16],
+    st: &mut sieve::Sieve,
     backward: bool,
 ) -> (Vec<Relation>, Vec<Relation>) {
-    assert_eq!(starts.len(), st.primes.len());
+    st.sieve_block();
+
     let len: usize = BLOCK_SIZE;
     let offset = st.offset;
     let maxprime = st.primes.last().unwrap().p;
@@ -265,66 +194,32 @@ fn sieve_result(
     let mut extras = vec![];
     let magnitude = u64::BITS - u64::leading_zeros(std::cmp::max(offset, len as u64));
     let target = s.n.bits() / 2 + magnitude - maxlarge.bits();
+    assert!(target < 256);
     let n = &s.n;
-    for i in 0..len as u64 {
-        if blk[i as usize] as u32 >= target {
-            let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
-            let x = if !backward {
-                Int::from_bits(s.nsqrt) + Int::from((offset + i) as i64)
-            } else {
-                Int::from_bits(s.nsqrt) - Int::from((offset + i + 1) as i64)
-            };
-            let candidate: Int = x * x - Int::from_bits(*n);
-            let cabs = candidate.abs().to_bits() % n;
-            if candidate.is_negative() {
-                factors.push((-1, 1));
-            }
-            let mut cofactor: Uint = cabs;
-            let mut tmp_p = 0;
-            let mut tmp_r = 0;
-            for (idx, item) in st.primes.iter().enumerate() {
-                if item.p != tmp_p {
-                    tmp_p = item.p;
-                    tmp_r = item.div.divmod64(i as u64).1;
-                }
-                if tmp_r == starts[idx] as u64 {
-                    let mut exp = 0;
-                    loop {
-                        let (q, r) = item.div.divmod_uint(&cofactor);
-                        if r == 0 {
-                            cofactor = q;
-                            exp += 1;
-                        } else {
-                            break;
-                        }
-                    }
-                    if exp > 0 {
-                        factors.push((item.p as i64, exp));
-                    }
-                }
-            }
-            let Some(cofactor) = cofactor.to_u64() else { continue };
-            let sabs = (x.abs().to_bits()) % n;
-            let x = if candidate.is_negative() {
-                n - sabs
-            } else {
-                sabs
-            };
-            if cofactor == 1 {
-                //println!("i={} smooth {}", i, cabs);
-                result.push(Relation {
-                    x,
-                    cofactor: 1,
-                    factors,
-                });
-            } else if cofactor < maxlarge {
-                //println!("i={} smooth {} cofactor {}", i, cabs, cofactor);
-                extras.push(Relation {
-                    x,
-                    cofactor,
-                    factors,
-                });
-            }
+    for i in st.smooths(target as u8) {
+        let x = if !backward {
+            Int::from_bits(s.nsqrt) + Int::from(offset as i64 + i as i64)
+        } else {
+            Int::from_bits(s.nsqrt) - Int::from(offset as i64 + i as i64 + 1)
+        };
+        let candidate: Int = x * x - Int::from_bits(*n);
+        let (cofactor, factors) = st.cofactor(i, &candidate);
+        let Some(cofactor) = cofactor.to_u64() else { continue };
+        //println!("i={} smooth {} cofactor {}", i, cabs, cofactor);
+        let rel = Relation {
+            x: x.abs().to_bits(),
+            cofactor,
+            factors,
+        };
+        debug_assert!(
+            rel.verify(&s.n),
+            "INTERNAL ERROR: failed relation check {:?}",
+            rel
+        );
+        if cofactor == 1 {
+            result.push(rel)
+        } else {
+            extras.push(rel)
         }
     }
     (result, extras)

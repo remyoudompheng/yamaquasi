@@ -2,7 +2,7 @@ use brunch::Bench;
 use std::str::FromStr;
 use yamaquasi::arith::isqrt;
 use yamaquasi::Uint;
-use yamaquasi::{fbase, mpqs, siqs};
+use yamaquasi::{fbase, mpqs, qsieve, sieve, siqs};
 
 const PQ128: &str = "138775954839724585441297917764657773201";
 const PQ256: &str =
@@ -82,6 +82,31 @@ brunch::benches! {
         Bench::new("prepare 1 SIQS polynomial (n = 256 bits)")
         .run_seeded((&n, &fb, a_s.first().unwrap()), |(n, fb, a)| {
             siqs::make_polynomial(n, fb, a, 123);
+        })
+    },
+    // Block sieve
+    {
+        let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
+        let primes = fbase::primes(5133);
+        let fb = fbase::prepare_factor_base(&n, &primes[..]);
+        let nsqrt = isqrt(n);
+        let s = qsieve::init_sieves(&fb, nsqrt).0;
+        Bench::new("sieve 32k block with ~2500 primes")
+        .run_seeded(s, |s|{
+            let mut s1 = s.clone();
+            s1.sieve_block()
+        })
+    },
+    {
+        let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
+        let primes = fbase::primes(20000);
+        let fb = fbase::prepare_factor_base(&n, &primes[..]);
+        let nsqrt = isqrt(n);
+        let s = qsieve::init_sieves(&fb, nsqrt).0;
+        Bench::new("sieve 32k block with ~10000 primes")
+        .run_seeded(s, |s|{
+            let mut s1 = s.clone();
+            s1.sieve_block()
         })
     }
 }

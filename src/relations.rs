@@ -38,19 +38,24 @@ impl Relation {
             exps.insert(*p, e + k);
         }
         exps.insert(self.cofactor as i64, 2);
+        let mut factors: Vec<_> = exps.into_iter().collect();
+        //factors.sort();
         Relation {
             x: (self.x * rhs.x) % n,
             cofactor: 1,
-            factors: exps.into_iter().collect(),
+            factors,
         }
     }
 
     pub fn verify(&self, n: &Uint) -> bool {
         let mut prod = Uint::from(self.cofactor);
         for &(p, k) in self.factors.iter() {
-            if p == -1 && k % 2 == 1 {
-                prod = n - prod;
+            if p == -1 {
+                if k % 2 == 1 {
+                    prod = n - prod;
+                }
             } else {
+                assert!(p > 0);
                 prod = (prod * pow_mod(Uint::from(p as u64), Uint::from(k), *n)) % n;
             }
         }
@@ -65,7 +70,15 @@ pub fn combine_large_relation(
 ) -> Option<Relation> {
     let c = r.cofactor;
     if let Some(r0) = h.get(&c) {
-        Some(r.combine(r0, &n))
+        let rr = r.combine(r0, &n);
+        debug_assert!(
+            rr.verify(n),
+            "INTERNAL ERROR: invalid combined relation\nr1={:?}\nr2={:?}\nr1*r2={:?}",
+            r,
+            r0,
+            rr
+        );
+        Some(rr)
     } else {
         h.insert(c, r.clone());
         None
