@@ -69,7 +69,7 @@ fn main() {
     let rels = match &mode[..] {
         "qs" => qsieve::qsieve(nk, &primes),
         "mpqs" => mpqs::mpqs(nk, &primes, threads),
-        "siqs" => siqs::siqs(&nk, &primes),
+        "siqs" => siqs::siqs(&nk, &primes, threads),
         _ => {
             eprintln!("Invalid operation mode {:?}", mode);
             return;

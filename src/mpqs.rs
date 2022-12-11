@@ -92,9 +92,9 @@ pub fn mpqs(n: Uint, primes: &[Prime], threads: Option<usize>) -> Vec<Relation> 
             polyidx = 0;
             eprintln!("Generated {} polynomials", polys.len());
         }
-        let mut results: Vec<(Vec<_>, Vec<_>)> = if threads.is_some() {
+        let mut results: Vec<(Vec<_>, Vec<_>)> = if let Some(pool) = pool.as_ref() {
             // Parallel sieving: do all polynomials at once.
-            let v = pool.as_ref().unwrap().install(|| {
+            let v = pool.install(|| {
                 (&polys[polyidx..])
                     .par_iter()
                     .map(|p| mpqs_poly(p, n, &primes))

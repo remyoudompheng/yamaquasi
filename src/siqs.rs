@@ -16,9 +16,13 @@
 //! which can be computed from the factor base data through the Chinese remainder
 //! theorem.
 
-use num_traits::One;
 use std::cmp::{max, min};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+
+use num_traits::One;
+use rayon::prelude::*;
 
 use crate::arith::{self, Num};
 use crate::fbase::{Prime, SievePrime};
@@ -27,11 +31,19 @@ use crate::relations::{combine_large_relation, relation_gap, Relation};
 use crate::sieve;
 use crate::{Int, Uint, DEBUG};
 
-pub fn siqs(n: &Uint, primes: &[Prime]) -> Vec<Relation> {
-    let mut target = primes.len() * 8 / 10;
-    let mut relations = vec![];
-    let mut larges = HashMap::<u64, Relation>::new();
-    let mut extras = 0;
+pub fn siqs(n: &Uint, primes: &[Prime], threads: Option<usize>) -> Vec<Relation> {
+    let mut pool: Option<_> = None;
+
+    if let Some(t) = threads {
+        eprintln!("Parallel sieving over {} threads", t);
+        pool = Some(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(t)
+                .build()
+                .expect("cannot create thread pool"),
+        );
+    }
+
     let fb = primes.len();
     let mlog = interval_logsize(&n);
     if mlog >= 20 {
@@ -61,8 +73,60 @@ pub fn siqs(n: &Uint, primes: &[Prime]) -> Vec<Relation> {
     let maxprime = primes.last().unwrap().p;
     let maxlarge: u64 = maxprime * params::large_prime_factor(&n);
     eprintln!("Max cofactor {}", maxlarge);
-    let mut gap = fb;
-    let mut polys_done = 0;
+
+    let done = AtomicBool::new(false);
+
+    struct State {
+        relations: Vec<Relation>,
+        larges: HashMap<u64, Relation>,
+        extras: usize,
+        gap: usize,
+        polys_done: usize,
+        target: usize,
+    }
+
+    let state = Mutex::new(State {
+        relations: vec![],
+        larges: HashMap::new(),
+        extras: 0,
+        gap: fb,
+        polys_done: 0,
+        target: primes.len() * 8 / 10,
+    });
+
+    let handle_result = |found: &mut Vec<Relation>, foundlarge: Vec<Relation>| {
+        let mut s = state.lock().unwrap();
+        s.relations.append(found);
+        for r in foundlarge {
+            if let Some(rr) = combine_large_relation(&mut s.larges, &r, &n) {
+                if rr.factors.iter().all(|(_, exp)| exp % 2 == 0) {
+                    // FIXME: Poor choice of A's can lead to duplicate relations.
+                    eprintln!("FIXME: ignoring trivial relation");
+                    //eprintln!("{:?}", rr.factors);
+                } else {
+                    s.relations.push(rr);
+                    s.extras += 1;
+                }
+            }
+        }
+        s.polys_done += 1;
+
+        if s.relations.len() >= s.target {
+            s.gap = relation_gap(&s.relations);
+            if s.gap == 0 {
+                eprintln!("Found enough relations");
+                done.store(true, Ordering::Relaxed);
+                return true;
+            } else {
+                eprintln!("Need {} additional relations", s.gap);
+                s.target += s.gap + std::cmp::min(10, fb as usize / 4);
+            }
+        }
+        false
+    };
+
+    let poly_idxs: Vec<usize> = (0..polys_per_a).collect();
+
     for a in a_s.iter() {
         eprintln!(
             "Sieving A={} (factors {})",
@@ -74,51 +138,48 @@ pub fn siqs(n: &Uint, primes: &[Prime]) -> Vec<Relation> {
                 .join("*")
         );
 
-        for idx in 0..polys_per_a {
-            let (pol, sprimes) = make_polynomial(n, primes, a, idx);
-            let (mut found, foundlarge) = siqs_sieve_poly(n, a, &pol, primes, &sprimes);
-            relations.append(&mut found);
-            for r in foundlarge {
-                if let Some(rr) = combine_large_relation(&mut larges, &r, &n) {
-                    if rr.factors.iter().all(|(_, exp)| exp % 2 == 0) {
-                        // FIXME: Poor choice of A's can lead to duplicate relations.
-                        eprintln!("FIXME: ignoring trivial relation");
-                        //eprintln!("{:?}", rr.factors);
-                    } else {
-                        relations.push(rr);
-                        extras += 1;
+        if let Some(pool) = pool.as_ref() {
+            // Multi-threaded
+            pool.install(|| {
+                poly_idxs.par_iter().for_each(|&idx| {
+                    if done.load(Ordering::Relaxed) {
+                        return;
                     }
-                }
-            }
-            polys_done += 1;
-
-            if relations.len() >= target {
-                gap = relation_gap(&relations);
-                if gap == 0 {
-                    eprintln!("Found enough relations");
+                    let (pol, sprimes) = make_polynomial(n, primes, a, idx);
+                    let (mut found, foundlarge) = siqs_sieve_poly(n, a, &pol, primes, &sprimes);
+                    handle_result(&mut found, foundlarge);
+                });
+            })
+        } else {
+            // Single-threaded
+            for idx in 0..polys_per_a {
+                let (pol, sprimes) = make_polynomial(n, primes, a, idx);
+                let (mut found, foundlarge) = siqs_sieve_poly(n, a, &pol, primes, &sprimes);
+                let enough = handle_result(&mut found, foundlarge);
+                if enough {
                     break;
-                } else {
-                    eprintln!("Need {} additional relations", gap);
-                    target += gap + std::cmp::min(10, fb as usize / 4);
                 }
             }
         }
+        let s = state.lock().unwrap();
         eprintln!(
             "Sieved {}M {} polys found {} smooths (cofactors: {} combined, {} pending)",
-            ((polys_done) << (mlog + 1 - 10)) >> 10,
-            polys_done,
-            relations.len(),
-            extras,
-            larges.len(),
+            ((s.polys_done) << (mlog + 1 - 10)) >> 10,
+            s.polys_done,
+            s.relations.len(),
+            s.extras,
+            s.larges.len(),
         );
+        let gap = s.gap;
         if gap == 0 {
             break;
         }
     }
-    if gap != 0 {
+    let s = state.into_inner().unwrap();
+    if s.gap != 0 {
         panic!("Internal error: not enough smooth numbers with selected parameters");
     }
-    relations
+    s.relations
 }
 
 // Parameters:
