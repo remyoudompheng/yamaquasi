@@ -105,6 +105,7 @@ brunch::benches! {
         Bench::new("sieve 32k block with ~2500 primes")
         .run_seeded(s, |s| {
             let mut s1 = s.clone();
+            s1.idxskip = 0;
             s1.sieve_block();
             s1.next_block();
         })
@@ -118,6 +119,7 @@ brunch::benches! {
         Bench::new("sieve 32k block with ~10000 primes")
         .run_seeded(s, |s| {
             let mut s1 = s.clone();
+            s1.idxskip = 0;
             s1.sieve_block();
             s1.next_block();
         })
@@ -131,6 +133,7 @@ brunch::benches! {
         Bench::new("sieve 32k block with ~50000 primes")
         .run_seeded(s, |s| {
             let mut s1 = s.clone();
+            s1.idxskip = 0;
             s1.sieve_block();
             s1.next_block();
         })
@@ -215,7 +218,9 @@ brunch::benches! {
             let mut s1 = s.clone();
             s1.sieve_block();
             let idxs = s1.smooths(86).0;
-            assert!(15 <= idxs.len() && idxs.len() <= 30);
+            // Inaccurate tests due to sieve optimisations.
+            //assert!(15 <= idxs.len() && idxs.len() <= 30);
+            //eprintln!("{}", idxs.len());
             s1.next_block();
         })
     },

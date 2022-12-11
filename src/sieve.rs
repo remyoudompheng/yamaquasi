@@ -23,6 +23,7 @@
 //! ~ 5% for primes in (1024, 4096)
 //! ~ 7% for primes in (4096, 32768)
 //! ~ 3% for primes above 32768
+//! The product of 5 smallest primes (2*3*7*11*13) is 13 bits large.
 //!
 //! For 39k primes (largest ~1e6, sum~=3.32):
 //! > 60% for 10 smallest primes
@@ -30,6 +31,10 @@
 //! ~ 5% for primes in (1024, 4096)
 //! ~ 8% for primes in (4096, 32768)
 //! ~ 8% for primes above 32768
+//! The product of 10 smallest primes (2*...*43) is 38 bits large.
+//!
+//! In the case of MPQS/SIQS
+//! ignoring these small primes may add 20 additional candidates.
 //!
 //! In constrast, large primes sieve hits are very sparse: they will
 //! typically divide less than half of interval elements. We can use
@@ -55,6 +60,8 @@ const BUCKETSIZE: usize = BLOCK_SIZE / BUCKETS;
 #[derive(Clone)]
 pub struct Sieve<'a> {
     pub offset: i64,
+    // First offset of prime actually used in sieve
+    pub idxskip: usize,
     pub idx14: usize, // Offset of prime > 16384
     pub idx15: usize, // Offset of prime > 32768
     pub primes: Vec<&'a Prime>,
@@ -75,6 +82,19 @@ pub struct Sieve<'a> {
 
 impl<'a> Sieve<'a> {
     pub fn new(offset: i64, primes: Vec<&'a Prime>, hi: Vec<u8>, lo: Vec<u16>) -> Self {
+        // Skip enough primes to skip ~half of operations
+        let pskip = match primes.len() {
+            0..=1999 => 3,
+            2000..=4999 => 5,
+            5000..=9999 => 7,
+            10000..=19999 => 11,
+            20000..=49999 => 13,
+            _ => 17,
+        };
+        let idxskip = primes
+            .iter()
+            .position(|&p| p.p > pskip)
+            .unwrap_or(primes.len());
         let idx14 = primes
             .iter()
             .position(|&p| p.p > BLOCK_SIZE as u64 / 2)
@@ -90,6 +110,7 @@ impl<'a> Sieve<'a> {
         let len = primes.len();
         Sieve {
             offset,
+            idxskip,
             idx14,
             idx15,
             primes,
@@ -122,10 +143,24 @@ impl<'a> Sieve<'a> {
         self.starts.copy_from_slice(&self.lo);
         self.histarts.copy_from_slice(&self.hi);
         unsafe {
-            for i in 0..self.idx15 {
+            // Smallest primes: we don't update self.blk at all,
+            // and simply update offsets for next block.
+            for i in 0..self.idxskip {
+                let p = self.primes.get_unchecked(i);
+                let pp = p.p as usize;
+                // off -> off + kp - BLOCK_SIZE
+                let mut off: usize = *self.lo.get_unchecked(i) as usize;
+                off = off + pp - p.div.modu16(BLOCK_SIZE as u16) as usize;
+                if off >= pp {
+                    off -= pp;
+                }
+                self.lo[i] = off as u16;
+            }
+            // Small primes: perform ordinary sieving.
+            // They are guaranteed to have offsets inside the block.
+            for i in self.idxskip..self.idx15 {
                 let i = i as usize;
                 let p = self.primes.get_unchecked(i).p;
-                // Small primes always have a hit.
                 debug_assert!(self.hi[i] == 0);
                 let mut off: usize = *self.lo.get_unchecked(i) as usize;
                 let size = *self.logs.get_unchecked(i);
@@ -150,8 +185,8 @@ impl<'a> Sieve<'a> {
                 self.lo[i] = (off % BLOCK_SIZE) as u16;
             }
         }
+        // Large primes can have at most 1 hit.
         for i in self.idx15..self.primes.len() {
-            // Large primes have at most 1 hit.
             if self.hi[i] != 0 {
                 continue;
             }
@@ -197,26 +232,59 @@ impl<'a> Sieve<'a> {
         }
     }
 
+    fn skipbits(&self) -> usize {
+        // Extra amount to subtract from threshold if we skipped sieving
+        // small primes.
+        // Beware that primes typically appear twice.
+        let mut skipped = 0usize;
+        let mut prev = 0;
+        for i in 0..self.idxskip {
+            let p = self.primes[i].p;
+            if p == prev {
+                continue;
+            }
+            prev = p;
+            skipped += self.logs[i] as usize;
+        }
+        skipped
+    }
+
     pub fn smooths(&self, threshold: u8) -> (Vec<u16>, Vec<Vec<usize>>) {
         assert_eq!(self.starts.len(), self.primes.len());
+        // As smallest primes have been skipped, values in self.blk
+        // are smaller than they should be: subtract an upper bound for
+        // the missing part from the threshold.
+        let skipbits = self.skipbits();
+        let threshold2 = threshold - std::cmp::min(skipbits, threshold as usize / 2) as u8;
+
         let mut res: Vec<u16> = vec![];
-        let thr16x = wide::u8x16::splat(threshold - 1);
+        let thr16x = wide::u8x16::splat(threshold2 - 1);
         let mut i = 0;
         while i < BLOCK_SIZE {
             unsafe {
-                // Cast as u8;16 to avoid assuming alignment.
+                // Cast as [u8;16] to avoid assuming alignment.
                 let blk16 = (&self.blk[i] as *const u8) as *const [u8; 16];
                 let blk16w = wide::u8x16::new(*blk16);
                 if thr16x != blk16w.max(thr16x) {
                     // Some element is > threshold-1
                     for j in 0..16 {
-                        if (*blk16)[j] >= threshold {
-                            res.push((i + j) as u16)
+                        let mut t = (*blk16)[j];
+                        let ij = (i + j) as u16;
+                        // Now add missing log(p) for smallest primes.
+                        for pidx in 0..self.idxskip {
+                            let off = self.starts[pidx];
+                            let p = self.primes[pidx];
+                            if p.div.modu16(ij) == off {
+                                t += self.logs[pidx];
+                            }
+                        }
+                        if t >= threshold {
+                            res.push(ij as u16)
                         }
                     }
                 }
             }
-            i += 16
+            i += 16;
         }
         if res.len() == 0 {
             return (vec![], vec![]);

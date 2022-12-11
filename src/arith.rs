@@ -226,6 +226,9 @@ impl Dividers {
     }
 
     pub fn modu16(&self, n: u16) -> u16 {
+        if self.p == 2 {
+            return n & 1;
+        }
         let nm = (n as u64) * (self.m16 as u64);
         let q = (nm >> self.s16) as u16;
         n - q * self.p as u16
