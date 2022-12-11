@@ -167,6 +167,10 @@ fn mulmod<T: Num>(a: T, b: T, p: T) -> T {
 #[derive(Clone, Debug)]
 pub struct Dividers {
     p: u32,
+    // Multiplier for 16-bit division
+    // This is used for small primes during sieving.
+    m16: u32,
+    s16: usize,
     // Multiplier for 32-bit division
     m32: u32,
     s32: usize,
@@ -189,6 +193,8 @@ impl Dividers {
         if p == 2 {
             return Dividers {
                 p,
+                m16: 1,
+                s16: 1,
                 m32: 1,
                 s32: 1,
                 m64: 1,
@@ -199,6 +205,9 @@ impl Dividers {
         // Compute 2^k / p rounded up
         let m128: U256 = (U256::one() << 128) / (p as u64);
         let sz = m128.bits();
+        // For 16 bits we can use the exact 17-bit multiplier
+        let m16 = (m128 >> (sz - 17)).low_u64() as u32 + 1; // 17 bits
+        let s16 = 128 + 17 - sz as usize; // m16 >> s16 = m128 >> 128
         let m32 = (m128 >> (sz - 32)).low_u64() as u32 + 1; // 32 bits
         let s32 = 128 + 32 - sz as usize; // m32 >> s32 = m128 >> 128
         let m64 = (m128 >> (sz - 64)).low_u64() + 1; // 64 bits
@@ -206,12 +215,20 @@ impl Dividers {
         let s64 = 128 + 64 - sz as usize; // m64 >> s64 = m128 >> 128
         Dividers {
             p,
+            m16,
+            s16,
             m32,
             s32,
             m64,
             r64,
             s64,
         }
+    }
+
+    pub fn modu16(&self, n: u16) -> u16 {
+        let nm = (n as u64) * (self.m16 as u64);
+        let q = (nm >> self.s16) as u16;
+        n - q * self.p as u16
     }
 
     pub fn divmod32(&self, n: u32) -> (u32, u32) {
@@ -461,6 +478,28 @@ mod tests {
                 assert_eq!(p + (signed % p), d.modi64(signed) as i64);
             } else {
                 assert_eq!(d.modi64(signed), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn test_dividers_u16() {
+        use crate::fbase::primes;
+        let ps = primes(10000);
+        for p in ps {
+            if p >= 1 << 16 {
+                break;
+            }
+            let d = Dividers::new(p);
+            if p < 100 {
+                for i in 0..4 * p {
+                    let n = i as u16;
+                    assert_eq!(n % (p as u16), d.modu16(n));
+                }
+            }
+            for i in 0..1000u64 {
+                let n = ((12345 * i) & 0xffff) as u16;
+                assert_eq!(n % (p as u16), d.modu16(n));
             }
         }
     }
