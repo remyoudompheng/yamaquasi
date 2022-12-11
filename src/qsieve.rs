@@ -113,7 +113,6 @@ pub fn qsieve(n: Uint, primes: &[Prime]) -> Vec<Relation> {
 pub fn init_sieves(fb: &[Prime], nsqrt: Uint) -> (sieve::Sieve, sieve::Sieve) {
     let l = 16 * (fb.len() / 8 + 1);
     let mut st_primes = vec![];
-    let mut st_logs = vec![];
     let mut st_hi = Vec::with_capacity(l);
     let mut st_lo = Vec::with_capacity(l);
     let mut st_hi2 = Vec::with_capacity(l);
@@ -121,16 +120,13 @@ pub fn init_sieves(fb: &[Prime], nsqrt: Uint) -> (sieve::Sieve, sieve::Sieve) {
     for p in fb.iter() {
         assert_eq!(p.p >> 24, 0);
         let rp = p.div.mod_uint(&nsqrt);
-        let logp = (32 - u32::leading_zeros(p.p as u32)) as u8;
         st_primes.push(p);
-        st_logs.push(logp);
         let s1 = p.div.divmod64(p.r + p.p - rp).1;
         let s2 = p.div.divmod64(p.p - p.r + p.p - rp).1;
         st_hi.push((s1 / BLOCK_SIZE as u64) as u8);
         st_lo.push((s1 % BLOCK_SIZE as u64) as u16);
         if p.r != 0 {
             st_primes.push(p);
-            st_logs.push(logp);
             st_hi.push((s2 / BLOCK_SIZE as u64) as u8);
             st_lo.push((s2 % BLOCK_SIZE as u64) as u16);
         }
@@ -147,31 +143,8 @@ pub fn init_sieves(fb: &[Prime], nsqrt: Uint) -> (sieve::Sieve, sieve::Sieve) {
         }
     }
 
-    let idx15 = st_primes
-        .iter()
-        .position(|&p| p.p > BLOCK_SIZE as u64)
-        .unwrap_or(st_primes.len());
-
-    let s1 = sieve::Sieve {
-        offset: 0,
-        idx15,
-        primes: st_primes.clone(),
-        logs: st_logs.clone(),
-        hi: st_hi,
-        lo: st_lo,
-        starts: vec![],
-        blk: [0u8; BLOCK_SIZE],
-    };
-    let s2 = sieve::Sieve {
-        offset: 0,
-        idx15,
-        primes: st_primes,
-        logs: st_logs,
-        hi: st_hi2,
-        lo: st_lo2,
-        starts: vec![],
-        blk: [0u8; BLOCK_SIZE],
-    };
+    let s1 = sieve::Sieve::new(0, st_primes.clone(), st_hi, st_lo);
+    let s2 = sieve::Sieve::new(0, st_primes, st_hi2, st_lo2);
     (s1, s2)
 }
 
@@ -198,14 +171,34 @@ fn sieve_block(
     let target = s.n.bits() / 2 + magnitude - maxlarge.bits();
     assert!(target < 256);
     let n = &s.n;
-    for i in st.smooths(target as u8) {
+    let (idxs, facss) = st.smooths(target as u8);
+    for (i, facs) in idxs.into_iter().zip(facss) {
         let x = if !backward {
             Int::from_bits(s.nsqrt) + Int::from(offset as i64 + i as i64)
         } else {
             Int::from_bits(s.nsqrt) - Int::from(offset as i64 + i as i64 + 1)
         };
         let candidate: Int = x * x - Int::from_bits(*n);
-        let (cofactor, factors) = st.cofactor(i, &candidate);
+        let mut factors: Vec<(i64, u64)> = vec![];
+        if candidate.is_negative() {
+            factors.push((-1, 1));
+        }
+        let cabs = candidate.abs().to_bits();
+        let mut cofactor: Uint = cabs;
+        for fidx in facs {
+            let item = st.primes[fidx];
+            let mut exp = 0;
+            loop {
+                let (q, r) = item.div.divmod_uint(&cofactor);
+                if r == 0 {
+                    cofactor = q;
+                    exp += 1;
+                } else {
+                    break;
+                }
+            }
+            factors.push((item.p as i64, exp));
+        }
         let Some(cofactor) = cofactor.to_u64() else { continue };
         //println!("i={} smooth {} cofactor {}", i, cabs, cofactor);
         let rel = Relation {

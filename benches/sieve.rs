@@ -91,8 +91,19 @@ brunch::benches! {
         let fb = fbase::prepare_factor_base(&n, &primes[..]);
         let nsqrt = isqrt(n);
         let s = qsieve::init_sieves(&fb, nsqrt).0;
+        Bench::new("clone sieve structure (no-op)")
+        .run_seeded(s, |s| {
+            let _ =  s.clone();
+        })
+    },
+    {
+        let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
+        let primes = fbase::primes(5133);
+        let fb = fbase::prepare_factor_base(&n, &primes[..]);
+        let nsqrt = isqrt(n);
+        let s = qsieve::init_sieves(&fb, nsqrt).0;
         Bench::new("sieve 32k block with ~2500 primes")
-        .run_seeded(s, |s|{
+        .run_seeded(s, |s| {
             let mut s1 = s.clone();
             s1.sieve_block();
             s1.next_block();
@@ -105,10 +116,62 @@ brunch::benches! {
         let nsqrt = isqrt(n);
         let s = qsieve::init_sieves(&fb, nsqrt).0;
         Bench::new("sieve 32k block with ~10000 primes")
-        .run_seeded(s, |s|{
+        .run_seeded(s, |s| {
             let mut s1 = s.clone();
             s1.sieve_block();
             s1.next_block();
         })
-    }
+    },
+    {
+        let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
+        let primes = fbase::primes(100000);
+        let fb = fbase::prepare_factor_base(&n, &primes[..]);
+        let nsqrt = isqrt(n);
+        let s = qsieve::init_sieves(&fb, nsqrt).0;
+        Bench::new("sieve 32k block with ~50000 primes")
+        .run_seeded(s, |s| {
+            let mut s1 = s.clone();
+            s1.sieve_block();
+            s1.next_block();
+        })
+    },
+    {
+        let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
+        let primes = fbase::primes(5133);
+        let fb = fbase::prepare_factor_base(&n, &primes[3..]);
+        let nsqrt = isqrt(n);
+        let s = qsieve::init_sieves(&fb, nsqrt).0;
+        Bench::new("sieve 32k block with [3..2500] primes")
+        .run_seeded(s, |s| {
+            let mut s1 = s.clone();
+            s1.sieve_block();
+            s1.next_block();
+        })
+    },
+    {
+        let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
+        let primes = fbase::primes(20000);
+        let fb = fbase::prepare_factor_base(&n, &primes[5..]);
+        let nsqrt = isqrt(n);
+        let s = qsieve::init_sieves(&fb, nsqrt).0;
+        Bench::new("sieve 32k block with [5..10000] primes")
+        .run_seeded(s, |s| {
+            let mut s1 = s.clone();
+            s1.sieve_block();
+            s1.next_block();
+        })
+    },
+    {
+        let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
+        let primes = fbase::primes(100000);
+        let fb = fbase::prepare_factor_base(&n, &primes[10..]);
+        let nsqrt = isqrt(n);
+        let s = qsieve::init_sieves(&fb, nsqrt).0;
+        Bench::new("sieve 32k block with [10..50000] primes")
+        .run_seeded(s, |s| {
+            let mut s1 = s.clone();
+            s1.sieve_block();
+            s1.next_block();
+        })
+    },
 }

@@ -1,5 +1,6 @@
 //! Shared common implementation of sieve.
 
+use crate::arith::Num;
 use crate::fbase::Prime;
 use crate::{Int, Uint};
 use wide;
@@ -23,16 +24,40 @@ pub struct Sieve<'a> {
     pub lo: Vec<u16>,
     // Clone of lo before sieving block.
     pub starts: Vec<u16>,
+    pub histarts: Vec<u8>,
     // Result of sieve
     pub blk: [u8; BLOCK_SIZE],
 }
 
 impl<'a> Sieve<'a> {
+    pub fn new(offset: i64, primes: Vec<&'a Prime>, hi: Vec<u8>, lo: Vec<u16>) -> Self {
+        let idx15 = primes
+            .iter()
+            .position(|&p| p.p > BLOCK_SIZE as u64)
+            .unwrap_or(primes.len());
+        let logs = primes
+            .iter()
+            .map(|p| (32 - u32::leading_zeros(p.p as u32)) as u8)
+            .collect();
+        let len = primes.len();
+        Sieve {
+            offset,
+            idx15,
+            primes,
+            logs,
+            hi,
+            lo,
+            starts: vec![0u16; len],
+            histarts: vec![0u8; len],
+            blk: [0u8; BLOCK_SIZE],
+        }
+    }
     pub fn sieve_block(&mut self) {
         let len: usize = BLOCK_SIZE;
         self.blk.fill(0u8);
         let blk = &mut self.blk;
-        self.starts = self.lo.clone();
+        self.starts.copy_from_slice(&self.lo);
+        self.histarts.copy_from_slice(&self.hi);
         unsafe {
             for i in 0..self.idx15 {
                 let i = i as usize;
@@ -96,7 +121,7 @@ impl<'a> Sieve<'a> {
         }
     }
 
-    pub fn smooths(&self, threshold: u8) -> Vec<usize> {
+    pub fn smooths(&self, threshold: u8) -> (Vec<usize>, Vec<Vec<usize>>) {
         assert_eq!(self.starts.len(), self.primes.len());
         let mut res = vec![];
         for (i, &v) in self.blk.iter().enumerate() {
@@ -104,47 +129,63 @@ impl<'a> Sieve<'a> {
                 res.push(i)
             }
         }
-        res
+        if res.len() == 0 {
+            return (vec![], vec![]);
+        }
+        // Now find factors.
+        let mut facs = vec![vec![]; res.len()];
+        for i in 0..self.idx15 {
+            let off = self.starts[i] as u64;
+            let p = self.primes[i];
+            for (idx, &r) in res.iter().enumerate() {
+                if p.p < BLOCK_SIZE as u64 / 2 {
+                    if p.div.modi64(r as i64) == off {
+                        facs[idx].push(i)
+                    }
+                } else {
+                    if r as u64 == off || r as u64 == off + p.p {
+                        facs[idx].push(i)
+                    }
+                }
+            }
+        }
+        for i in self.idx15..self.primes.len() {
+            if self.histarts[i] != 0 {
+                continue;
+            }
+            let idx = self.starts[i] as usize;
+            if let Some(j) = res.iter().position(|&j| j == idx) {
+                facs[j].push(i);
+            }
+        }
+        (res, facs)
     }
 
     // Returns the quotient of x by prime divisors determined
     // by the sieve at index i.
     #[inline]
-    pub fn cofactor(&self, i: usize, x: &Int) -> (Uint, Vec<(i64, u64)>) {
+    pub fn cofactor(&self, i: usize, facs: &[usize], x: &Int) -> (u64, Vec<(i64, u64)>) {
         let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
         if x.is_negative() {
             factors.push((-1, 1));
         }
         let xabs = x.abs().to_bits();
         let mut cofactor = xabs;
-        let mut tmp_p: *const Prime = std::ptr::null();
-        let mut tmp_r = 0;
-        let l = self.primes.len();
-        for idx in 0..l {
-            let item = unsafe { *self.primes.get_unchecked(idx) };
-            let s = unsafe { *self.starts.get_unchecked(idx) };
-            if item as *const Prime != tmp_p {
-                tmp_p = item;
-                tmp_r = item.div.divmod64(i as u64).1;
-            }
-            if tmp_r == s as u64 {
-                let mut exp = 0;
-                loop {
-                    let (q, r) = item.div.divmod_uint(&cofactor);
-                    if r == 0 {
-                        debug_assert!(cofactor == q * Uint::from(item.p));
-                        cofactor = q;
-                        exp += 1;
-                    } else {
-                        break;
-                    }
-                }
-                // exp==0 should be impossible?
-                if exp > 0 {
-                    factors.push((item.p as i64, exp));
+        for &fidx in facs {
+            let item = self.primes[fidx];
+            let mut exp = 0;
+            loop {
+                let (q, r) = item.div.divmod_uint(&cofactor);
+                if r == 0 {
+                    cofactor = q;
+                    exp += 1;
+                } else {
+                    break;
                 }
             }
+            factors.push((item.p as i64, exp));
         }
+        let cofactor = cofactor.to_u64().unwrap();
         (cofactor, factors)
     }
 }
@@ -184,14 +225,14 @@ fn test_sieve_block() {
     let expect: &[usize] = &[
         314, 957, 1779, 2587, 5882, 7121, 13468, 16323, 22144, 23176, 32407,
     ];
-    let idxs = s.smooths(70);
+    let (idxs, facss) = s.smooths(70);
     eprintln!("sieve > 70 {:?}", idxs);
     let mut res = vec![];
-    for i in idxs {
+    for (i, facs) in idxs.into_iter().zip(facss) {
         let ii = Uint::from(i as u64);
         let x = Int::from_bits((nsqrt + ii) * (nsqrt + ii) - n);
-        let (cof, _) = s.cofactor(i, &x);
-        if cof == Uint::from(1u64) {
+        let (cof, _) = s.cofactor(i, &facs[..], &x);
+        if cof == 1 {
             res.push(i);
         }
     }

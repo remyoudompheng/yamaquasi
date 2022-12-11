@@ -466,48 +466,31 @@ fn siqs_sieve_poly(
     let sieve = SieveSIQS {
         n,
         primes,
-        sprimes: sprimes,
         factors: &a.factors,
         pol,
     };
     // Construct initial state.
     let l = 16 * (primes.len() / 8 + 1);
     let mut st_primes = vec![];
-    let mut st_logs = vec![];
     let mut st_hi = Vec::with_capacity(l);
     let mut st_lo = Vec::with_capacity(l);
     let start_offset = -(1 << mlog);
     for (p, sp) in primes.iter().zip(sprimes) {
         assert_eq!(p.p >> 24, 0);
         let [s1, s2] = sieve_starts(p, sp, start_offset);
-        let logp = (32 - u32::leading_zeros(p.p as u32)) as u8;
         st_primes.push(p);
-        st_logs.push(logp);
         st_hi.push((s1 / BLOCK_SIZE as u64) as u8);
         st_lo.push((s1 % BLOCK_SIZE as u64) as u16);
         if s1 != s2 {
             // 2 roots
             st_primes.push(p);
-            st_logs.push(logp);
             st_hi.push((s2 / BLOCK_SIZE as u64) as u8);
             st_lo.push((s2 % BLOCK_SIZE as u64) as u16);
         }
     }
     let start_offset: i64 = -(1 << mlog);
     let end_offset: i64 = 1 << mlog;
-    let mut state = sieve::Sieve {
-        offset: start_offset,
-        idx15: st_primes
-            .iter()
-            .position(|&p| p.p > BLOCK_SIZE as u64)
-            .unwrap_or(st_primes.len()),
-        primes: st_primes,
-        logs: st_logs,
-        hi: st_hi,
-        lo: st_lo,
-        blk: [0u8; BLOCK_SIZE],
-        starts: vec![],
-    };
+    let mut state = sieve::Sieve::new(start_offset, st_primes, st_hi, st_lo);
     if nblocks == 0 {
         return sieve_block_poly(&sieve, &mut state);
     }
@@ -525,7 +508,6 @@ fn siqs_sieve_poly(
 struct SieveSIQS<'a> {
     n: &'a Uint,
     primes: &'a [Prime],
-    sprimes: &'a [SievePrime],
     factors: &'a [&'a Prime],
     pol: &'a Poly,
 }
@@ -555,7 +537,8 @@ fn sieve_block_poly(s: &SieveSIQS, st: &mut sieve::Sieve) -> (Vec<Relation>, Vec
 
     let target = s.n.bits() / 2 + params::mpqs_interval_logsize(&s.n) - maxlarge.bits();
     let (a, b, c, n) = (s.pol.a, s.pol.b, s.pol.c, s.n);
-    for i in st.smooths(target as u8) {
+    let (idx, facss) = st.smooths(target as u8);
+    for (i, facs) in idx.into_iter().zip(facss) {
         let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
         // Evaluate polynomial Ax^2 + 2Bx+ C
         let x = Int::from(st.offset + (i as i64));
@@ -567,19 +550,21 @@ fn sieve_block_poly(s: &SieveSIQS, st: &mut sieve::Sieve) -> (Vec<Relation>, Vec
             factors.push((-1, 1));
         }
         let mut cofactor: Uint = v.abs().to_bits();
-        let arg = st.offset + i as i64;
-        for (idx, item) in s.primes.iter().enumerate() {
-            if s.sprimes[idx].roots.contains(&item.div.modi64(arg)) {
-                let mut exp = 0;
-                loop {
-                    let (q, r) = item.div.divmod_uint(&cofactor);
-                    if r == 0 {
-                        cofactor = q;
-                        exp += 1;
-                    } else {
-                        break;
-                    }
+        for fidx in facs {
+            let item = st.primes[fidx];
+            let mut exp = 0;
+            loop {
+                let (q, r) = item.div.divmod_uint(&cofactor);
+                if r == 0 {
+                    cofactor = q;
+                    exp += 1;
+                } else {
+                    break;
                 }
+            }
+            // FIXME: we should have exp > 0
+            //assert!(exp > 0);
+            if exp > 0 {
                 factors.push((item.p as i64, exp));
             }
         }

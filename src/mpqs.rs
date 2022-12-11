@@ -401,29 +401,24 @@ fn mpqs_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Relat
     let sieve = SieveMPQS {
         n,
         primes,
-        sprimes: &sprimes,
         pol,
         dinv,
         d2inv,
     };
     // Construct initial state.
     let mut st_primes = vec![];
-    let mut st_logs = vec![];
     let mut st_hi = vec![];
     let mut st_lo = vec![];
     let start_offset = -(1 << mlog);
-    for (p, sp) in primes.iter().zip(&sprimes) {
+    for (p, sp) in primes.iter().zip(sprimes) {
         assert_eq!(p.p >> 24, 0);
-        let [s1, s2] = sieve_starts(p, sp, start_offset);
-        let logp = (32 - u32::leading_zeros(p.p as u32)) as u8;
+        let [s1, s2] = sieve_starts(p, &sp, start_offset);
         st_primes.push(p);
-        st_logs.push(logp);
         st_hi.push((s1 / BLOCK_SIZE as u64) as u8);
         st_lo.push((s1 % BLOCK_SIZE as u64) as u16);
         if p.r != 0 {
             // 2 roots
             st_primes.push(p);
-            st_logs.push(logp);
             st_hi.push((s2 / BLOCK_SIZE as u64) as u8);
             st_lo.push((s2 % BLOCK_SIZE as u64) as u16);
         }
@@ -432,19 +427,7 @@ fn mpqs_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Relat
     st_hi.reserve(16 - st_hi.len() % 16);
     let start_offset = -(1 << mlog);
     let end_offset = 1 << mlog;
-    let mut state = sieve::Sieve {
-        offset: start_offset,
-        idx15: st_primes
-            .iter()
-            .position(|&p| p.p > BLOCK_SIZE as u64)
-            .unwrap_or(st_primes.len()),
-        primes: st_primes,
-        logs: st_logs,
-        hi: st_hi,
-        lo: st_lo,
-        starts: vec![],
-        blk: [0u8; BLOCK_SIZE],
-    };
+    let mut state = sieve::Sieve::new(start_offset, st_primes, st_hi, st_lo);
     if nblocks == 0 {
         return sieve_block_poly(&sieve, &mut state);
     }
@@ -462,7 +445,6 @@ fn mpqs_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Relat
 struct SieveMPQS<'a> {
     n: Uint,
     primes: &'a [Prime],
-    sprimes: &'a [SievePrime],
     pol: &'a Poly,
     dinv: Uint,
     d2inv: Uint,
@@ -494,7 +476,8 @@ fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) -> (Vec<Relation>, Vec
 
     let target = s.n.bits() / 2 + params::mpqs_interval_logsize(&s.n) - maxlarge.bits();
     let (pol, n, dinv, d2inv) = (s.pol, &s.n, &s.dinv, &s.d2inv);
-    for i in st.smooths(target as u8) {
+    let (idxs, facss) = st.smooths(target as u8);
+    for (i, facs) in idxs.into_iter().zip(facss) {
         let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
         // Evaluate polynomial
         let x: Int = Int::from_bits(pol.a) * Int::from(offset + (i as i64));
@@ -505,21 +488,19 @@ fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) -> (Vec<Relation>, Vec
             factors.push((-1, 1));
         }
         let mut cofactor: Uint = cabs;
-        let arg = offset + i as i64;
-        for (idx, item) in s.primes.iter().enumerate() {
-            if s.sprimes[idx].roots.contains(&item.div.modi64(arg)) {
-                let mut exp = 0;
-                loop {
-                    let (q, r) = item.div.divmod_uint(&cofactor);
-                    if r == 0 {
-                        cofactor = q;
-                        exp += 1;
-                    } else {
-                        break;
-                    }
+        for fidx in facs {
+            let item = st.primes[fidx];
+            let mut exp = 0;
+            loop {
+                let (q, r) = item.div.divmod_uint(&cofactor);
+                if r == 0 {
+                    cofactor = q;
+                    exp += 1;
+                } else {
+                    break;
                 }
-                factors.push((item.p as i64, exp));
             }
+            factors.push((item.p as i64, exp));
         }
         let Some(cofactor) = cofactor.to_u64() else { continue };
         if cofactor > maxlarge {
