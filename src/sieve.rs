@@ -1,11 +1,51 @@
 //! Shared common implementation of sieve.
+//!
+//! Sieving using a quadratic polynomial can be reduced to handling
+//! a list of primes p and 1 or 2 roots of the polynomial modulo p.
+//!
+//! This requires approximately sum(1/p) operations per element
+//! of the interval to be sieved, since about half of all primes
+//! will have 2 roots each.
+//!
+//! For each element such that Ax^2+Bx+C is smooth we need to determine
+//! the list of primes such that Ax^2+Bx+C=0 mod p. For a given prime,
+//! such elements are given by x0 + kp where x0 is some root of the polynomial.
+//!
+//! Since the number of operations is O(M log log maxprime)
+//! most operations are caused by small primes:
+//!
+//! In the case of primes where 1e6+3 is a quadratic residue
+//! the distribution of sum(#roots/p) is:
+//!
+//! For 5k primes (largest ~100e3, sum~=3.14):
+//! > 50% for 5 smallest primes
+//! ~ 25% for larger primes < 1024
+//! ~ 5% for primes in (1024, 4096)
+//! ~ 7% for primes in (4096, 32768)
+//! ~ 3% for primes above 32768
+//!
+//! For 39k primes (largest ~1e6, sum~=3.32):
+//! > 60% for 10 smallest primes
+//! ~ 15% for larger primes < 1024
+//! ~ 5% for primes in (1024, 4096)
+//! ~ 8% for primes in (4096, 32768)
+//! ~ 8% for primes above 32768
+//!
+//! In constrast, large primes sieve hits are very sparse: they will
+//! typically divide less than half of interval elements. We can use
+//! loosely sorted buckets to quiclky find which primes divide a given
+//! element. This is similar to a hashmap-based strategy in msieve.
+//!
+//! TODO: Bibliography
 
 use crate::arith::Num;
 use crate::fbase::Prime;
-use crate::{Int, Uint};
+use crate::Int;
 use wide;
 
 pub const BLOCK_SIZE: usize = 32 * 1024;
+const BUCKETS: usize = 512;
+const BUCKETSIZE: usize = BLOCK_SIZE / BUCKETS;
 
 // The sieve makes an array of offsets progress through the
 // sieve interval.
@@ -15,6 +55,7 @@ pub const BLOCK_SIZE: usize = 32 * 1024;
 #[derive(Clone)]
 pub struct Sieve<'a> {
     pub offset: i64,
+    pub idx14: usize, // Offset of prime > 16384
     pub idx15: usize, // Offset of prime > 32768
     pub primes: Vec<&'a Prime>,
     pub logs: Vec<u8>,
@@ -25,12 +66,19 @@ pub struct Sieve<'a> {
     // Clone of lo before sieving block.
     pub starts: Vec<u16>,
     pub histarts: Vec<u8>,
-    // Result of sieve
+    // Result of sieve.
     pub blk: [u8; BLOCK_SIZE],
+    // Cache for large prime hits
+    pub largehits: [u32; BLOCK_SIZE],
+    pub largeoffs: [u8; BUCKETS],
 }
 
 impl<'a> Sieve<'a> {
     pub fn new(offset: i64, primes: Vec<&'a Prime>, hi: Vec<u8>, lo: Vec<u16>) -> Self {
+        let idx14 = primes
+            .iter()
+            .position(|&p| p.p > BLOCK_SIZE as u64 / 2)
+            .unwrap_or(primes.len());
         let idx15 = primes
             .iter()
             .position(|&p| p.p > BLOCK_SIZE as u64)
@@ -42,6 +90,7 @@ impl<'a> Sieve<'a> {
         let len = primes.len();
         Sieve {
             offset,
+            idx14,
             idx15,
             primes,
             logs,
@@ -50,11 +99,25 @@ impl<'a> Sieve<'a> {
             starts: vec![0u16; len],
             histarts: vec![0u8; len],
             blk: [0u8; BLOCK_SIZE],
+            largehits: [0u32; BLOCK_SIZE],
+            largeoffs: [0u8; BUCKETS],
         }
     }
+
+    #[inline]
+    fn insert_large(&mut self, i: usize, idx: usize) {
+        let b = i / BUCKETSIZE;
+        let off = self.largeoffs[b];
+        if off < BUCKETSIZE as u8 {
+            self.largehits[b * BUCKETSIZE + off as usize] = idx as u32;
+            self.largeoffs[b] = off + 1;
+        }
+    }
+
     pub fn sieve_block(&mut self) {
         let len: usize = BLOCK_SIZE;
         self.blk.fill(0u8);
+        self.largeoffs.fill(0u8);
         let blk = &mut self.blk;
         self.starts.copy_from_slice(&self.lo);
         self.histarts.copy_from_slice(&self.hi);
@@ -94,12 +157,25 @@ impl<'a> Sieve<'a> {
             }
             let i = i as usize;
             let p = self.primes[i].p;
-            blk[self.lo[i] as usize] += self.logs[i];
-            let off = self.lo[i] as usize + p as usize;
+            let lo = self.lo[i] as usize;
+            self.blk[lo] += self.logs[i];
+            self.insert_large(lo, i);
+            let off = lo + p as usize;
             debug_assert!(off > BLOCK_SIZE);
             self.hi[i] = (off / BLOCK_SIZE) as u8;
             self.lo[i] = (off % BLOCK_SIZE) as u16;
         }
+    }
+
+    // Debugging method to inspect sizes of smooth factors over the interval.
+    pub fn stats(&self) -> [usize; 256] {
+        let mut s = self.clone();
+        s.sieve_block();
+        let mut res = [0; 256];
+        for b in s.blk {
+            res[b as usize] += 1
+        }
+        res
     }
 
     pub fn next_block(&mut self) {
@@ -121,41 +197,75 @@ impl<'a> Sieve<'a> {
         }
     }
 
-    pub fn smooths(&self, threshold: u8) -> (Vec<usize>, Vec<Vec<usize>>) {
+    pub fn smooths(&self, threshold: u8) -> (Vec<u16>, Vec<Vec<usize>>) {
         assert_eq!(self.starts.len(), self.primes.len());
-        let mut res = vec![];
-        for (i, &v) in self.blk.iter().enumerate() {
-            if v >= threshold {
-                res.push(i)
+        let mut res: Vec<u16> = vec![];
+        let thr16x = wide::u8x16::splat(threshold - 1);
+        let mut i = 0;
+        while i < BLOCK_SIZE {
+            unsafe {
+                // Cast as u8;16 to avoid assuming alignment.
+                let blk16 = (&self.blk[i] as *const u8) as *const [u8; 16];
+                let blk16w = wide::u8x16::new(*blk16);
+                if thr16x != blk16w.max(thr16x) {
+                    // Some element is > threshold-1
+                    for j in 0..16 {
+                        if (*blk16)[j] >= threshold {
+                            res.push((i + j) as u16)
+                        }
+                    }
+                }
             }
+            i += 16
         }
         if res.len() == 0 {
             return (vec![], vec![]);
         }
+        let rlen = res.len();
         // Now find factors.
         let mut facs = vec![vec![]; res.len()];
-        for i in 0..self.idx15 {
-            let off = self.starts[i] as u64;
-            let p = self.primes[i];
-            for (idx, &r) in res.iter().enumerate() {
-                if p.p < BLOCK_SIZE as u64 / 2 {
-                    if p.div.modi64(r as i64) == off {
-                        facs[idx].push(i)
-                    }
-                } else {
-                    if r as u64 == off || r as u64 == off + p.p {
-                        facs[idx].push(i)
-                    }
+        for i in 0..self.idx14 {
+            // Prime less than BLOCK_SIZE/2
+            let off = self.starts[i];
+            let pdiv = &self.primes[i].div;
+            for idx in 0..rlen {
+                let r = res[idx];
+                if pdiv.modu16(r) == off {
+                    facs[idx].push(i)
                 }
             }
         }
-        for i in self.idx15..self.primes.len() {
-            if self.histarts[i] != 0 {
-                continue;
+        // Prime more than BLOCK_SIZE/2
+        for i in self.idx14..self.idx15 {
+            let off = self.starts[i];
+            let p = self.primes[i].p as u16;
+            for idx in 0..rlen {
+                let r = res[idx];
+                if r == off || r == off + p {
+                    facs[idx].push(i)
+                }
             }
-            let idx = self.starts[i] as usize;
-            if let Some(j) = res.iter().position(|&j| j == idx) {
-                facs[j].push(i);
+        }
+        // Prime more than BLOCK_SIZE
+        // Use reverse lookup table.
+        for j in 0..rlen {
+            let r = res[j];
+            let b = r as usize / BUCKETSIZE;
+            let blen = self.largeoffs[b] as usize;
+            if blen < BUCKETSIZE {
+                for idx in 0..blen {
+                    let i = self.largehits[b * BUCKETSIZE + idx] as usize;
+                    if self.histarts[i] == 0 && self.starts[i] == r {
+                        facs[j].push(i);
+                    }
+                }
+            } else {
+                // too full, full scan everything
+                for i in self.idx15..self.primes.len() {
+                    if self.histarts[i] == 0 && self.starts[i] == r {
+                        facs[j].push(i);
+                    }
+                }
             }
         }
         (res, facs)
@@ -222,7 +332,7 @@ fn test_sieve_block() {
     let nsqrt = crate::arith::isqrt(n);
     let mut s = qsieve::init_sieves(&fb, nsqrt).0;
     s.sieve_block();
-    let expect: &[usize] = &[
+    let expect: &[u16] = &[
         314, 957, 1779, 2587, 5882, 7121, 13468, 16323, 22144, 23176, 32407,
     ];
     let (idxs, facss) = s.smooths(70);
@@ -231,7 +341,7 @@ fn test_sieve_block() {
     for (i, facs) in idxs.into_iter().zip(facss) {
         let ii = Uint::from(i as u64);
         let x = Int::from_bits((nsqrt + ii) * (nsqrt + ii) - n);
-        let (cof, _) = s.cofactor(i, &facs[..], &x);
+        let (cof, _) = s.cofactor(i as usize, &facs[..], &x);
         if cof == 1 {
             res.push(i);
         }
