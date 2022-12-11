@@ -111,12 +111,13 @@ pub fn qsieve(n: Uint, primes: &[Prime]) -> Vec<Relation> {
 }
 
 pub fn init_sieves(fb: &[Prime], nsqrt: Uint) -> (sieve::Sieve, sieve::Sieve) {
+    let l = 16 * (fb.len() / 8 + 1);
     let mut st_primes = vec![];
     let mut st_logs = vec![];
-    let mut st_hi = vec![];
-    let mut st_lo = vec![];
-    let mut st_hi2 = vec![];
-    let mut st_lo2 = vec![];
+    let mut st_hi = Vec::with_capacity(l);
+    let mut st_lo = Vec::with_capacity(l);
+    let mut st_hi2 = Vec::with_capacity(l);
+    let mut st_lo2 = Vec::with_capacity(l);
     for p in fb.iter() {
         assert_eq!(p.p >> 24, 0);
         let rp = p.div.mod_uint(&nsqrt);
@@ -192,7 +193,8 @@ fn sieve_block(
     let maxlarge = maxprime * large_prime_factor(&s.n);
     let mut result = vec![];
     let mut extras = vec![];
-    let magnitude = u64::BITS - u64::leading_zeros(std::cmp::max(offset, len as u64));
+    let magnitude =
+        u64::BITS - u64::leading_zeros(std::cmp::max(st.offset.abs() as u64, len as u64));
     let target = s.n.bits() / 2 + magnitude - maxlarge.bits();
     assert!(target < 256);
     let n = &s.n;

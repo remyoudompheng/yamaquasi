@@ -2,12 +2,18 @@
 
 use crate::fbase::Prime;
 use crate::{Int, Uint};
+use wide;
 
 pub const BLOCK_SIZE: usize = 32 * 1024;
 
+// The sieve makes an array of offsets progress through the
+// sieve interval.
+// The offsets are relative to the block offset.
+// They are stored as hi<<B + lo
+// so that an offset if in the current block iff hi==0.
 #[derive(Clone)]
 pub struct Sieve<'a> {
-    pub offset: u64,
+    pub offset: i64,
     pub idx15: usize, // Offset of prime > 32768
     pub primes: Vec<&'a Prime>,
     pub logs: Vec<u8>,
@@ -72,12 +78,21 @@ impl<'a> Sieve<'a> {
     }
 
     pub fn next_block(&mut self) {
-        self.offset += BLOCK_SIZE as u64;
-        for i in 0..self.hi.len() {
-            let m = self.hi[i];
-            if m > 0 {
-                self.hi[i] = m - 1;
+        self.offset += BLOCK_SIZE as i64;
+        // Decrement MSB by 1.
+        let mut idx: usize = 0;
+        while idx + 16 < self.hi.len() {
+            unsafe {
+                let p = (&mut self.hi[idx]) as *mut u8 as *mut wide::u8x16;
+                *p = (*p).min(*p - 1);
             }
+            idx += 16;
+        }
+        while idx < self.hi.len() {
+            if self.hi[idx] > 0 {
+                self.hi[idx] -= 1;
+            }
+            idx += 1
         }
     }
 
@@ -94,6 +109,7 @@ impl<'a> Sieve<'a> {
 
     // Returns the quotient of x by prime divisors determined
     // by the sieve at index i.
+    #[inline]
     pub fn cofactor(&self, i: usize, x: &Int) -> (Uint, Vec<(i64, u64)>) {
         let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
         if x.is_negative() {
@@ -101,14 +117,17 @@ impl<'a> Sieve<'a> {
         }
         let xabs = x.abs().to_bits();
         let mut cofactor = xabs;
-        let mut tmp_p = 0;
+        let mut tmp_p: *const Prime = std::ptr::null();
         let mut tmp_r = 0;
-        for (idx, item) in self.primes.iter().enumerate() {
-            if item.p != tmp_p {
-                tmp_p = item.p;
+        let l = self.primes.len();
+        for idx in 0..l {
+            let item = unsafe { *self.primes.get_unchecked(idx) };
+            let s = unsafe { *self.starts.get_unchecked(idx) };
+            if item as *const Prime != tmp_p {
+                tmp_p = item;
                 tmp_r = item.div.divmod64(i as u64).1;
             }
-            if tmp_r == self.starts[idx] as u64 {
+            if tmp_r == s as u64 {
                 let mut exp = 0;
                 loop {
                     let (q, r) = item.div.divmod_uint(&cofactor);
@@ -120,6 +139,7 @@ impl<'a> Sieve<'a> {
                         break;
                     }
                 }
+                // exp==0 should be impossible?
                 if exp > 0 {
                     factors.push((item.p as i64, exp));
                 }

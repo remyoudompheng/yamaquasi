@@ -24,6 +24,7 @@ use crate::arith::{self, Num};
 use crate::fbase::{Prime, SievePrime};
 use crate::params::{self, BLOCK_SIZE};
 use crate::relations::{combine_large_relation, relation_gap, Relation};
+use crate::sieve;
 use crate::{Int, Uint, DEBUG};
 
 pub fn siqs(n: &Uint, primes: &[Prime]) -> Vec<Relation> {
@@ -79,7 +80,7 @@ pub fn siqs(n: &Uint, primes: &[Prime]) -> Vec<Relation> {
             relations.append(&mut found);
             for r in foundlarge {
                 if let Some(rr) = combine_large_relation(&mut larges, &r, &n) {
-                    if rr.factors.iter().all(|(p, exp)| exp % 2 == 0) {
+                    if rr.factors.iter().all(|(_, exp)| exp % 2 == 0) {
                         // FIXME: Poor choice of A's can lead to duplicate relations.
                         eprintln!("FIXME: ignoring trivial relation");
                         //eprintln!("{:?}", rr.factors);
@@ -336,12 +337,12 @@ pub fn make_polynomial(n: &Uint, fb: &[Prime], a: &A, idx: usize) -> (Poly, Vec<
     debug_assert!((b * b) % a.a == n % a.a);
     // Compute c such that b^2 - ac = N
     // (Ax+B)^2 - n = A(Ax^2 + 2Bx + C)
-    let c = (n - b * b) / a.a;
-    let pol = Poly {
-        a: a.a,
-        b,
-        c: -Int::from_bits(c),
-    };
+    let c = (Int::from_bits(b * b) - Int::from_bits(*n)) / Int::from_bits(a.a);
+    assert_eq!(
+        Int::from_bits(*n),
+        Int::from_bits(b * b) - c * Int::from_bits(a.a)
+    );
+    let pol = Poly { a: a.a, b, c };
     // Compute polynomial roots.
     // Ignore factors of A.
     let mut sprimes = vec![];
@@ -367,7 +368,10 @@ pub fn make_polynomial(n: &Uint, fb: &[Prime], a: &A, idx: usize) -> (Poly, Vec<
         } else {
             // 2Bx + C, root is -C/2B
             let bp: u64 = p.div.mod_uint(&(b << 1));
-            let cp: u64 = p.div.mod_uint(&c); // == -pol.c
+            let mut cp: u64 = p.div.mod_uint(&c.abs().to_bits());
+            if !c.is_negative() {
+                cp = p.p - cp;
+            }
             let r = p.div.divmod64(cp * p.div.inv(bp).unwrap()).1;
             sprimes.push(SievePrime {
                 p: p.p,
@@ -401,64 +405,58 @@ fn siqs_sieve_poly(
     let sieve = SieveSIQS {
         n,
         primes,
-        sprimes: &sprimes,
+        sprimes: sprimes,
         factors: &a.factors,
         pol,
     };
     // Construct initial state.
+    let l = 16 * (primes.len() / 8 + 1);
     let mut st_primes = vec![];
     let mut st_logs = vec![];
-    let mut st_hi = vec![];
-    let mut st_lo = vec![];
+    let mut st_hi = Vec::with_capacity(l);
+    let mut st_lo = Vec::with_capacity(l);
     let start_offset = -(1 << mlog);
     for (p, sp) in primes.iter().zip(sprimes) {
         assert_eq!(p.p >> 24, 0);
         let [s1, s2] = sieve_starts(p, sp, start_offset);
         let logp = (32 - u32::leading_zeros(p.p as u32)) as u8;
-        st_primes.push(p.p as u32);
+        st_primes.push(p);
         st_logs.push(logp);
         st_hi.push((s1 / BLOCK_SIZE as u64) as u8);
         st_lo.push((s1 % BLOCK_SIZE as u64) as u16);
         if s1 != s2 {
             // 2 roots
-            st_primes.push(p.p as u32);
+            st_primes.push(p);
             st_logs.push(logp);
             st_hi.push((s2 / BLOCK_SIZE as u64) as u8);
             st_lo.push((s2 % BLOCK_SIZE as u64) as u16);
         }
     }
-    // Make st_hi size a multiple of 16.
-    st_hi.reserve(16 - st_hi.len() % 16);
-    let mut state = StateSIQS {
+    let start_offset: i64 = -(1 << mlog);
+    let end_offset: i64 = 1 << mlog;
+    let mut state = sieve::Sieve {
+        offset: start_offset,
         idx15: st_primes
             .iter()
-            .position(|&p| p > BLOCK_SIZE as u32)
+            .position(|&p| p.p > BLOCK_SIZE as u64)
             .unwrap_or(st_primes.len()),
         primes: st_primes,
         logs: st_logs,
         hi: st_hi,
         lo: st_lo,
+        blk: [0u8; BLOCK_SIZE],
+        starts: vec![],
     };
     if nblocks == 0 {
-        return sieve_block_poly(&sieve, -(1 << mlog), 2 << mlog, &mut state);
+        return sieve_block_poly(&sieve, &mut state);
     }
     let mut result: Vec<Relation> = vec![];
     let mut extras: Vec<Relation> = vec![];
-    let nblocks = nblocks as i64;
-    for i in -nblocks..nblocks {
-        let (mut x, mut y) =
-            sieve_block_poly(&sieve, i * BLOCK_SIZE as i64, BLOCK_SIZE, &mut state);
+    while state.offset < end_offset {
+        let (mut x, mut y) = sieve_block_poly(&sieve, &mut state);
         result.append(&mut x);
         extras.append(&mut y);
-        // Decrement MSB by 1.
-        let mut idx: usize = 0;
-        while idx < state.hi.len() {
-            unsafe {
-                let p = (&mut state.hi[idx]) as *mut u8 as *mut wide::u8x16;
-                *p = (*p).min(*p - 1);
-            }
-            idx += 16;
-        }
+        state.next_block();
     }
     (result, extras)
 }
@@ -469,16 +467,6 @@ struct SieveSIQS<'a> {
     sprimes: &'a [SievePrime],
     factors: &'a [&'a Prime],
     pol: &'a Poly,
-}
-
-struct StateSIQS {
-    idx15: usize, // Offset of prime > 32768
-    primes: Vec<u32>,
-    logs: Vec<u8>,
-    // The MSB of the offset for each cursor.
-    hi: Vec<u8>,
-    // The LSB of the offset for each cursor.
-    lo: Vec<u16>,
 }
 
 // Compute sieving offsets i,j such that offset+i,j are roots
@@ -496,66 +484,9 @@ fn sieve_starts(p: &Prime, sp: &SievePrime, offset: i64) -> [u64; 2] {
 }
 
 // Sieve using a selected polynomial
-fn sieve_block_poly(
-    s: &SieveSIQS,
-    offset: i64,
-    len: usize,
-    st: &mut StateSIQS,
-) -> (Vec<Relation>, Vec<Relation>) {
-    let mut blk = vec![0u8; len];
-    unsafe {
-        for i in 0..st.idx15 {
-            let i = i as usize;
-            let p = *st.primes.get_unchecked(i);
-            // Small primes always have a hit.
-            debug_assert!(st.hi[i] == 0);
-            let mut off: usize = *st.lo.get_unchecked(i) as usize;
-            let size = *st.logs.get_unchecked(i);
-            if p < 1024 {
-                let ll = len - 4 * p as usize;
-                while off < ll {
-                    *blk.get_unchecked_mut(off) += size;
-                    off += p as usize;
-                    *blk.get_unchecked_mut(off) += size;
-                    off += p as usize;
-                    *blk.get_unchecked_mut(off) += size;
-                    off += p as usize;
-                    *blk.get_unchecked_mut(off) += size;
-                    off += p as usize;
-                }
-            }
-            while off < len {
-                *blk.get_unchecked_mut(off) += size;
-                off += p as usize;
-            }
-            // Update state. No need to set hi=1.
-            st.lo[i] = (off % BLOCK_SIZE) as u16;
-        }
-    }
-    for i in st.idx15..st.primes.len() {
-        // Large primes have at most 1 hit.
-        if st.hi[i] != 0 {
-            continue;
-        }
-        let i = i as usize;
-        let p = st.primes[i];
-        blk[st.lo[i] as usize] += st.logs[i];
-        let off = st.lo[i] as usize + p as usize;
-        debug_assert!(off > BLOCK_SIZE);
-        st.hi[i] = (off / BLOCK_SIZE) as u8;
-        st.lo[i] = (off % BLOCK_SIZE) as u16;
-    }
+fn sieve_block_poly(s: &SieveSIQS, st: &mut sieve::Sieve) -> (Vec<Relation>, Vec<Relation>) {
+    st.sieve_block();
 
-    sieve_result(s, st, offset, len, &blk)
-}
-
-fn sieve_result(
-    s: &SieveSIQS,
-    st: &StateSIQS,
-    offset: i64,
-    len: usize,
-    blk: &[u8],
-) -> (Vec<Relation>, Vec<Relation>) {
     let maxprime = s.primes.last().unwrap().p;
     let maxlarge = maxprime * params::large_prime_factor(&s.n);
     let mut result = vec![];
@@ -563,73 +494,70 @@ fn sieve_result(
 
     let target = s.n.bits() / 2 + params::mpqs_interval_logsize(&s.n) - maxlarge.bits();
     let (a, b, c, n) = (s.pol.a, s.pol.b, s.pol.c, s.n);
-    for i in 0..len {
-        if blk[i] as u32 >= target {
-            let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
-            // Evaluate polynomial Ax^2 + 2Bx+ C
-            let x = Int::from(offset + (i as i64));
-            let ax_b = Int::from_bits(a) * x + Int::from_bits(b);
-            let v = (ax_b + Int::from_bits(b)) * x + c;
-            // xrel^2 = (Ax+B)^2 = A * v mod n
-            // v is never divisible by A
-            let cabs = v.abs().to_bits() % n;
-            if v.is_negative() {
-                factors.push((-1, 1));
-            }
-            let mut cofactor: Uint = cabs;
-            let arg = offset + i as i64;
-            for (idx, item) in s.primes.iter().enumerate() {
-                if s.sprimes[idx].roots.contains(&item.div.modi64(arg)) {
-                    let mut exp = 0;
-                    loop {
-                        let (q, r) = item.div.divmod_uint(&cofactor);
-                        if r == 0 {
-                            cofactor = q;
-                            exp += 1;
-                        } else {
-                            break;
-                        }
+    for i in st.smooths(target as u8) {
+        let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
+        // Evaluate polynomial Ax^2 + 2Bx+ C
+        let x = Int::from(st.offset + (i as i64));
+        let ax_b = Int::from_bits(a) * x + Int::from_bits(b);
+        let v = (ax_b + Int::from_bits(b)) * x + c;
+        // xrel^2 = (Ax+B)^2 = A * v mod n
+        // v is never divisible by A
+        if v.is_negative() {
+            factors.push((-1, 1));
+        }
+        let mut cofactor: Uint = v.abs().to_bits();
+        let arg = st.offset + i as i64;
+        for (idx, item) in s.primes.iter().enumerate() {
+            if s.sprimes[idx].roots.contains(&item.div.modi64(arg)) {
+                let mut exp = 0;
+                loop {
+                    let (q, r) = item.div.divmod_uint(&cofactor);
+                    if r == 0 {
+                        cofactor = q;
+                        exp += 1;
+                    } else {
+                        break;
                     }
-                    factors.push((item.p as i64, exp));
                 }
+                factors.push((item.p as i64, exp));
             }
-            let Some(cofactor) = cofactor.to_u64() else { continue };
-            if cofactor > maxlarge {
-                continue;
-            }
-            // Complete with factors of A
-            for f in s.factors {
-                if let Some(idx) = factors.iter().position(|&(p, _)| p as u64 == f.p) {
-                    factors[idx].1 += 1;
-                } else {
-                    factors.push((f.p as i64, 1));
-                }
-            }
-            let xrel = ax_b.abs().to_bits() % n;
-            let xrel = if v.is_negative() { n - xrel } else { xrel };
-            if cofactor == 1 {
-                if DEBUG {
-                    eprintln!("i={} smooth {}", i, v);
-                }
-                let rel = Relation {
-                    x: xrel,
-                    cofactor: 1,
-                    factors,
-                };
-                debug_assert!(rel.verify(&s.n));
-                result.push(rel);
+        }
+        let Some(cofactor) = cofactor.to_u64() else { continue };
+        if cofactor > maxlarge {
+            continue;
+        }
+        // Complete with factors of A
+        for f in s.factors {
+            if let Some(idx) = factors.iter().position(|&(p, _)| p as u64 == f.p) {
+                factors[idx].1 += 1;
             } else {
-                if DEBUG {
-                    eprintln!("x={} smooth {} cofactor {}", x, v, cofactor);
-                }
-                let rel = Relation {
-                    x: xrel,
-                    cofactor: cofactor,
-                    factors,
-                };
-                debug_assert!(rel.verify(s.n));
-                extras.push(rel);
+                factors.push((f.p as i64, 1));
             }
+        }
+        let xrel = ax_b.abs().to_bits() % n;
+        let xrel = if v.is_negative() { n - xrel } else { xrel };
+        if cofactor == 1 {
+            if DEBUG {
+                eprintln!("i={} smooth {}", i, v);
+            }
+            let rel = Relation {
+                x: xrel,
+                cofactor: 1,
+                factors,
+            };
+            debug_assert!(rel.verify(&s.n));
+            result.push(rel);
+        } else {
+            if DEBUG {
+                eprintln!("x={} smooth {} cofactor {}", x, v, cofactor);
+            }
+            let rel = Relation {
+                x: xrel,
+                cofactor: cofactor,
+                factors,
+            };
+            debug_assert!(rel.verify(s.n));
+            extras.push(rel);
         }
     }
     (result, extras)

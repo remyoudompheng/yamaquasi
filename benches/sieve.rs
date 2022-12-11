@@ -94,7 +94,8 @@ brunch::benches! {
         Bench::new("sieve 32k block with ~2500 primes")
         .run_seeded(s, |s|{
             let mut s1 = s.clone();
-            s1.sieve_block()
+            s1.sieve_block();
+            s1.next_block();
         })
     },
     {
@@ -106,7 +107,8 @@ brunch::benches! {
         Bench::new("sieve 32k block with ~10000 primes")
         .run_seeded(s, |s|{
             let mut s1 = s.clone();
-            s1.sieve_block()
+            s1.sieve_block();
+            s1.next_block();
         })
     }
 }

@@ -38,7 +38,7 @@ impl Relation {
             exps.insert(*p, e + k);
         }
         exps.insert(self.cofactor as i64, 2);
-        let mut factors: Vec<_> = exps.into_iter().collect();
+        let factors: Vec<_> = exps.into_iter().collect();
         //factors.sort();
         Relation {
             x: (self.x * rhs.x) % n,
