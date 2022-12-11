@@ -38,7 +38,7 @@
 //!
 //! In constrast, large primes sieve hits are very sparse: they will
 //! typically divide less than half of interval elements. We can use
-//! loosely sorted buckets to quiclky find which primes divide a given
+//! loosely sorted buckets to quickly find which primes divide a given
 //! element. This is similar to a hashmap-based strategy in msieve.
 //!
 //! TODO: Bibliography
@@ -46,6 +46,7 @@
 use crate::arith::Num;
 use crate::fbase::Prime;
 use crate::Int;
+use memchr::memchr_iter;
 use wide;
 
 pub const BLOCK_SIZE: usize = 32 * 1024;
@@ -64,6 +65,7 @@ pub struct Sieve<'a> {
     pub idxskip: usize,
     pub idx14: usize, // Offset of prime > 16384
     pub idx15: usize, // Offset of prime > 32768
+    pub idx17: usize, // Offset of prime > 128k
     pub primes: Vec<&'a Prime>,
     pub logs: Vec<u8>,
     // The MSB of the offset for each cursor.
@@ -103,6 +105,10 @@ impl<'a> Sieve<'a> {
             .iter()
             .position(|&p| p.p > BLOCK_SIZE as u64)
             .unwrap_or(primes.len());
+        let idx17 = primes
+            .iter()
+            .position(|&p| p.p > 1 << 17)
+            .unwrap_or(primes.len());
         let logs = primes
             .iter()
             .map(|p| (32 - u32::leading_zeros(p.p as u32)) as u8)
@@ -113,6 +119,7 @@ impl<'a> Sieve<'a> {
             idxskip,
             idx14,
             idx15,
+            idx17,
             primes,
             logs,
             hi,
@@ -186,7 +193,7 @@ impl<'a> Sieve<'a> {
             }
         }
         // Large primes can have at most 1 hit.
-        for i in self.idx15..self.primes.len() {
+        for i in self.idx15..self.idx17 {
             if self.hi[i] != 0 {
                 continue;
             }
@@ -195,6 +202,30 @@ impl<'a> Sieve<'a> {
             let lo = self.lo[i] as usize;
             self.blk[lo] += self.logs[i];
             self.insert_large(lo, i);
+            let off = lo + p as usize;
+            debug_assert!(off > BLOCK_SIZE);
+            self.hi[i] = (off / BLOCK_SIZE) as u8;
+            self.lo[i] = (off % BLOCK_SIZE) as u16;
+        }
+        // Very very large primes are very sparse.
+        // Use SIMD to speed up search for self.hi[i]==0
+        for i in memchr_iter(0, &self.histarts[self.idx17..]) {
+            let i = self.idx17 + (i as usize);
+            let p = self.primes[i].p;
+            let lo = self.lo[i] as usize;
+            self.blk[lo] += self.logs[i];
+            // inlined insert_large: we cannot call the method
+            // because it requires &mut self.
+            {
+                let (ii, idx) = (lo, i);
+                let b = ii / BUCKETSIZE;
+                let off = self.largeoffs[b];
+                if off < BUCKETSIZE as u8 {
+                    self.largehits[b * BUCKETSIZE + off as usize] = idx as u32;
+                    self.largeoffs[b] = off + 1;
+                }
+            }
+            // end inlined insert_large
             let off = lo + p as usize;
             debug_assert!(off > BLOCK_SIZE);
             self.hi[i] = (off / BLOCK_SIZE) as u8;
@@ -328,7 +359,8 @@ impl<'a> Sieve<'a> {
                     }
                 }
             } else {
-                // too full, full scan everything
+                // Overflowing bucket, we cannot trust the contents:
+                // fall back to full scan (unlikely).
                 for i in self.idx15..self.primes.len() {
                     if self.histarts[i] == 0 && self.starts[i] == r {
                         facs[j].push(i);

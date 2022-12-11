@@ -11,6 +11,7 @@ license = "BSD3"
 arguments = "0.7"
 bitvec_simd = "0.20"
 bnum = { version = "0.3", features = ["numtraits"] }
+memchr = "2.5"
 num-integer = "0.1"
 num-traits = "*"
 rand = "0.8"
