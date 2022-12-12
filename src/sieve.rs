@@ -43,11 +43,13 @@
 //!
 //! TODO: Bibliography
 
+use memchr::memchr_iter;
+use std::cmp::max;
+use wide;
+
 use crate::arith::Num;
 use crate::fbase::Prime;
 use crate::Int;
-use memchr::memchr_iter;
-use wide;
 
 pub const BLOCK_SIZE: usize = 32 * 1024;
 const BUCKETS: usize = 512;
@@ -63,11 +65,10 @@ pub struct Sieve<'a> {
     pub offset: i64,
     // First offset of prime actually used in sieve
     pub idxskip: usize,
-    pub idx14: usize, // Offset of prime > 16384
-    pub idx15: usize, // Offset of prime > 32768
-    pub idx17: usize, // Offset of prime > 128k
+    // idx_by_log[i] is the index of first primes[idx]
+    // such that bit_length(p) == i
+    pub idx_by_log: [u32; 26],
     pub primes: Vec<&'a Prime>,
-    pub logs: Vec<u8>,
     // The MSB of the offset for each cursor.
     pub hi: Vec<u8>,
     // The LSB of the offset for each cursor.
@@ -97,31 +98,26 @@ impl<'a> Sieve<'a> {
             .iter()
             .position(|&p| p.p > pskip)
             .unwrap_or(primes.len());
-        let idx14 = primes
-            .iter()
-            .position(|&p| p.p > BLOCK_SIZE as u64 / 2)
-            .unwrap_or(primes.len());
-        let idx15 = primes
-            .iter()
-            .position(|&p| p.p > BLOCK_SIZE as u64)
-            .unwrap_or(primes.len());
-        let idx17 = primes
-            .iter()
-            .position(|&p| p.p > 1 << 17)
-            .unwrap_or(primes.len());
-        let logs = primes
-            .iter()
-            .map(|p| (32 - u32::leading_zeros(p.p as u32)) as u8)
-            .collect();
+        let mut log: usize = 0;
+        let mut idx_by_log = [primes.len() as u32; 26];
+        for (idx, p) in primes.iter().enumerate() {
+            let l = 32 - u32::leading_zeros(p.p as u32) as usize;
+            if l > 24 {
+                eprintln!("Factor base element {} is too large!", p.p);
+            }
+            if l >= log {
+                while log <= l {
+                    idx_by_log[log] = idx as u32;
+                    log += 1;
+                }
+            }
+        }
         let len = primes.len();
         Sieve {
             offset,
             idxskip,
-            idx14,
-            idx15,
-            idx17,
+            idx_by_log,
             primes,
-            logs,
             hi,
             lo,
             starts: vec![0u16; len],
@@ -165,71 +161,84 @@ impl<'a> Sieve<'a> {
             }
             // Small primes: perform ordinary sieving.
             // They are guaranteed to have offsets inside the block.
-            for i in self.idxskip..self.idx15 {
-                let i = i as usize;
-                let p = self.primes.get_unchecked(i).p;
-                debug_assert!(self.hi[i] == 0);
-                let mut off: usize = *self.lo.get_unchecked(i) as usize;
-                let size = *self.logs.get_unchecked(i);
-                if p < 1024 {
-                    let ll = len - 4 * p as usize;
-                    while off < ll {
-                        *blk.get_unchecked_mut(off) += size;
-                        off += p as usize;
-                        *blk.get_unchecked_mut(off) += size;
-                        off += p as usize;
-                        *blk.get_unchecked_mut(off) += size;
-                        off += p as usize;
-                        *blk.get_unchecked_mut(off) += size;
+            for log in 2..=15 {
+                // Interval of primes such that bit length == log.
+                let i_start = max(self.idxskip, self.idx_by_log[log] as usize);
+                let i_end = self.idx_by_log[log + 1] as usize;
+                for i in i_start..i_end {
+                    let i = i as usize;
+                    let p = self.primes.get_unchecked(i).p;
+                    debug_assert!(self.hi[i] == 0);
+                    let mut off: usize = *self.lo.get_unchecked(i) as usize;
+                    let log = log as u8;
+                    if p < 1024 {
+                        let ll = len - 4 * p as usize;
+                        while off < ll {
+                            *blk.get_unchecked_mut(off) += log;
+                            off += p as usize;
+                            *blk.get_unchecked_mut(off) += log;
+                            off += p as usize;
+                            *blk.get_unchecked_mut(off) += log;
+                            off += p as usize;
+                            *blk.get_unchecked_mut(off) += log;
+                            off += p as usize;
+                        }
+                    }
+                    while off < len {
+                        *blk.get_unchecked_mut(off) += log;
                         off += p as usize;
                     }
+                    // Update state. No need to set hi=1.
+                    self.lo[i] = (off % BLOCK_SIZE) as u16;
                 }
-                while off < len {
-                    *blk.get_unchecked_mut(off) += size;
-                    off += p as usize;
-                }
-                // Update state. No need to set hi=1.
-                self.lo[i] = (off % BLOCK_SIZE) as u16;
             }
         }
         // Large primes can have at most 1 hit.
-        for i in self.idx15..self.idx17 {
-            if self.hi[i] != 0 {
-                continue;
+        // Between BLOCK_SIZE and 4*BLOCK_SIZE (log = 16,17)
+        for log in [16, 17] {
+            for i in self.idx_by_log[log]..self.idx_by_log[log + 1] {
+                let i = i as usize;
+                if self.hi[i] != 0 {
+                    continue;
+                }
+                let i = i as usize;
+                let p = self.primes[i].p;
+                let lo = self.lo[i] as usize;
+                self.blk[lo] += log as u8;
+                self.insert_large(lo, i);
+                let off = lo + p as usize;
+                debug_assert!(off > BLOCK_SIZE);
+                self.hi[i] = (off / BLOCK_SIZE) as u8;
+                self.lo[i] = (off % BLOCK_SIZE) as u16;
             }
-            let i = i as usize;
-            let p = self.primes[i].p;
-            let lo = self.lo[i] as usize;
-            self.blk[lo] += self.logs[i];
-            self.insert_large(lo, i);
-            let off = lo + p as usize;
-            debug_assert!(off > BLOCK_SIZE);
-            self.hi[i] = (off / BLOCK_SIZE) as u8;
-            self.lo[i] = (off % BLOCK_SIZE) as u16;
         }
         // Very very large primes are very sparse.
         // Use SIMD to speed up search for self.hi[i]==0
-        for i in memchr_iter(0, &self.histarts[self.idx17..]) {
-            let i = self.idx17 + (i as usize);
-            let p = self.primes[i].p;
-            let lo = self.lo[i] as usize;
-            self.blk[lo] += self.logs[i];
-            // inlined insert_large: we cannot call the method
-            // because it requires &mut self.
-            {
-                let (ii, idx) = (lo, i);
-                let b = ii / BUCKETSIZE;
-                let off = self.largeoffs[b];
-                if off < BUCKETSIZE as u8 {
-                    self.largehits[b * BUCKETSIZE + off as usize] = idx as u32;
-                    self.largeoffs[b] = off + 1;
+        for log in 18..=24 {
+            let i_start = self.idx_by_log[log] as usize;
+            let i_end = self.idx_by_log[log + 1] as usize;
+            for i in memchr_iter(0, &self.histarts[i_start..i_end]) {
+                let i = i_start + (i as usize);
+                let p = self.primes[i].p;
+                let lo = self.lo[i] as usize;
+                self.blk[lo] += log as u8;
+                // inlined insert_large: we cannot call the method
+                // because it requires &mut self.
+                {
+                    let (ii, idx) = (lo, i);
+                    let b = ii / BUCKETSIZE;
+                    let off = self.largeoffs[b];
+                    if off < BUCKETSIZE as u8 {
+                        self.largehits[b * BUCKETSIZE + off as usize] = idx as u32;
+                        self.largeoffs[b] = off + 1;
+                    }
                 }
+                // end inlined insert_large
+                let off = lo + p as usize;
+                debug_assert!(off > BLOCK_SIZE);
+                self.hi[i] = (off / BLOCK_SIZE) as u8;
+                self.lo[i] = (off % BLOCK_SIZE) as u16;
             }
-            // end inlined insert_large
-            let off = lo + p as usize;
-            debug_assert!(off > BLOCK_SIZE);
-            self.hi[i] = (off / BLOCK_SIZE) as u8;
-            self.lo[i] = (off % BLOCK_SIZE) as u16;
         }
     }
 
@@ -275,7 +284,8 @@ impl<'a> Sieve<'a> {
                 continue;
             }
             prev = p;
-            skipped += self.logs[i] as usize;
+            let log = 32 - u32::leading_zeros(p as u32) as usize;
+            skipped += log as usize;
         }
         skipped
     }
@@ -306,7 +316,8 @@ impl<'a> Sieve<'a> {
                             let off = self.starts[pidx];
                             let p = self.primes[pidx];
                             if p.div.modu16(ij) == off {
-                                t += self.logs[pidx];
+                                let log = 32 - u32::leading_zeros(p.p as u32) as u8;
+                                t += log;
                             }
                         }
                         if t >= threshold {
@@ -323,8 +334,9 @@ impl<'a> Sieve<'a> {
         let rlen = res.len();
         // Now find factors.
         let mut facs = vec![vec![]; res.len()];
-        for i in 0..self.idx14 {
+        for i in 0..self.idx_by_log[15] {
             // Prime less than BLOCK_SIZE/2
+            let i = i as usize;
             let off = self.starts[i];
             let pdiv = &self.primes[i].div;
             for idx in 0..rlen {
@@ -335,7 +347,8 @@ impl<'a> Sieve<'a> {
             }
         }
         // Prime more than BLOCK_SIZE/2
-        for i in self.idx14..self.idx15 {
+        for i in self.idx_by_log[15]..self.idx_by_log[16] {
+            let i = i as usize;
             let off = self.starts[i];
             let p = self.primes[i].p as u16;
             for idx in 0..rlen {
@@ -361,7 +374,7 @@ impl<'a> Sieve<'a> {
             } else {
                 // Overflowing bucket, we cannot trust the contents:
                 // fall back to full scan (unlikely).
-                for i in self.idx15..self.primes.len() {
+                for i in self.idx_by_log[16] as usize..self.primes.len() {
                     if self.histarts[i] == 0 && self.starts[i] == r {
                         facs[j].push(i);
                     }
