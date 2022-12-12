@@ -14,7 +14,7 @@ use num_traits::One;
 use rayon::prelude::*;
 
 use crate::arith::{inv_mod, isqrt, pow_mod, Num};
-use crate::fbase::{self, Prime, SievePrime};
+use crate::fbase::{self, Prime};
 use crate::params::{self, large_prime_factor, BLOCK_SIZE};
 use crate::relations::{combine_large_relation, relation_gap, Relation};
 use crate::sieve;
@@ -144,24 +144,29 @@ pub struct Poly {
 }
 
 impl Poly {
-    pub fn prepare_prime(&self, p: &Prime) -> SievePrime {
-        // If p == 2, (2A+B)^2 is always equal to n
+    pub fn prepare_prime(&self, p: &Prime, offset: i64) -> [Option<u32>; 2] {
+        let off: u64 = p.div.modi64(offset);
+        let shift = |r: u32| -> u32 {
+            if r < off as u32 {
+                r + p.p as u32 - off as u32
+            } else {
+                r - off as u32
+            }
+        };
+
+        // Determine roots r1, r2 such that P(offset+r)==0 mod p.
         if p.p == 2 {
-            return SievePrime {
-                p: p.p,
-                roots: [0, 1],
-            };
-        }
-        // Transform roots as: r -> (r - B) / 2A
-        let a: u64 = p.div.divmod_uint(&self.a).1;
-        let b: u64 = p.div.divmod_uint(&self.b).1;
-        let ainv = p.div.inv(a).unwrap();
-        SievePrime {
-            p: p.p,
-            roots: [
-                p.div.divmod64((p.p + p.r - b) * ainv).1,
-                p.div.divmod64((p.p - p.r + p.p - b) * ainv).1,
-            ],
+            // We don't really know what will happen.
+            [Some(0), Some(1)]
+        } else {
+            // Transform roots as: r -> (r - B) / A
+            let a = p.div.divmod_uint(&self.a).1;
+            let b = p.div.divmod_uint(&self.b).1;
+            let ainv = p.div.inv(a).unwrap();
+            [
+                Some(shift(p.div.divmod64((p.p + p.r - b) * ainv).1 as u32)),
+                Some(shift(p.div.divmod64((2 * p.p - p.r - b) * ainv).1 as u32)),
+            ]
         }
     }
 }
@@ -181,13 +186,12 @@ fn test_poly_prime() {
         b: Uint::from_str("2255304218805619815720698662795").unwrap(),
         d: Uint::from(3691742787015739u64),
     };
-    let sp = poly.prepare_prime(&p);
-    let x1: Uint = poly.a * Uint::from(sp.roots[0]) + poly.b;
-    let x1p: u64 = (x1 % Uint::from(p.p)).to_u64().unwrap();
-    assert_eq!(pow_mod(x1p, 2, p.p), pow_mod(p.r, 2, p.p));
-    let x2: Uint = poly.a * Uint::from(sp.roots[1]) + poly.b;
-    let x2p: u64 = (x2 % Uint::from(p.p)).to_u64().unwrap();
-    assert_eq!(pow_mod(x2p, 2, p.p), pow_mod(p.r, 2, p.p));
+    for r in poly.prepare_prime(&p, 0) {
+        let Some(r) = r else { continue };
+        let x1: Uint = poly.a * Uint::from(r) + poly.b;
+        let x1p: u64 = (x1 % Uint::from(p.p)).to_u64().unwrap();
+        assert_eq!(pow_mod(x1p, 2, p.p), pow_mod(p.r, 2, p.p));
+    }
 }
 
 /// Returns a polynomial suitable for sieving across ±2^sievebits
@@ -371,7 +375,7 @@ fn test_select_poly() {
 // One MPQS unit of work, identified by an integer 'idx'.
 fn mpqs_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Relation>) {
     let mlog = params::mpqs_interval_logsize(&n);
-    let nblocks = (1u64 << (mlog - 10)) / (BLOCK_SIZE as u64 / 1024);
+    let nblocks = (2 << mlog) / BLOCK_SIZE;
     if DEBUG {
         eprintln!(
             "Sieving polynomial A={} B={} M=2^{} blocks={}",
@@ -383,9 +387,6 @@ fn mpqs_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Relat
     // Precompute inverse of D
     let dinv = inv_mod(pol.d, n).unwrap();
 
-    // Precompute factor base extra information.
-    let sprimes: Vec<_> = primes.into_iter().map(|p| pol.prepare_prime(p)).collect();
-
     // Sieve from -M to M
     let sieve = SieveMPQS {
         n,
@@ -394,29 +395,12 @@ fn mpqs_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Relat
         dinv,
         d2inv,
     };
-    // Construct initial state.
-    let mut st_primes = vec![];
-    let mut st_hi = vec![];
-    let mut st_lo = vec![];
-    let start_offset = -(1 << mlog);
-    for (p, sp) in primes.iter().zip(sprimes) {
-        assert_eq!(p.p >> 24, 0);
-        let [s1, s2] = sieve_starts(p, &sp, start_offset);
-        st_primes.push(p);
-        st_hi.push((s1 / BLOCK_SIZE as u64) as u8);
-        st_lo.push((s1 % BLOCK_SIZE as u64) as u16);
-        if p.r != 0 {
-            // 2 roots
-            st_primes.push(p);
-            st_hi.push((s2 / BLOCK_SIZE as u64) as u8);
-            st_lo.push((s2 % BLOCK_SIZE as u64) as u16);
-        }
-    }
-    // Make st_hi size a multiple of 16.
-    st_hi.reserve(16 - st_hi.len() % 16);
+
     let start_offset = -(1 << mlog);
     let end_offset = 1 << mlog;
-    let mut state = sieve::Sieve::new(start_offset, st_primes, st_hi, st_lo);
+    let mut state = sieve::Sieve::new(start_offset, nblocks, primes, |_, p, offset| {
+        pol.prepare_prime(p, offset)
+    });
     if nblocks == 0 {
         return sieve_block_poly(&sieve, &mut state);
     }
@@ -437,20 +421,6 @@ struct SieveMPQS<'a> {
     pol: &'a Poly,
     dinv: Uint,
     d2inv: Uint,
-}
-
-// Compute sieving offsets i,j such that offset+i,j are roots
-fn sieve_starts(p: &Prime, sp: &SievePrime, offset: i64) -> [u64; 2] {
-    let [r1, r2] = sp.roots;
-    let off: u64 = if offset < 0 {
-        sp.p - p.div.divmod64((-offset) as u64).1
-    } else {
-        p.div.divmod64(offset as u64).1
-    };
-    [
-        if r1 < off { r1 + p.p - off } else { r1 - off },
-        if r2 < off { r2 + p.p - off } else { r2 - off },
-    ]
 }
 
 // Sieve using a selected polynomial
@@ -477,11 +447,10 @@ fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) -> (Vec<Relation>, Vec
             factors.push((-1, 1));
         }
         let mut cofactor: Uint = cabs;
-        for fidx in facs {
-            let item = st.primes[fidx];
+        for p in facs {
             let mut exp = 0;
             loop {
-                let (q, r) = item.div.divmod_uint(&cofactor);
+                let (q, r) = p.div.divmod_uint(&cofactor);
                 if r == 0 {
                     cofactor = q;
                     exp += 1;
@@ -489,7 +458,7 @@ fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) -> (Vec<Relation>, Vec
                     break;
                 }
             }
-            factors.push((item.p as i64, exp));
+            factors.push((p.p as i64, exp));
         }
         let Some(cofactor) = cofactor.to_u64() else { continue };
         if cofactor > maxlarge {

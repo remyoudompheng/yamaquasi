@@ -57,7 +57,7 @@ brunch::benches! {
         let polybase: Uint = isqrt(isqrt(n));
         let pol = mpqs::select_poly(polybase, 0, n);
         Bench::new("prepare 5000 primes for MPQS poly (n: 256 bit)")
-        .run_seeded((&pol, &fb), |(pol, fb)| fb.iter().map(|p| pol.prepare_prime(p)).collect::<Vec<_>>())
+        .run_seeded((&pol, &fb), |(pol, fb)| fb.iter().map(|p| pol.prepare_prime(p, 12345)).collect::<Vec<_>>())
     },
     // SIQS primitives
     {
@@ -81,7 +81,8 @@ brunch::benches! {
         let a_s = siqs::prepare_as(&f, &fb, 40);
         Bench::new("prepare 1 SIQS polynomial (n = 256 bits)")
         .run_seeded((&n, &fb, a_s.first().unwrap()), |(n, fb, a)| {
-            siqs::make_polynomial(n, fb, a, 123);
+            let pol = siqs::make_polynomial(n, a, 123);
+            fb.iter().map(|p| pol.prepare_prime(123, p, 12345, a)).last();
         })
     },
     // Block sieve
@@ -89,8 +90,8 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(5133);
         let fb = fbase::prepare_factor_base(&n, &primes[..]);
-        let nsqrt = isqrt(n);
-        let s = qsieve::init_sieves(&fb, nsqrt).0;
+        let qs = qsieve::SieveQS::new(n, &fb);
+        let s = qs.init(None).0;
         Bench::new("clone sieve structure (no-op)")
         .run_seeded(s, |s| {
             let _ =  s.clone();
@@ -100,8 +101,8 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(5133);
         let fb = fbase::prepare_factor_base(&n, &primes[..]);
-        let nsqrt = isqrt(n);
-        let s = qsieve::init_sieves(&fb, nsqrt).0;
+        let qs = qsieve::SieveQS::new(n, &fb);
+        let s = qs.init(None).0;
         Bench::new("sieve 32k block with ~2500 primes")
         .run_seeded(s, |s| {
             let mut s1 = s.clone();
@@ -114,8 +115,8 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(20000);
         let fb = fbase::prepare_factor_base(&n, &primes[..]);
-        let nsqrt = isqrt(n);
-        let s = qsieve::init_sieves(&fb, nsqrt).0;
+        let qs = qsieve::SieveQS::new(n, &fb);
+        let s = qs.init(None).0;
         Bench::new("sieve 32k block with ~10000 primes")
         .run_seeded(s, |s| {
             let mut s1 = s.clone();
@@ -128,8 +129,8 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(100000);
         let fb = fbase::prepare_factor_base(&n, &primes[..]);
-        let nsqrt = isqrt(n);
-        let s = qsieve::init_sieves(&fb, nsqrt).0;
+        let qs = qsieve::SieveQS::new(n, &fb);
+        let s = qs.init(None).0;
         Bench::new("sieve 32k block with ~50000 primes")
         .run_seeded(s, |s| {
             let mut s1 = s.clone();
@@ -142,8 +143,8 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(5133);
         let fb = fbase::prepare_factor_base(&n, &primes[3..]);
-        let nsqrt = isqrt(n);
-        let s = qsieve::init_sieves(&fb, nsqrt).0;
+        let qs = qsieve::SieveQS::new(n, &fb);
+        let s = qs.init(None).0;
         Bench::new("sieve 32k block with [3..2500] primes")
         .run_seeded(s, |s| {
             let mut s1 = s.clone();
@@ -155,8 +156,8 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(20000);
         let fb = fbase::prepare_factor_base(&n, &primes[5..]);
-        let nsqrt = isqrt(n);
-        let s = qsieve::init_sieves(&fb, nsqrt).0;
+        let qs = qsieve::SieveQS::new(n, &fb);
+        let s = qs.init(None).0;
         Bench::new("sieve 32k block with [5..10000] primes")
         .run_seeded(s, |s| {
             let mut s1 = s.clone();
@@ -168,8 +169,8 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(100000);
         let fb = fbase::prepare_factor_base(&n, &primes[10..]);
-        let nsqrt = isqrt(n);
-        let s = qsieve::init_sieves(&fb, nsqrt).0;
+        let qs = qsieve::SieveQS::new(n, &fb);
+        let s = qs.init(None).0;
         Bench::new("sieve 32k block with [10..50000] primes")
         .run_seeded(s, |s| {
             let mut s1 = s.clone();
@@ -181,8 +182,8 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(5133);
         let fb = fbase::prepare_factor_base(&n, &primes[..]);
-        let nsqrt = isqrt(n);
-        let s = qsieve::init_sieves(&fb, nsqrt).0;
+        let qs = qsieve::SieveQS::new(n, &fb);
+        let s = qs.init(None).0;
         Bench::new("sieve+factor 32k block with ~2500 primes")
         .run_seeded(s, |s| {
             let mut s1 = s.clone();
@@ -196,8 +197,8 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(20000);
         let fb = fbase::prepare_factor_base(&n, &primes[..]);
-        let nsqrt = isqrt(n);
-        let s = qsieve::init_sieves(&fb, nsqrt).0;
+        let qs = qsieve::SieveQS::new(n, &fb);
+        let s = qs.init(None).0;
         Bench::new("sieve+factor 32k block with ~10000 primes")
         .run_seeded(s, |s| {
             let mut s1 = s.clone();
@@ -211,8 +212,8 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(100000);
         let fb = fbase::prepare_factor_base(&n, &primes[..]);
-        let nsqrt = isqrt(n);
-        let s = qsieve::init_sieves(&fb, nsqrt).0;
+        let qs = qsieve::SieveQS::new(n, &fb);
+        let s = qs.init(None).0;
         Bench::new("sieve+factor 32k block with ~50000 primes")
         .run_seeded(s, |s| {
             let mut s1 = s.clone();

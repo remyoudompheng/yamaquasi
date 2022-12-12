@@ -86,6 +86,9 @@ pub fn combine_large_relation(
 }
 
 pub fn relation_gap(rels: &[Relation]) -> usize {
+    if rels.len() == 0 {
+        return 1000; // infinity
+    }
     let mut occs = HashMap::<i64, u64>::new();
     for r in rels {
         for (f, k) in r.factors.iter() {

@@ -25,7 +25,7 @@ use num_traits::One;
 use rayon::prelude::*;
 
 use crate::arith::{self, Num};
-use crate::fbase::{Prime, SievePrime};
+use crate::fbase::Prime;
 use crate::params::{self, BLOCK_SIZE};
 use crate::relations::{combine_large_relation, relation_gap, Relation};
 use crate::sieve;
@@ -133,16 +133,16 @@ pub fn siqs(n: &Uint, primes: &[Prime], tpool: Option<&rayon::ThreadPool>) -> Ve
                     if done.load(Ordering::Relaxed) {
                         return;
                     }
-                    let (pol, sprimes) = make_polynomial(n, primes, a, idx);
-                    let (mut found, foundlarge) = siqs_sieve_poly(n, a, &pol, primes, &sprimes);
+                    let pol = make_polynomial(n, a, idx);
+                    let (mut found, foundlarge) = siqs_sieve_poly(n, a, &pol, primes);
                     handle_result(&mut found, foundlarge);
                 });
             })
         } else {
             // Single-threaded
             for idx in 0..polys_per_a {
-                let (pol, sprimes) = make_polynomial(n, primes, a, idx);
-                let (mut found, foundlarge) = siqs_sieve_poly(n, a, &pol, primes, &sprimes);
+                let pol = make_polynomial(n, a, idx);
+                let (mut found, foundlarge) = siqs_sieve_poly(n, a, &pol, primes);
                 let enough = handle_result(&mut found, foundlarge);
                 if enough {
                     break;
@@ -369,9 +369,49 @@ pub struct Poly {
     c: Int,
 }
 
+impl Poly {
+    pub fn prepare_prime(&self, idx: usize, p: &Prime, offset: i64, a: &A) -> [Option<u32>; 2] {
+        let off: u64 = p.div.modi64(offset);
+        let shift = |r: u32| -> u32 {
+            if r < off as u32 {
+                r + p.p as u32 - off as u32
+            } else {
+                r - off as u32
+            }
+        };
+
+        // Compute polynomial roots.
+        if p.p == 2 {
+            // A x^2 + C
+            let c2 = self.c.low_u64() & 1;
+            [Some(shift(c2 as u32)), None]
+        } else if !a.factors.iter().any(|q| q.p == p.p) {
+            // A x + B = sqrt(n)
+            let ainv = a.ainv[idx] as u64;
+            let bp = p.div.mod_uint(&self.b);
+            [
+                Some(shift(p.div.divmod64((p.p + p.r - bp) * ainv).1 as u32)),
+                Some(shift(
+                    p.div.divmod64((p.p - p.r + p.p - bp) * ainv).1 as u32,
+                )),
+            ]
+        } else {
+            // p is a factor of A.
+            // 2Bx + C, root is -C/2B
+            let bp = p.div.mod_uint(&(self.b << 1));
+            let mut cp = p.div.mod_uint(&self.c.abs().to_bits());
+            if !self.c.is_negative() {
+                cp = p.p - cp;
+            }
+            let r = p.div.divmod64(cp * p.div.inv(bp).unwrap()).1 as u32;
+            [Some(shift(r)), None]
+        }
+    }
+}
+
 /// Given coefficients A and B, compute all roots (Ax+B)^2=N
 /// modulo the factor base, computing (r - B)/A mod p
-pub fn make_polynomial(n: &Uint, fb: &[Prime], a: &A, idx: usize) -> (Poly, Vec<SievePrime>) {
+pub fn make_polynomial(n: &Uint, a: &A, idx: usize) -> Poly {
     let idx = idx << 1;
     // Combine roots using CRT coefficients.
     let mut b = Uint::ZERO;
@@ -391,45 +431,7 @@ pub fn make_polynomial(n: &Uint, fb: &[Prime], a: &A, idx: usize) -> (Poly, Vec<
         Int::from_bits(*n),
         Int::from_bits(b * b) - c * Int::from_bits(a.a)
     );
-    let pol = Poly { a: a.a, b, c };
-    // Compute polynomial roots.
-    // Ignore factors of A.
-    let mut sprimes = vec![];
-    for (idx, p) in fb.iter().enumerate() {
-        if p.p == 2 {
-            // A x^2 + C
-            let c2 = c.low_u64() & 1;
-            sprimes.push(SievePrime {
-                p: p.p,
-                roots: [c2, c2],
-            });
-        } else if !a.factors.iter().any(|q| q.p == p.p) {
-            // A x + B = sqrt(n)
-            let ainv = a.ainv[idx];
-            let bp: u64 = p.div.mod_uint(&b);
-            sprimes.push(SievePrime {
-                p: p.p,
-                roots: [
-                    p.div.divmod64((p.p + p.r - bp) * ainv as u64).1,
-                    p.div.divmod64((p.p - p.r + p.p - bp) * ainv as u64).1,
-                ],
-            });
-        } else {
-            // 2Bx + C, root is -C/2B
-            let bp: u64 = p.div.mod_uint(&(b << 1));
-            let mut cp: u64 = p.div.mod_uint(&c.abs().to_bits());
-            if !c.is_negative() {
-                cp = p.p - cp;
-            }
-            let r = p.div.divmod64(cp * p.div.inv(bp).unwrap()).1;
-            sprimes.push(SievePrime {
-                p: p.p,
-                roots: [r, r],
-            });
-        }
-    }
-    assert_eq!(fb.len(), sprimes.len());
-    (pol, sprimes)
+    Poly { a: a.a, b, c }
 }
 
 // Sieving process
@@ -439,10 +441,9 @@ fn siqs_sieve_poly(
     a: &A,
     pol: &Poly,
     primes: &[Prime],
-    sprimes: &[SievePrime],
 ) -> (Vec<Relation>, Vec<Relation>) {
     let mlog = interval_logsize(&n);
-    let nblocks = (1u64 << (mlog - 10)) / (BLOCK_SIZE as u64 / 1024);
+    let nblocks: usize = (2 << mlog) / BLOCK_SIZE;
     if DEBUG {
         eprintln!(
             "Sieving polynomial A={} B={} M=2^{} blocks={}",
@@ -458,27 +459,11 @@ fn siqs_sieve_poly(
         pol,
     };
     // Construct initial state.
-    let l = 16 * (primes.len() / 8 + 1);
-    let mut st_primes = vec![];
-    let mut st_hi = Vec::with_capacity(l);
-    let mut st_lo = Vec::with_capacity(l);
-    let start_offset = -(1 << mlog);
-    for (p, sp) in primes.iter().zip(sprimes) {
-        assert_eq!(p.p >> 24, 0);
-        let [s1, s2] = sieve_starts(p, sp, start_offset);
-        st_primes.push(p);
-        st_hi.push((s1 / BLOCK_SIZE as u64) as u8);
-        st_lo.push((s1 % BLOCK_SIZE as u64) as u16);
-        if s1 != s2 {
-            // 2 roots
-            st_primes.push(p);
-            st_hi.push((s2 / BLOCK_SIZE as u64) as u8);
-            st_lo.push((s2 % BLOCK_SIZE as u64) as u16);
-        }
-    }
     let start_offset: i64 = -(1 << mlog);
     let end_offset: i64 = 1 << mlog;
-    let mut state = sieve::Sieve::new(start_offset, st_primes, st_hi, st_lo);
+    let mut state = sieve::Sieve::new(start_offset, nblocks, primes, |pidx, p, offset| {
+        pol.prepare_prime(pidx, p, offset, a)
+    });
     if nblocks == 0 {
         return sieve_block_poly(&sieve, &mut state);
     }
@@ -498,20 +483,6 @@ struct SieveSIQS<'a> {
     primes: &'a [Prime],
     factors: &'a [&'a Prime],
     pol: &'a Poly,
-}
-
-// Compute sieving offsets i,j such that offset+i,j are roots
-fn sieve_starts(p: &Prime, sp: &SievePrime, offset: i64) -> [u64; 2] {
-    let [r1, r2] = sp.roots;
-    let off: u64 = if offset < 0 {
-        sp.p - p.div.divmod64((-offset) as u64).1
-    } else {
-        p.div.divmod64(offset as u64).1
-    };
-    [
-        if r1 < off { r1 + p.p - off } else { r1 - off },
-        if r2 < off { r2 + p.p - off } else { r2 - off },
-    ]
 }
 
 // Sieve using a selected polynomial
@@ -538,11 +509,14 @@ fn sieve_block_poly(s: &SieveSIQS, st: &mut sieve::Sieve) -> (Vec<Relation>, Vec
             factors.push((-1, 1));
         }
         let mut cofactor: Uint = v.abs().to_bits();
-        for fidx in facs {
-            let item = st.primes[fidx];
+        /*
+        eprintln!("x={} facs={:?}", cofactor,
+                facs.iter().map(|p| p.p).collect::<Vec<_>>());
+                */
+        for p in facs {
             let mut exp = 0;
             loop {
-                let (q, r) = item.div.divmod_uint(&cofactor);
+                let (q, r) = p.div.divmod_uint(&cofactor);
                 if r == 0 {
                     cofactor = q;
                     exp += 1;
@@ -551,9 +525,13 @@ fn sieve_block_poly(s: &SieveSIQS, st: &mut sieve::Sieve) -> (Vec<Relation>, Vec
                 }
             }
             // FIXME: we should have exp > 0
-            //assert!(exp > 0);
+            /*
+            if p.p > 32768 {
+                assert!(exp > 0);
+            }
+            */
             if exp > 0 {
-                factors.push((item.p as i64, exp));
+                factors.push((p.p as i64, exp));
             }
         }
         let Some(cofactor) = cofactor.to_u64() else { continue };
@@ -701,28 +679,27 @@ fn test_poly_prepare() {
         for idx in 0..35 {
             let idx = 7 * idx;
             // Generate and check each polynomial.
-            let (pol, sprimes) = make_polynomial(n, &fb, a, idx);
-            let (a, b, c) = (pol.a, pol.b, pol.c);
+            let pol = make_polynomial(n, a, idx);
+            let (pa, pb, pc) = (pol.a, pol.b, pol.c);
             // B is a square root of N modulo A.
-            assert_eq!((b * b) % a, n % a);
+            assert_eq!((pb * pb) % pa, n % pa);
             // Check that (Ax+B)^2 - n = A(Ax^2+2Bx+C)
             for x in [1u64, 100, 50000] {
-                let u = a * Uint::from(x) + b;
+                let u = pa * Uint::from(x) + pb;
                 let u = Int::from_bits(u * u) - Int::from_bits(*n);
-                let v = a * Uint::from(x * x) + (b << 1) * Uint::from(x);
-                let v = Int::from_bits(v) + c;
-                assert_eq!(u, Int::from_bits(a) * v);
+                let v = pa * Uint::from(x * x) + (pb << 1) * Uint::from(x);
+                let v = Int::from_bits(v) + pc;
+                assert_eq!(u, Int::from_bits(pa) * v);
             }
-            for sp in sprimes {
+            for (pidx, p) in fb.iter().enumerate() {
                 // Roots are roots of Ax^2+2Bx+C modulo p.
-                let p = sp.p;
-                let [r1, r2] = sp.roots;
-                let v = a * Uint::from(r1 * r1) + b * Uint::from(2 * r1);
-                let v = Int::from_bits(v) + c;
-                assert_eq!(v.abs().to_bits() % p, 0);
-                let v = a * Uint::from(r2 * r2) + b * Uint::from(2 * r2);
-                let v = Int::from_bits(v) + c;
-                assert_eq!(v.abs().to_bits() % p, 0);
+                for r in pol.prepare_prime(pidx, &p, 0, a) {
+                    let Some(r) = r else { continue };
+                    let r = r as u64;
+                    let v = pa * Uint::from(r * r) + pb * Uint::from(2 * r);
+                    let v = Int::from_bits(v) + pc;
+                    assert_eq!(v.abs().to_bits() % p.p, 0);
+                }
             }
         }
     }
