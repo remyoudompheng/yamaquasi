@@ -68,7 +68,10 @@ brunch::benches! {
         Bench::new("prepare 50 A values for SIQS (n = 256 bits)")
         .run_seeded((&fb, &n), |(fb, n)| {
             let f = siqs::select_siqs_factors(fb, n, 9);
-            siqs::prepare_as(&f, fb, 40);
+            let a_ints = siqs::select_a(&f, 40);
+            for a_int in &a_ints {
+                siqs::prepare_a(&f, a_int, fb);
+            }
         })
     },
     {
@@ -78,7 +81,8 @@ brunch::benches! {
         let primes = fbase::primes(10000);
         let fb = fbase::prepare_factor_base(&n, &primes[..]);
         let f = siqs::select_siqs_factors(&fb[..], &n, 9);
-        let a_s = siqs::prepare_as(&f, &fb, 40);
+        let a_ints = siqs::select_a(&f, 40);
+        let a_s: Vec<_> = a_ints.iter().map(|a_int| siqs::prepare_a(&f, a_int, &fb)).collect();
         Bench::new("prepare 1 SIQS polynomial (n = 256 bits)")
         .run_seeded((&n, &fb, a_s.first().unwrap()), |(n, fb, a)| {
             let pol = siqs::make_polynomial(n, a, 123);

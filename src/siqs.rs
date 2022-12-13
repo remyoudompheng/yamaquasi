@@ -44,19 +44,16 @@ pub fn siqs(n: &Uint, primes: &[Prime], tpool: Option<&rayon::ThreadPool>) -> Ve
     // Generate all values of A now.
     let nfacs = nfactors(n) as usize;
     let factors = select_siqs_factors(primes, n, nfacs);
-    let a_s = prepare_as(&factors, primes, a_value_count(n));
-    let a_diff = a_s.last().unwrap().a - a_s.first().unwrap().a;
-    let a_quality = (a_diff >> (a_diff.bits() - 10)).low_u64() as f64
-        / (a_s.last().unwrap().a >> (a_diff.bits() - 10)).low_u64() as f64;
+    let a_ints = select_a(&factors, a_value_count(n));
     let polys_per_a = 1 << (nfacs - 1);
     eprintln!(
         "Generated {} values of A with {} factors in {}..{} ({} polynomials each, spread={:.2}%)",
-        a_s.len(),
+        a_ints.len(),
         nfacs,
         factors.factors[0].p,
         factors.factors.last().unwrap().p,
         polys_per_a,
-        a_quality * 100.0
+        a_quality(&a_ints) * 100.0
     );
 
     let maxprime = primes.last().unwrap().p;
@@ -116,7 +113,8 @@ pub fn siqs(n: &Uint, primes: &[Prime], tpool: Option<&rayon::ThreadPool>) -> Ve
 
     let poly_idxs: Vec<usize> = (0..polys_per_a).collect();
 
-    for a in a_s.iter() {
+    for a_int in a_ints.iter() {
+        let a = &prepare_a(&factors, a_int, primes);
         eprintln!(
             "Sieving A={} (factors {})",
             a.a,
@@ -198,18 +196,37 @@ fn nfactors(n: &Uint) -> u32 {
 }
 
 fn a_value_count(n: &Uint) -> usize {
+    // Many polynomials are required to accomodate small intervals.
+    // When sz=180 we need more than 5k polynomials
+    // When sz=200 we need more than 20k polynomials
+    // When sz=280 we need more than 1M polynomials
     let sz = n.bits() as usize;
     match sz {
-        0..=129 => 8 + sz / 10,      // 8..20
-        130..=169 => sz - 110,       // 20..60
-        170..=219 => (sz - 160) * 5, // 50..250
-        _ => sz,                     // 220..
+        0..=129 => 8 + sz / 10,        // 8..20
+        130..=169 => sz - 60,          // 20..100
+        170..=199 => 50 * (sz - 168),  // 100..1000
+        200..=249 => 100 * (sz - 190), // 1000..5000
+        _ => 20 * sz,                  // 5000..
+    }
+}
+
+// Returns d such that we select A up to distance 1/d-th of the optimal value.
+fn a_tolerance_divisor(n: &Uint) -> usize {
+    match n.bits() {
+        0..=50 => 3,
+        51..=70 => 5,
+        71..=90 => 6,
+        91..=110 => 20,
+        111..=140 => 40,
+        141..=160 => 80,
+        _ => 100,
     }
 }
 
 fn interval_logsize(n: &Uint) -> u32 {
     // Choose very small intervals since the cost of switching
     // polynomials is very small (less than 1ms).
+    // Large intervals also hurt memory locality during sieve.
     let sz = n.bits();
     match sz {
         0..=39 => 13,
@@ -223,6 +240,7 @@ fn interval_logsize(n: &Uint) -> u32 {
 // Polynomial selection
 
 pub struct Factors<'a> {
+    pub n: &'a Uint,
     pub target: Uint,
     pub nfacs: usize,
     // A sorted list of factors
@@ -241,7 +259,11 @@ pub fn select_siqs_factors<'a>(fb: &'a [Prime], n: &'a Uint, nfacs: usize) -> Fa
     let idx = fb.partition_point(|p| Uint::from(p.p).pow(nfacs as u32) < target);
     // This may fail for very small n.
     assert!(idx > nfacs && idx + nfacs < fb.len());
-    let selection = &fb[idx - nfacs as usize..idx + max(nfacs, 6) as usize];
+    let selection = if idx > 4 * nfacs && idx + 4 * nfacs < fb.len() {
+        &fb[idx - 2 * nfacs as usize..idx + 2 * nfacs as usize]
+    } else {
+        &fb[idx - nfacs as usize..idx + max(nfacs, 6) as usize]
+    };
     // Precompute inverses
     let mut inverses = vec![];
     for p in selection {
@@ -257,6 +279,7 @@ pub fn select_siqs_factors<'a>(fb: &'a [Prime], n: &'a Uint, nfacs: usize) -> Fa
         inverses.push(row);
     }
     Factors {
+        n,
         target,
         nfacs,
         factors: selection.into_iter().collect(),
@@ -276,21 +299,32 @@ pub struct A<'a> {
     ainv: Vec<u32>,
 }
 
-pub fn prepare_as<'a>(f: &'a Factors, fb: &[Prime], want: usize) -> Vec<A<'a>> {
-    let a_s = select_a(f, want);
-    a_s.into_iter().map(|a| prepare_a(f, &a, fb)).collect()
+fn a_quality(a_s: &[Uint]) -> f64 {
+    let (amin, amax) = (a_s.first().unwrap(), a_s.last().unwrap());
+    let a_diff = amax - amin;
+    let a_mid: Uint = (amin + amax) >> 1;
+    if a_mid.bits() < 64 {
+        a_diff.low_u64() as f64 / a_mid.low_u64() as f64
+    } else {
+        let shift = a_diff.bits() - 10;
+        (a_diff >> shift).low_u64() as f64 / (a_s.last().unwrap() >> shift).low_u64() as f64
+    }
 }
 
 /// Find smooth numbers around the target that are products of
 /// distinct elements of the factor base.
 /// The factor base is assumed to be an array of primes with similar
 /// sizes.
-fn select_a(f: &Factors, want: usize) -> Vec<Uint> {
+pub fn select_a(f: &Factors, want: usize) -> Vec<Uint> {
     // Sample deterministically products of W primes
     // closest to target and select best candidates.
     // We usually don't need more than 1000 values.
     //
     // We are going to select ~2^W best products of W primes among 2W
+
+    let div = a_tolerance_divisor(f.n);
+    let amin = f.target - f.target / div as u64;
+    let amax = f.target + f.target / div as u64;
 
     let mut rng: u64 = 0xcafebeefcafebeef;
     let fb = f.factors.len();
@@ -301,38 +335,42 @@ fn select_a(f: &Factors, want: usize) -> Vec<Uint> {
         rng % fb as u64
     };
     let mut candidates = vec![];
-    for _ in 0..30 {
-        for _ in 0..(min(100, f.nfacs << f.nfacs) * want) {
-            let mut product = Uint::one();
-            let mut mask = 0u64;
-            while mask.count_ones() < f.nfacs as u32 - 1 {
-                let g = gen();
-                if mask & (1 << g) == 0 {
-                    mask |= 1 << g;
-                    product *= Uint::from(f.factors[g as usize].p);
-                }
+    for i in 0..100 * want {
+        let mut product = Uint::one();
+        let mut mask = 0u64;
+        while mask.count_ones() < f.nfacs as u32 - 1 {
+            let g = gen();
+            if mask & (1 << g) == 0 {
+                mask |= 1 << g;
+                product *= Uint::from(f.factors[g as usize].p);
             }
-            let t = (f.target / product).to_u64().unwrap();
-            let idx = (0usize..fb)
-                .filter(|g| mask & (1 << g) == 0)
-                .min_by_key(|&idx| (f.factors[idx].p as i64 - t as i64).abs())
-                .unwrap();
-            product *= Uint::from(f.factors[idx].p);
+        }
+        let t = (f.target / product).to_u64().unwrap();
+        let idx = (0usize..fb)
+            .filter(|g| mask & (1 << g) == 0)
+            .min_by_key(|&idx| (f.factors[idx].p as i64 - t as i64).abs())
+            .unwrap();
+        product *= Uint::from(f.factors[idx].p);
+        if amin < product && product < amax {
             candidates.push(product);
         }
-        candidates.sort();
-        candidates.dedup();
-        let idx = candidates.partition_point(|c| c < &f.target);
-        if idx > want && idx + want < candidates.len() {
-            return candidates[idx - want / 2..idx + want / 2].to_vec();
+        if candidates.len() > want && i % 10 == 0 {
+            candidates.sort();
+            candidates.dedup();
+            let idx = candidates.partition_point(|c| c < &f.target);
+            if idx > want && idx + want < candidates.len() {
+                return candidates[idx - want / 2..idx + want / 2].to_vec();
+            }
         }
     }
     // Should not happen?
+    candidates.sort();
+    candidates.dedup();
     let idx = candidates.partition_point(|c| c < &f.target);
     candidates[idx - min(idx, want / 2)..min(candidates.len(), idx + want / 2)].to_vec()
 }
 
-fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &[Prime]) -> A<'a> {
+pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &[Prime]) -> A<'a> {
     let afactors: Vec<(usize, &Prime)> = f
         .factors
         .iter()
@@ -670,8 +708,9 @@ fn test_poly_prepare() {
     // Prepare A values
     // Only test 10 A values and 35 polynomials per A.
     let f = select_siqs_factors(&fb[..], &n, 9);
-    let a_s = prepare_as(&f, &fb, 10);
-    for a in a_s.iter() {
+    let a_ints = select_a(&f, 10);
+    for a_int in &a_ints {
+        let a = prepare_a(&f, a_int, &fb);
         // Check CRT coefficients.
         assert_eq!(a.a, a.factors.iter().map(|x| Uint::from(x.p)).product());
         for (i, c) in a.crt.iter().enumerate() {
@@ -686,7 +725,7 @@ fn test_poly_prepare() {
         for idx in 0..35 {
             let idx = 7 * idx;
             // Generate and check each polynomial.
-            let pol = make_polynomial(n, a, idx);
+            let pol = make_polynomial(n, &a, idx);
             let (pa, pb, pc) = (pol.a, pol.b, pol.c);
             // B is a square root of N modulo A.
             assert_eq!((pb * pb) % pa, n % pa);
@@ -700,7 +739,7 @@ fn test_poly_prepare() {
             }
             for (pidx, p) in fb.iter().enumerate() {
                 // Roots are roots of Ax^2+2Bx+C modulo p.
-                for r in pol.prepare_prime(pidx, &p, 0, a) {
+                for r in pol.prepare_prime(pidx, &p, 0, &a) {
                     let Some(r) = r else { continue };
                     let r = r as u64;
                     let v = pa * Uint::from(r * r) + pb * Uint::from(2 * r);
