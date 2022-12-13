@@ -229,11 +229,9 @@ fn interval_logsize(n: &Uint) -> u32 {
     // Large intervals also hurt memory locality during sieve.
     let sz = n.bits();
     match sz {
-        0..=39 => 13,
-        40..=59 => 14,
-        60..=119 => 15,
-        120..=330 => 13 + sz / 40, // 16..21
-        _ => 21,
+        0..=119 => 15,
+        120..=330 => 14 + sz / 70, // 15..19
+        _ => 20,
     }
 }
 
