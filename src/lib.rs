@@ -11,6 +11,7 @@ pub mod relations;
 // Implementations
 pub mod mpqs;
 pub mod qsieve;
+pub mod qsieve64;
 pub mod sieve;
 pub mod siqs;
 

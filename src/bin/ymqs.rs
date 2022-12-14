@@ -14,16 +14,16 @@
 
 use std::str::FromStr;
 
-use yamaquasi::arith::U1024;
+use yamaquasi::arith::{Num, U1024};
 use yamaquasi::fbase::{self, prepare_factor_base, Prime};
 use yamaquasi::relations::final_step;
 use yamaquasi::Uint;
-use yamaquasi::{mpqs, params, qsieve, siqs};
+use yamaquasi::{mpqs, params, qsieve, qsieve64, siqs};
 
 fn main() {
     let arg = arguments::parse(std::env::args()).unwrap();
     if arg.orphans.len() != 1 {
-        println!("Usage: ymqs [--mode qs|mpqs] [--threads N] NUMBER");
+        println!("Usage: ymqs [--mode qs|qs64|mpqs|siqs] [--threads N] NUMBER");
     }
     let mode = arg.get::<String>("mode").unwrap_or("mpqs".into());
     let threads = arg.get::<usize>("threads");
@@ -39,6 +39,14 @@ fn main() {
     }
     let n = Uint::from_str(number).unwrap();
     eprintln!("Input number {}", n);
+    if mode == "qs64" {
+        assert!(n.bits() <= 64);
+        if let Some((a, b)) = qsieve64::qsieve(n.low_u64()) {
+            println!("{}", a);
+            println!("{}", b);
+        }
+        return;
+    }
     let (k, score) = fbase::select_multiplier(n);
     eprintln!("Selected multiplier {} (score {:.2}/8)", k, score);
     // Choose factor base. Sieve twice the number of primes
@@ -84,5 +92,5 @@ fn main() {
             return;
         }
     };
-    final_step(&n, &rels);
+    final_step(&n, &rels, true);
 }

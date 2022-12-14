@@ -9,7 +9,7 @@ case $MODE in
     flintqs)
         COMMAND="QuadraticSieve <<<"
         ;;
-    qs|mpqs|siqs)
+    qs64|qs|mpqs|siqs)
         COMMAND="bin/ymqs --mode $MODE"
         ;;
     mpqs6)

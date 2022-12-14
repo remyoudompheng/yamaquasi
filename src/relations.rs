@@ -105,7 +105,7 @@ pub fn relation_gap(rels: &[Relation]) -> usize {
     }
 }
 
-pub fn final_step(n: &Uint, rels: &[Relation]) {
+pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Option<(Uint, Uint)> {
     for r in rels {
         debug_assert!(r.verify(n));
     }
@@ -119,7 +119,9 @@ pub fn final_step(n: &Uint, rels: &[Relation]) {
             }
         }
     }
-    eprintln!("Input {} relations {} factors", rels.len(), occs.len());
+    if verbose {
+        eprintln!("Input {} relations {} factors", rels.len(), occs.len());
+    }
     // Sort factors by increasing occurrences
     let mut occs: Vec<(i64, u64)> = occs.into_iter().filter(|&(_, k)| k > 1).collect();
     occs.sort_by_key(|&(_, k)| k);
@@ -150,17 +152,19 @@ pub fn final_step(n: &Uint, rels: &[Relation]) {
         filt_rels.push(r);
         matrix.push(v);
     }
-    eprintln!(
-        "Filtered {} relations {} factors",
-        filt_rels.len(),
-        nfactors
-    );
-    eprintln!(
-        "Build matrix {}x{} ({:.1} entries/col)",
-        size,
-        matrix.len(),
-        coeffs as f64 / size as f64
-    );
+    if verbose {
+        eprintln!(
+            "Filtered {} relations {} factors",
+            filt_rels.len(),
+            nfactors
+        );
+        eprintln!(
+            "Build matrix {}x{} ({:.1} entries/col)",
+            size,
+            matrix.len(),
+            coeffs as f64 / size as f64
+        );
+    }
     let k = if size > 5000 {
         // Block Lanczos
         let mat = matrix::SparseMat {
@@ -179,22 +183,31 @@ pub fn final_step(n: &Uint, rels: &[Relation]) {
         }
         matrix::kernel_gauss(dense)
     };
-    eprintln!("Found kernel of dimension {}", k.len());
+    if verbose {
+        eprintln!("Found kernel of dimension {}", k.len());
+    }
     for eq in k {
         let mut rs = vec![];
         for i in eq.into_usizes().into_iter() {
             rs.push(filt_rels[i].clone());
         }
-        eprintln!("Combine {} relations...", rs.len());
+        if verbose {
+            eprintln!("Combine {} relations...", rs.len());
+        }
         let (a, b) = combine(n, &rs);
-        eprintln!("Same square mod N: {} {}", a, b);
+        if verbose {
+            eprintln!("Same square mod N: {} {}", a, b);
+        }
         if let Some((p, q)) = try_factor(n, a, b) {
-            eprintln!("Found factors!");
-            println!("{}", p);
-            println!("{}", q);
-            break;
+            if verbose {
+                eprintln!("Found factors!");
+                println!("{}", p);
+                println!("{}", q);
+            }
+            return Some((p, q));
         }
     }
+    None
 }
 
 /// Combine relations into an identity a^2 = b^2

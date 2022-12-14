@@ -1,3 +1,7 @@
+// Copyright 2022 Rémy Oudompheng. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 //! Shared common implementation of sieve.
 //!
 //! Sieving using a quadratic polynomial can be reduced to handling
