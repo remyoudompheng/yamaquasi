@@ -117,7 +117,8 @@ pub fn sqrt_mod<T: Num>(n: T, p: T) -> Option<T> {
     }
 }
 
-pub fn inv_mod64(n: u64, p: u64) -> Option<u64> {
+#[allow(dead_code)]
+fn inv_mod64(n: u64, p: u64) -> Option<u64> {
     let e = Integer::extended_gcd(&(n as i64), &(p as i64));
     if e.gcd == 1 {
         let x = if e.x < 0 { e.x + p as i64 } else { e.x };
@@ -171,9 +172,9 @@ pub struct Dividers {
     // This is used for small primes during sieving.
     m16: u32,
     s16: usize,
-    // Multiplier for 32-bit division
-    m32: u32,
-    s32: usize,
+    // Multiplier for 31-bit division
+    m31: u32,
+    s31: usize,
     // Multiplier for 64-bit division
     m64: u64,
     r64: u64,
@@ -186,17 +187,17 @@ impl Dividers {
     //
     // https://gmplib.org/~tege/divcnst-pldi94.pdf
     //
-    // m must be 33 bit for u32 and 65-bit for u64
+    // m must be 32 bit for u31 and 65-bit for u64
     // to obtain correct results. We use 32-bit/64-bit mantissas
-    // and thus need to correct the result.
+    // and thus need to correct the result in the case of u64.
     pub fn new(p: u32) -> Self {
         if p == 2 {
             return Dividers {
                 p,
                 m16: 1,
                 s16: 1,
-                m32: 1,
-                s32: 1,
+                m31: 1,
+                s31: 1,
                 m64: 1,
                 r64: 0,
                 s64: 1,
@@ -208,8 +209,8 @@ impl Dividers {
         // For 16 bits we can use the exact 17-bit multiplier
         let m16 = (m128 >> (sz - 17)).low_u64() as u32 + 1; // 17 bits
         let s16 = 128 + 17 - sz as usize; // m16 >> s16 = m128 >> 128
-        let m32 = (m128 >> (sz - 32)).low_u64() as u32 + 1; // 32 bits
-        let s32 = 128 + 32 - sz as usize; // m32 >> s32 = m128 >> 128
+        let m31 = (m128 >> (sz - 32)).low_u64() as u32 + 1; // 32 bits
+        let s31 = 128 + 32 - sz as usize; // m32 >> s32 = m128 >> 128
         let m64 = (m128 >> (sz - 64)).low_u64() + 1; // 64 bits
         let r64 = (U256::one() << 64) % (p as u64);
         let s64 = 128 + 64 - sz as usize; // m64 >> s64 = m128 >> 128
@@ -217,8 +218,8 @@ impl Dividers {
             p,
             m16,
             s16,
-            m32,
-            s32,
+            m31,
+            s31,
             m64,
             r64,
             s64,
@@ -234,15 +235,10 @@ impl Dividers {
         n - q * self.p as u16
     }
 
-    pub fn divmod32(&self, n: u32) -> (u32, u32) {
-        let nm = (n as u64) * (self.m32 as u64);
-        let q = (nm >> self.s32) as u32;
-        let qp = q * self.p;
-        if qp > n {
-            (q - 1, self.p - (qp - n))
-        } else {
-            (q, n - qp)
-        }
+    pub fn modu31(&self, n: u32) -> u32 {
+        let nm = (n as u64) * (self.m31 as u64);
+        let q = (nm >> self.s31) as u32;
+        n - q * self.p as u32
     }
 
     #[inline]
@@ -254,6 +250,18 @@ impl Dividers {
             (q - 1, self.p as u64 - (qp - n))
         } else {
             (q, n - qp)
+        }
+    }
+
+    pub fn modi32(&self, n: i32) -> u32 {
+        if n < 0 {
+            let m = self.modu31((-n) as u32);
+            if m == 0 {
+                return 0;
+            }
+            self.p as u32 - m
+        } else {
+            self.modu31(n as u32)
         }
     }
 
@@ -312,6 +320,7 @@ impl Dividers {
     }
 
     /// Modular inverse. Prime number is supposed to be small (<= 32 bits).
+    /// The algorithm is an extended binary GCD.
     pub fn inv(&self, k: u64) -> Option<u64> {
         if self.p == 2 {
             if k % 2 == 0 {
@@ -469,7 +478,7 @@ mod tests {
             let d = Dividers::new(p);
             for n in M32..M32 + std::cmp::max(1000, 2 * p) {
                 let n = n as u32;
-                assert_eq!((n / p, n % p), d.divmod32(n as u32));
+                assert_eq!(n % p, d.modu31(n as u32));
             }
             let p = p as u64;
             for n in M64..M64 + std::cmp::max(1000, 2 * p) {

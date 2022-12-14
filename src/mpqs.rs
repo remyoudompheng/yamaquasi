@@ -10,12 +10,13 @@
 
 use std::collections::HashMap;
 
+use bnum::cast::CastFrom;
 use num_traits::One;
 use rayon::prelude::*;
 
-use crate::arith::{inv_mod, isqrt, pow_mod, Num};
+use crate::arith::{inv_mod, isqrt, pow_mod, Num, U256};
 use crate::fbase::{self, Prime};
-use crate::params::{self, large_prime_factor, BLOCK_SIZE};
+use crate::params::{self, BLOCK_SIZE};
 use crate::relations::{combine_large_relation, relation_gap, Relation};
 use crate::sieve;
 use crate::{Int, Uint, DEBUG};
@@ -26,11 +27,11 @@ pub fn mpqs(n: Uint, primes: &[Prime], tpool: Option<&rayon::ThreadPool>) -> Vec
     let mut larges = HashMap::<u64, Relation>::new();
     let mut extras = 0;
     let fb = primes.len();
-    let mlog = params::mpqs_interval_logsize(&n);
+    let mlog = mpqs_interval_logsize(&n);
     if mlog >= 20 {
-        eprintln!("Sieving interval size {}M", 1 << (mlog - 20));
+        eprintln!("Sieving interval size {}M", 2 << (mlog - 20));
     } else {
-        eprintln!("Sieving interval size {}k", 1 << (mlog - 10));
+        eprintln!("Sieving interval size {}k", 2 << (mlog - 10));
     }
     // Precompute starting point for polynomials
     // See [Silverman, Section 3]
@@ -138,17 +139,17 @@ pub fn mpqs(n: Uint, primes: &[Prime], tpool: Option<&rayon::ThreadPool>) -> Vec
 /// ax+b is a square root of n modulo p
 #[derive(Debug)]
 pub struct Poly {
-    pub a: Uint,
-    pub b: Uint,
-    pub d: Uint,
+    pub a: U256,
+    pub b: U256,
+    pub d: U256,
 }
 
 impl Poly {
-    pub fn prepare_prime(&self, p: &Prime, offset: i64) -> [Option<u32>; 2] {
-        let off: u64 = p.div.modi64(offset);
+    pub fn prepare_prime(&self, p: &Prime, offset: i32) -> [Option<u32>; 2] {
+        let off: u32 = p.div.modi32(offset);
         let shift = |r: u32| -> u32 {
             if r < off as u32 {
-                r + p.p as u32 - off as u32
+                r + p.p as u32 - off
             } else {
                 r - off as u32
             }
@@ -182,13 +183,13 @@ fn test_poly_prime() {
         div: arith::Dividers::new(10223),
     };
     let poly = Poly {
-        a: Uint::from_str("13628964805482736048449433716121").unwrap(),
-        b: Uint::from_str("2255304218805619815720698662795").unwrap(),
-        d: Uint::from(3691742787015739u64),
+        a: U256::from_str("13628964805482736048449433716121").unwrap(),
+        b: U256::from_str("2255304218805619815720698662795").unwrap(),
+        d: U256::from(3691742787015739u64),
     };
     for r in poly.prepare_prime(&p, 0) {
         let Some(r) = r else { continue };
-        let x1: Uint = poly.a * Uint::from(r) + poly.b;
+        let x1: Uint = Uint::cast_from(poly.a) * Uint::from(r) + Uint::cast_from(poly.b);
         let x1p: u64 = (x1 % Uint::from(p.p)).to_u64().unwrap();
         assert_eq!(pow_mod(x1p, 2, p.p), pow_mod(p.r, 2, p.p));
     }
@@ -261,9 +262,9 @@ fn make_poly(d: Uint, r: Uint, n: &Uint) -> Poly {
             b = d * d - b;
         }
         Poly {
-            a: d * d << 1,
-            b: b,
-            d: d << 1,
+            a: U256::cast_from(d * d << 1),
+            b: U256::cast_from(b),
+            d: U256::cast_from(d << 1),
         }
     } else {
         // want even b
@@ -271,9 +272,9 @@ fn make_poly(d: Uint, r: Uint, n: &Uint) -> Poly {
             b = d * d - b;
         }
         Poly {
-            a: d * d,
-            b: b,
-            d: d,
+            a: U256::cast_from(d * d),
+            b: U256::cast_from(b),
+            d: U256::cast_from(d),
         }
     }
 }
@@ -344,6 +345,7 @@ fn test_select_poly() {
     let mut polybase: Uint = isqrt(n >> 1) >> 24;
     polybase = isqrt(polybase);
     let Poly { a, b, d } = select_poly(polybase, 0, n);
+    let (a, b, d) = (Uint::cast_from(a), Uint::cast_from(b), Uint::cast_from(d));
     // D = 3 mod 4, 2D = 6 mod 8
     assert_eq!(d.low_u64() % 8, 6);
     // N is a square modulo D
@@ -374,7 +376,7 @@ fn test_select_poly() {
 
 // One MPQS unit of work, identified by an integer 'idx'.
 fn mpqs_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Relation>) {
-    let mlog = params::mpqs_interval_logsize(&n);
+    let mlog = mpqs_interval_logsize(&n);
     let nblocks = (2 << mlog) / BLOCK_SIZE;
     if DEBUG {
         eprintln!(
@@ -383,9 +385,10 @@ fn mpqs_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Relat
         );
     }
     // Precompute inverse of D^2
-    let d2inv = inv_mod(pol.d * pol.d, n).unwrap();
+    let d = Uint::cast_from(pol.d);
+    let d2inv = inv_mod(d * d, n).unwrap();
     // Precompute inverse of D
-    let dinv = inv_mod(pol.d, n).unwrap();
+    let dinv = inv_mod(d, n).unwrap();
 
     // Sieve from -M to M
     let sieve = SieveMPQS {
@@ -399,7 +402,7 @@ fn mpqs_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Relat
     let start_offset = -(1 << mlog);
     let end_offset = 1 << mlog;
     let mut state = sieve::Sieve::new(start_offset, nblocks, primes, |_, p, offset| {
-        pol.prepare_prime(p, offset)
+        pol.prepare_prime(p, offset as i32)
     });
     if nblocks == 0 {
         return sieve_block_poly(&sieve, &mut state);
@@ -413,6 +416,38 @@ fn mpqs_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Relat
         state.next_block();
     }
     (result, extras)
+}
+
+fn mpqs_interval_logsize(n: &Uint) -> u32 {
+    let sz = n.bits();
+    match sz {
+        // Small numbers don't have enough polynomials,
+        // but we compensate already with large cofactors.
+        0..=119 => 15,
+        // MPQS has a high polynomial switch cost, the interval
+        // must be large enough for very large n.
+        120..=279 => 13 + sz / 40, // 16..20
+        280..=295 => 21,
+        _ => 22,
+    }
+}
+
+fn large_prime_factor(n: &Uint) -> u64 {
+    // Allow large cofactors up to FACTOR * largest prime
+    let sz = n.bits();
+    match sz {
+        0..=49 => {
+            // Large cofactors for extremely small numbers
+            // to compensate small intervals
+            100 + 2 * n.bits() as u64
+        }
+        50..=100 =>
+        // Polynomials are scarce, we need many relations:
+        {
+            300 - 2 * n.bits() as u64 // 200..100
+        }
+        _ => n.bits() as u64,
+    }
 }
 
 struct SieveMPQS<'a> {
@@ -433,14 +468,14 @@ fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) -> (Vec<Relation>, Vec
     let mut result = vec![];
     let mut extras = vec![];
 
-    let target = s.n.bits() / 2 + params::mpqs_interval_logsize(&s.n) - maxlarge.bits();
+    let target = s.n.bits() / 2 + mpqs_interval_logsize(&s.n) - maxlarge.bits();
     let (pol, n, dinv, d2inv) = (s.pol, &s.n, &s.dinv, &s.d2inv);
     let (idxs, facss) = st.smooths(target as u8);
     for (i, facs) in idxs.into_iter().zip(facss) {
         let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
         // Evaluate polynomial
-        let x: Int = Int::from_bits(pol.a) * Int::from(offset + (i as i64));
-        let x = x + Int::from_bits(pol.b);
+        let x: Int = Int::cast_from(pol.a) * Int::from(offset + (i as i64));
+        let x = x + Int::cast_from(pol.b);
         let candidate: Int = x * x - Int::from_bits(*n);
         let cabs = (candidate.abs().to_bits() * d2inv) % n;
         if candidate.is_negative() {

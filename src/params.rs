@@ -33,26 +33,6 @@ pub fn large_prime_factor(n: &Uint) -> u64 {
     }
 }
 
-pub fn mpqs_interval_logsize(n: &Uint) -> u32 {
-    // 90 bits => 512k
-    // 120 bits => 1M
-    // 160 bits => 2M
-    // 200 bits => 4M
-    // 250 bits => 8M
-    let sz = n.bits();
-    match sz {
-        // Small numbers don't have enough polynomials,
-        // sieve large intervals
-        0..=79 => 17,
-        60..=99 => 16,
-        // Otherwise, choose rather small intervals to maximize
-        // smooth density. We can change polynomials very often.
-        100..=119 => 15,
-        120..=330 => 13 + sz / 40, // 16..21
-        _ => 21,
-    }
-}
-
 #[test]
 fn test_factor_base_size() {
     let b80 = factor_base_size(&(Uint::from(1u64) << 80));

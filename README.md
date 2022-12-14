@@ -84,7 +84,8 @@ quadratic sieve.
 Since it is unreasonable to use the quadratic sieve to factor numbers larger
 than 512 bits, yamaquasi uses fixed width 1024-bit arithmetic for
 modular arithmetic provided by the `bnum` crate, and 64-bit arithmetic
-for computations involving the factor base.
+for computations involving the factor base. Polynomial coefficients are
+guaranteed to be smaller than 256 bits.
 
 ## Polynomial selection (MPQS)
 

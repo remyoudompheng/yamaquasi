@@ -14,27 +14,7 @@ brunch::benches! {
     Bench::new("isqrt(u256)").run_seeded(U256::from_str(N256).unwrap(), isqrt),
     Bench::new("isqrt(u1024)").run_seeded(U1024::from_str(N1024).unwrap(), isqrt),
     // Small modular inverses
-        {
-        Bench::new("1000x inv_mod(17, 257)")
-        .with_timeout(Duration::from_secs(1))
-        .run_seeded((17, 257), |(k, p)| for _ in 0..1000 { arith::inv_mod64(k, p); })
-    },
     {
-        Bench::new("1000x inv_mod(17, 65537)")
-        .with_timeout(Duration::from_secs(1))
-        .run_seeded((17, 65537), |(k, p)| for _ in 0..1000 { arith::inv_mod64(k, p); })
-    },
-    {
-        Bench::new("1000x inv_mod(40507, 65537)")
-        .with_timeout(Duration::from_secs(1))
-        .run_seeded((40507, 65537), |(k, p)| for _ in 0..1000 { arith::inv_mod64(k, p); })
-    },
-    {
-        Bench::new("1000x inv_mod(4057, 1048583)")
-        .with_timeout(Duration::from_secs(1))
-        .run_seeded((4057, 1048583), |(k, p)| for _ in 0..1000 { arith::inv_mod64(k, p); })
-    },
-       {
         let div = arith::Dividers::new(257);
         Bench::new("1000x inv_mod binary(17, 257)")
         .with_timeout(Duration::from_secs(1))
@@ -57,6 +37,12 @@ brunch::benches! {
         Bench::new("1000x inv_mod binary(4057, 1048583)")
         .with_timeout(Duration::from_secs(1))
         .run_seeded((4057, &div), |(k, div)| for _ in 0..1000 { div.inv(k); })
+    },
+    {
+        let div = arith::Dividers::new(1048583);
+        Bench::new("1000x inv_mod binary(1234567, 1048583)")
+        .with_timeout(Duration::from_secs(1))
+        .run_seeded((1234567, &div), |(k, div)| for _ in 0..1000 { div.inv(k); })
     },
     // Large modular inverses
     {

@@ -537,7 +537,7 @@ fn sieve_block_poly(s: &SieveSIQS, st: &mut sieve::Sieve) -> (Vec<Relation>, Vec
     let mut result = vec![];
     let mut extras = vec![];
 
-    let target = s.n.bits() / 2 + params::mpqs_interval_logsize(&s.n) - maxlarge.bits();
+    let target = s.n.bits() / 2 + interval_logsize(&s.n) - maxlarge.bits();
     let (a, b, c, n) = (s.pol.a, s.pol.b, s.pol.c, s.n);
     let (idx, facss) = st.smooths(target as u8);
     for (i, facs) in idx.into_iter().zip(facss) {
@@ -552,10 +552,6 @@ fn sieve_block_poly(s: &SieveSIQS, st: &mut sieve::Sieve) -> (Vec<Relation>, Vec
             factors.push((-1, 1));
         }
         let mut cofactor: Uint = v.abs().to_bits();
-        /*
-        eprintln!("x={} facs={:?}", cofactor,
-                facs.iter().map(|p| p.p).collect::<Vec<_>>());
-                */
         for p in facs {
             let mut exp = 0;
             loop {
@@ -568,11 +564,6 @@ fn sieve_block_poly(s: &SieveSIQS, st: &mut sieve::Sieve) -> (Vec<Relation>, Vec
                 }
             }
             // FIXME: we should have exp > 0
-            /*
-            if p.p > 32768 {
-                assert!(exp > 0);
-            }
-            */
             if exp > 0 {
                 factors.push((p.p as i64, exp));
             }
