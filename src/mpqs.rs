@@ -20,18 +20,7 @@ use crate::relations::{combine_large_relation, relation_gap, Relation};
 use crate::sieve;
 use crate::{Int, Uint, DEBUG};
 
-pub fn mpqs(n: Uint, primes: &[Prime], threads: Option<usize>) -> Vec<Relation> {
-    let mut pool: Option<_> = None;
-
-    if let Some(t) = threads {
-        eprintln!("Parallel sieving over {} threads", t);
-        pool = Some(
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(t)
-                .build()
-                .expect("cannot create thread pool"),
-        );
-    }
+pub fn mpqs(n: Uint, primes: &[Prime], tpool: Option<&rayon::ThreadPool>) -> Vec<Relation> {
     let mut target = primes.len() * 8 / 10;
     let mut relations = vec![];
     let mut larges = HashMap::<u64, Relation>::new();
@@ -60,7 +49,7 @@ pub fn mpqs(n: Uint, primes: &[Prime], threads: Option<usize>) -> Vec<Relation> 
     // 2 solutions.
     let polystride = if n.bits() < 120 {
         20 * 20 / 7 * polybase.bits()
-    } else if n.bits() < 130 && threads.is_some() {
+    } else if n.bits() < 130 && tpool.is_some() {
         20 * 20 / 7 * polybase.bits()
     } else {
         100 * 20 / 7 * polybase.bits()
@@ -92,7 +81,7 @@ pub fn mpqs(n: Uint, primes: &[Prime], threads: Option<usize>) -> Vec<Relation> 
             polyidx = 0;
             eprintln!("Generated {} polynomials", polys.len());
         }
-        let mut results: Vec<(Vec<_>, Vec<_>)> = if let Some(pool) = pool.as_ref() {
+        let mut results: Vec<(Vec<_>, Vec<_>)> = if let Some(pool) = tpool {
             // Parallel sieving: do all polynomials at once.
             let v = pool.install(|| {
                 (&polys[polyidx..])

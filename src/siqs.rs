@@ -31,19 +31,7 @@ use crate::relations::{combine_large_relation, relation_gap, Relation};
 use crate::sieve;
 use crate::{Int, Uint, DEBUG};
 
-pub fn siqs(n: &Uint, primes: &[Prime], threads: Option<usize>) -> Vec<Relation> {
-    let mut pool: Option<_> = None;
-
-    if let Some(t) = threads {
-        eprintln!("Parallel sieving over {} threads", t);
-        pool = Some(
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(t)
-                .build()
-                .expect("cannot create thread pool"),
-        );
-    }
-
+pub fn siqs(n: &Uint, primes: &[Prime], tpool: Option<&rayon::ThreadPool>) -> Vec<Relation> {
     let fb = primes.len();
     let mlog = interval_logsize(&n);
     if mlog >= 20 {
@@ -138,7 +126,7 @@ pub fn siqs(n: &Uint, primes: &[Prime], threads: Option<usize>) -> Vec<Relation>
                 .join("*")
         );
 
-        if let Some(pool) = pool.as_ref() {
+        if let Some(pool) = tpool.as_ref() {
             // Multi-threaded
             pool.install(|| {
                 poly_idxs.par_iter().for_each(|&idx| {

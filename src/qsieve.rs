@@ -17,7 +17,7 @@ use crate::relations::{combine_large_relation, relation_gap, Relation};
 use crate::sieve;
 use crate::{Int, Uint};
 
-pub fn qsieve(n: Uint, primes: &[Prime]) -> Vec<Relation> {
+pub fn qsieve(n: Uint, primes: &[Prime], tpool: Option<&rayon::ThreadPool>) -> Vec<Relation> {
     // Prepare sieve
     let nsqrt = isqrt(n);
     let maxlarge: u64 = primes.last().unwrap().p * large_prime_factor(&n);
@@ -46,7 +46,20 @@ pub fn qsieve(n: Uint, primes: &[Prime]) -> Vec<Relation> {
     // Construct 2 initial states, forward and backwards.
     let (mut s_fwd, mut s_bck) = init_sieves(primes, nsqrt);
     loop {
-        let (mut found, foundlarge) = sieve_block(&sieve, &mut s_fwd, false);
+        let (r1, r2) = if let Some(pool) = tpool {
+            pool.install(|| {
+                rayon::join(
+                    || sieve_block(&sieve, &mut s_fwd, false),
+                    || sieve_block(&sieve, &mut s_bck, true),
+                )
+            })
+        } else {
+            (
+                sieve_block(&sieve, &mut s_fwd, false),
+                sieve_block(&sieve, &mut s_bck, true),
+            )
+        };
+        let (mut found, foundlarge) = r1;
         if found.len() > primes.len() + 16 {
             // Too many relations! May happen for very small inputs.
             relations.extend_from_slice(&mut found[..primes.len() + 16]);
@@ -67,7 +80,7 @@ pub fn qsieve(n: Uint, primes: &[Prime]) -> Vec<Relation> {
                 extras += 1;
             }
         }
-        let (mut found, foundlarge) = sieve_block(&sieve, &mut s_bck, true);
+        let (mut found, foundlarge) = r2;
         s_bck.next_block();
         relations.append(&mut found);
         for r in foundlarge {

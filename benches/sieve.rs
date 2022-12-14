@@ -2,7 +2,7 @@ use brunch::Bench;
 use std::str::FromStr;
 use yamaquasi::arith::isqrt;
 use yamaquasi::Uint;
-use yamaquasi::{fbase, mpqs, qsieve, sieve, siqs};
+use yamaquasi::{fbase, mpqs, qsieve, siqs};
 
 const PQ128: &str = "138775954839724585441297917764657773201";
 const PQ256: &str =

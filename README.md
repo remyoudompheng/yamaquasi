@@ -95,6 +95,10 @@ find multiple appropriate values of D in a single pass.
 ## Parallel processing
 
 Yamaquasi uses the `rayon` Rust crate to provide parallel computation capabilities.
+
+In classical quadratic sieve, 2 threads can process the forward sieve
+interval `[0,M]` and the backward sieve interval `[-M,0]` simultaneously.
+
 It is used in the MPQS and the SIQS/HMPQS implementation to process a batch
 of polynomials over a thread pool.
 

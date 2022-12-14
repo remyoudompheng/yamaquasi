@@ -66,10 +66,19 @@ fn main() {
     let smallprimes: Vec<u64> = primes.iter().map(|f| f.p).take(10).collect();
     eprintln!("Factor base size {} ({:?})", primes.len(), smallprimes);
 
+    let tpool: Option<rayon::ThreadPool> = threads.map(|t| {
+        eprintln!("Using a pool of {} threads", t);
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(t)
+            .build()
+            .expect("cannot create thread pool")
+    });
+    let tpool = tpool.as_ref();
+
     let rels = match &mode[..] {
-        "qs" => qsieve::qsieve(nk, &primes),
-        "mpqs" => mpqs::mpqs(nk, &primes, threads),
-        "siqs" => siqs::siqs(&nk, &primes, threads),
+        "qs" => qsieve::qsieve(nk, &primes, tpool),
+        "mpqs" => mpqs::mpqs(nk, &primes, tpool),
+        "siqs" => siqs::siqs(&nk, &primes, tpool),
         _ => {
             eprintln!("Invalid operation mode {:?}", mode);
             return;
