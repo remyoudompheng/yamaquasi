@@ -107,3 +107,18 @@ pub fn prepare_factor_base(nk: &Uint, primes: &[u32]) -> Vec<Prime> {
         })
         .collect()
 }
+
+// Returns whether n is composite through an Euler witness.
+// The use case is a product of 2 odd primes (these are never
+// Carmichael numbers).
+//
+// Random testing on 48-bit semiprimes show that 2 is almost
+// never an Euler liar (probability < 1e-6), but for example
+// 2^(n-1) = 1 mod n for n = 173142166387457
+pub fn certainly_composite(n: u64) -> bool {
+    if n > 2 && n % 2 == 0 {
+        return true;
+    }
+    let x = arith::pow_mod(2, n / 2, n);
+    x != 1 && x != n - 1
+}

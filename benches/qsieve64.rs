@@ -1,5 +1,5 @@
 use brunch::Bench;
-use yamaquasi::qsieve64;
+use yamaquasi::{fbase, qsieve64};
 
 brunch::benches! {
     {
@@ -40,5 +40,18 @@ brunch::benches! {
             .run_seeded(n60, |ns| for &n in ns {
                 qsieve64::qsieve(n).unwrap();
             })
-    }
+    },
+    {
+        let n48: &[u64] = &[
+            235075827453629,
+            166130059616737,
+            159247921097933,
+            224077614412439,
+            219669028971857,
+        ];
+        Bench::new("5x pseudoprime n=48 bits")
+            .run_seeded(n48, |ns| for &n in ns {
+                assert!(fbase::certainly_composite(n));
+            })
+    },
 }
