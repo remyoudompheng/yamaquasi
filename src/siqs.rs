@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
+use bnum::cast::CastFrom;
 use num_traits::One;
 use rayon::prelude::*;
 
@@ -35,9 +36,9 @@ pub fn siqs(n: &Uint, primes: &[Prime], tpool: Option<&rayon::ThreadPool>) -> Ve
     let fb = primes.len();
     let mlog = interval_logsize(&n);
     if mlog >= 20 {
-        eprintln!("Sieving interval size {}M", 1 << (mlog - 20));
+        eprintln!("Sieving interval size {}M", 2 << (mlog - 20));
     } else {
-        eprintln!("Sieving interval size {}k", 1 << (mlog - 10));
+        eprintln!("Sieving interval size {}k", 2 << (mlog - 10));
     }
 
     // Generate all values of A now.
@@ -224,6 +225,7 @@ fn interval_logsize(n: &Uint) -> u32 {
 pub struct Factors<'a> {
     pub target: Uint,
     pub nfacs: usize,
+    // A sorted list of factors
     pub factors: Vec<&'a Prime>,
     // inverses[i][j] = pi^-1 mod pj
     pub inverses: Vec<Vec<u32>>,
@@ -267,6 +269,8 @@ pub fn select_siqs_factors<'a>(fb: &'a [Prime], n: &'a Uint, nfacs: usize) -> Fa
 pub struct A<'a> {
     a: Uint,
     factors: Vec<&'a Prime>,
+    factor_min: u32,
+    factor_max: u32,
     // crt[i] = (a/pi ^1 mod pi) * (a/pi)
     crt: Vec<Uint>,
     ainv: Vec<u32>,
@@ -357,6 +361,8 @@ fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &[Prime]) -> A<'a> {
     A {
         a: *a,
         factors: afactors.iter().map(|(_, p)| p).copied().collect(),
+        factor_min: afactors[0].1.p as u32,
+        factor_max: afactors.last().unwrap().1.p as u32,
         crt,
         ainv,
     }
@@ -381,14 +387,16 @@ impl Poly {
         };
 
         // Compute polynomial roots.
+        let p32 = p.p as u32;
         if p.p == 2 {
             // A x^2 + C
             let c2 = self.c.low_u64() & 1;
             [Some(shift(c2 as u32)), None]
-        } else if !a.factors.iter().any(|q| q.p == p.p) {
+        } else if p32 < a.factor_min || p32 > a.factor_max || !a.factors.iter().any(|q| q.p == p.p)
+        {
             // A x + B = sqrt(n)
             let ainv = a.ainv[idx] as u64;
-            let bp = p.div.mod_uint(&self.b);
+            let bp = p.div.mod_uint(&arith::U256::cast_from(self.b));
             [
                 Some(shift(p.div.divmod64((p.p + p.r - bp) * ainv).1 as u32)),
                 Some(shift(
@@ -427,10 +435,9 @@ pub fn make_polynomial(n: &Uint, a: &A, idx: usize) -> Poly {
     // Compute c such that b^2 - ac = N
     // (Ax+B)^2 - n = A(Ax^2 + 2Bx + C)
     let c = (Int::from_bits(b * b) - Int::from_bits(*n)) / Int::from_bits(a.a);
-    assert_eq!(
-        Int::from_bits(*n),
-        Int::from_bits(b * b) - c * Int::from_bits(a.a)
-    );
+    debug_assert!(Int::from_bits(*n) == Int::from_bits(b * b) - c * Int::from_bits(a.a));
+    // n has at most 512 bits, and b < sqrt(n)
+    assert!(b.bits() < 256);
     Poly { a: a.a, b, c }
 }
 
