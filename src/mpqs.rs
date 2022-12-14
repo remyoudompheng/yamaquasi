@@ -21,7 +21,19 @@ use crate::relations::{combine_large_relation, relation_gap, Relation};
 use crate::sieve;
 use crate::{Int, Uint, DEBUG};
 
-pub fn mpqs(n: Uint, primes: &[Prime], tpool: Option<&rayon::ThreadPool>) -> Vec<Relation> {
+pub fn mpqs(n: Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Vec<Relation> {
+    // Choose factor base. Sieve twice the number of primes
+    // (n will be a quadratic residue for only half of them)
+    let fb = fb.unwrap_or(params::factor_base_size(&n));
+    let primes = fbase::primes(2 * fb);
+    eprintln!("Smoothness bound {}", primes.last().unwrap());
+    let primes: Vec<Prime> = fbase::prepare_factor_base(&n, &primes);
+    let primes = &primes[..];
+    eprintln!("All primes {}", primes.len());
+    // Prepare factor base
+    let smallprimes: Vec<u64> = primes.iter().map(|f| f.p).take(10).collect();
+    eprintln!("Factor base size {} ({:?})", primes.len(), smallprimes);
+
     let mut target = primes.len() * 8 / 10;
     let mut relations = vec![];
     let mut larges = HashMap::<u64, Relation>::new();

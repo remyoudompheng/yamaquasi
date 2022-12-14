@@ -11,13 +11,25 @@
 use std::collections::HashMap;
 
 use crate::arith::{isqrt, Num};
-use crate::fbase::Prime;
-use crate::params::{large_prime_factor, BLOCK_SIZE};
+use crate::fbase::{self, Prime};
+use crate::params::{self, large_prime_factor, BLOCK_SIZE};
 use crate::relations::{combine_large_relation, relation_gap, Relation};
 use crate::sieve::Sieve;
 use crate::{Int, Uint};
 
-pub fn qsieve(n: Uint, primes: &[Prime], tpool: Option<&rayon::ThreadPool>) -> Vec<Relation> {
+pub fn qsieve(n: Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Vec<Relation> {
+    // Choose factor base. Sieve twice the number of primes
+    // (n will be a quadratic residue for only half of them)
+    let fb = fb.unwrap_or(params::factor_base_size(&n));
+    let primes = fbase::primes(2 * fb);
+    eprintln!("Smoothness bound {}", primes.last().unwrap());
+    let primes: Vec<Prime> = fbase::prepare_factor_base(&n, &primes);
+    let primes = &primes[..];
+    eprintln!("All primes {}", primes.len());
+    // Prepare factor base
+    let smallprimes: Vec<u64> = primes.iter().map(|f| f.p).take(10).collect();
+    eprintln!("Factor base size {} ({:?})", primes.len(), smallprimes);
+
     // Prepare sieve
     let maxlarge: u64 = primes.last().unwrap().p * large_prime_factor(&n);
     eprintln!("Max cofactor {}", maxlarge);
