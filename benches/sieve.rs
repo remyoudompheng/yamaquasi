@@ -86,7 +86,8 @@ brunch::benches! {
         Bench::new("prepare 1 SIQS polynomial (n = 256 bits)")
         .run_seeded((&n, &fb, a_s.first().unwrap()), |(n, fb, a)| {
             let pol = siqs::make_polynomial(n, a, 123);
-            fb.iter().map(|p| pol.prepare_prime(123, p, 12345, a)).last();
+            fb.iter().enumerate().map(|(pidx, p)|
+                pol.prepare_prime(pidx, p, 12345, a)).last();
         })
     },
     // Block sieve

@@ -298,14 +298,21 @@ pub fn select_siqs_factors<'a>(fb: &'a [Prime], n: &'a Uint, nfacs: usize) -> Fa
 }
 
 /// Precomputed information to compute all square roots of N modulo A.
-/// We need crt coefficients and the inverse of A modulo the factor base.
+/// The square roots are sum(CRT[j] b[j]) with 2 choices for each b[j].
+/// Precompute CRT[j] b[j] modulo the factor base (F vectors)
+/// then combine them for each polynomial (faster than computing 2^F vectors).
 pub struct A<'a> {
     a: Uint,
     factors: Vec<&'a Prime>,
     factor_min: u32,
     factor_max: u32,
-    // crt[i] = (a/pi ^1 mod pi) * (a/pi)
-    crt: Vec<Uint>,
+    // Base data for polynomials:
+    // Precomputed bj = CRT[j] * sqrt(n) mod pj
+    // bj^2 = n mod pj, 0 mod pi (i != j)
+    roots: Vec<[Uint; 2]>,
+    // roots_mod_j[2i+1] is roots[j][i] mod factor base
+    roots_mod_p: Vec<Vec<u32>>,
+    // Precomputed a^-1 mod pi
     ainv: Vec<u32>,
 }
 
@@ -401,6 +408,26 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &[Prime]) -> A<'a> {
         }
         crt.push(c % a);
     }
+    // Compute basic roots
+    let mut roots = vec![];
+    for i in 0..afactors.len() {
+        let r1 = afactors[i].1.r;
+        let r2 = afactors[i].1.p - afactors[i].1.r;
+        roots.push([(crt[i] * Uint::from(r1)) % a, (crt[i] * Uint::from(r2)) % a]);
+    }
+    // Compute roots mod p.
+    let mut roots_mod_p = vec![];
+    for i in 0..afactors.len() {
+        for j in 0..2 {
+            let b = arith::U256::cast_from(roots[i][j]);
+            let mut v = vec![0u32; (fbase.len() + 15) & !15];
+            assert!(v.len() % 16 == 0);
+            for (idx, p) in fbase.iter().enumerate() {
+                v[idx] = p.div.mod_uint(&b) as u32;
+            }
+            roots_mod_p.push(v);
+        }
+    }
     let mut ainv = vec![];
     for p in fbase {
         let amod = p.div.mod_uint(a);
@@ -411,7 +438,8 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &[Prime]) -> A<'a> {
         factors: afactors.iter().map(|(_, p)| p).copied().collect(),
         factor_min: afactors[0].1.p as u32,
         factor_max: afactors.last().unwrap().1.p as u32,
-        crt,
+        roots,
+        roots_mod_p,
         ainv,
     }
 }
@@ -421,16 +449,18 @@ pub struct Poly {
     a: Uint,
     b: Uint,
     c: Int,
+    bmodp: Vec<u32>,
 }
 
 impl Poly {
+    #[inline]
     pub fn prepare_prime(&self, idx: usize, p: &Prime, offset: i64, a: &A) -> [Option<u32>; 2] {
-        let off: u64 = p.div.modi64(offset);
+        let off = p.div.modi32(offset as i32);
         let shift = |r: u32| -> u32 {
             if r < off as u32 {
-                r + p.p as u32 - off as u32
+                r + p.p as u32 - off
             } else {
-                r - off as u32
+                r - off
             }
         };
 
@@ -442,24 +472,27 @@ impl Poly {
             [Some(shift(c2 as u32)), None]
         } else if p32 < a.factor_min || p32 > a.factor_max || !a.factors.iter().any(|q| q.p == p.p)
         {
-            // A x + B = sqrt(n)
             let ainv = a.ainv[idx] as u64;
-            let bp = p.div.mod_uint(&arith::U256::cast_from(self.b));
+            // bmodp is at most len(a.factors) * p
+            let bmodp = self.bmodp[idx] as u64;
+            // A x + B = sqrt(n)
             [
-                Some(shift(p.div.divmod64((p.p + p.r - bp) * ainv).1 as u32)),
                 Some(shift(
-                    p.div.divmod64((p.p - p.r + p.p - bp) * ainv).1 as u32,
+                    p.div.divmod64((16 * p.p + p.r - bmodp) * ainv).1 as u32,
+                )),
+                Some(shift(
+                    p.div.divmod64((16 * p.p - p.r - bmodp) * ainv).1 as u32,
                 )),
             ]
         } else {
             // p is a factor of A.
             // 2Bx + C, root is -C/2B
-            let bp = p.div.mod_uint(&(self.b << 1));
+            let bmodp = self.bmodp[idx] as u64;
             let mut cp = p.div.mod_uint(&self.c.abs().to_bits());
             if !self.c.is_negative() {
                 cp = p.p - cp;
             }
-            let r = p.div.divmod64(cp * p.div.inv(bp).unwrap()).1 as u32;
+            let r = p.div.divmod64(cp * p.div.inv(2 * bmodp as u64).unwrap()).1 as u32;
             [Some(shift(r)), None]
         }
     }
@@ -468,17 +501,36 @@ impl Poly {
 /// Given coefficients A and B, compute all roots (Ax+B)^2=N
 /// modulo the factor base, computing (r - B)/A mod p
 pub fn make_polynomial(n: &Uint, a: &A, idx: usize) -> Poly {
+    use wide::u32x8;
+
     let idx = idx << 1;
-    // Combine roots using CRT coefficients.
+    // Combine roots: don't reduce modulo n.
+    // This allows combining the roots modulo the factor base,
+    // with the issue that (Ax+B) is no longer minimal for x=0
+    // but for round(-B/A) which is extremely small.
     let mut b = Uint::ZERO;
     for i in 0..a.factors.len() {
-        let r = if idx & (1 << i) == 0 {
-            a.factors[i].r
-        } else {
-            a.factors[i].p - a.factors[i].r
-        };
-        b += a.crt[i] * Uint::from(r);
+        b += a.roots[i][(idx >> i) & 1];
     }
+    // Also combine roots mod p
+    let first = idx & 1;
+    let mut bmodp = a.roots_mod_p[first].clone();
+    for i in 1..a.factors.len() {
+        let v = &a.roots_mod_p[2 * i + ((idx >> i) & 1)];
+        assert_eq!(v.len() % 8, 0);
+        // first += v
+        let mut idx = 0;
+        while idx < v.len() {
+            unsafe {
+                // (possibly) unaligned pointers
+                let v8 = (v.get_unchecked(idx) as *const u32) as *const u32x8;
+                let r8 = (bmodp.get_unchecked_mut(idx) as *const u32) as *mut u32x8;
+                *r8 += *v8;
+            }
+            idx += 8;
+        }
+    }
+
     debug_assert!((b * b) % a.a == n % a.a);
     // Compute c such that b^2 - ac = N
     // (Ax+B)^2 - n = A(Ax^2 + 2Bx + C)
@@ -486,7 +538,12 @@ pub fn make_polynomial(n: &Uint, a: &A, idx: usize) -> Poly {
     debug_assert!(Int::from_bits(*n) == Int::from_bits(b * b) - c * Int::from_bits(a.a));
     // n has at most 512 bits, and b < sqrt(n)
     assert!(b.bits() < 256);
-    Poly { a: a.a, b, c }
+    Poly {
+        a: a.a,
+        b,
+        c,
+        bmodp,
+    }
 }
 
 // Sieving process
@@ -714,12 +771,15 @@ fn test_poly_prepare() {
         let a = prepare_a(&f, a_int, &fb);
         // Check CRT coefficients.
         assert_eq!(a.a, a.factors.iter().map(|x| Uint::from(x.p)).product());
-        for (i, c) in a.crt.iter().enumerate() {
+        for (i, r) in a.roots.iter().enumerate() {
             for (j, p) in a.factors.iter().enumerate() {
+                let &[r1, r2] = r;
                 if i == j {
-                    assert_eq!(*c % p.p, 1);
+                    assert_eq!((r1 * r1) % p.p, *n % p.p);
+                    assert_eq!((r2 * r2) % p.p, *n % p.p);
                 } else {
-                    assert_eq!(*c % p.p, 0);
+                    assert_eq!(r1 % p.p, 0);
+                    assert_eq!(r2 % p.p, 0);
                 }
             }
         }
