@@ -9,9 +9,12 @@
 
 use std::collections::HashMap;
 
+use bitvec_simd::BitVec;
+
 use crate::arith::{self, Num};
 use crate::fbase::{Prime, SMALL_PRIMES};
-use crate::relations::{combine_large_relation, final_step, Relation};
+use crate::matrix;
+use crate::relations::{self, combine_large_relation, Relation};
 use crate::Uint;
 
 const DEBUG: bool = false;
@@ -23,8 +26,16 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
     if DEBUG {
         eprintln!("Selected multiplier {} (score {:.2})", k, score);
     }
+    // Handle perfect squares.
+    let nsqrt = arith::isqrt(n);
+    if n == nsqrt * nsqrt {
+        return Some((nsqrt, nsqrt));
+    }
     let nk = n * k as u64;
     for &p in SMALL_PRIMES {
+        if n % p == 0 {
+            return Some((p, n / p));
+        }
         if let Some(r) = arith::sqrt_mod(nk, p as u64) {
             primes.push(Prime {
                 p: p as u64,
@@ -41,13 +52,18 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
     }
 
     let nsqrt = arith::isqrt(nk);
+    if nk == nsqrt * nsqrt {
+        if n == (nsqrt / k as u64) * nsqrt {
+            return Some((nsqrt / k as u64, nsqrt));
+        }
+    }
     // (nsqrt+x)^2 - n
     let (b, c) = (2 * nsqrt, nk - nsqrt * nsqrt);
     if DEBUG {
         eprintln!("Polynomial x^2 + {} x - {}", b, c);
     }
 
-    let mut relations = vec![];
+    let mut rels = vec![];
     let mut larges = HashMap::new();
     let mut extras = 0;
     let maxlarge = 5000;
@@ -71,7 +87,9 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
                 // nsqrt + offset + x is a root?
                 let mut off = p.div.modi64(rt as i64 - offset - nsqrt as i64) as usize;
                 while off < interval.len() {
-                    interval[off] += logp;
+                    unsafe {
+                        *interval.get_unchecked_mut(off) += logp;
+                    }
                     off += p.p as usize;
                 }
             }
@@ -117,22 +135,22 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
                     factors,
                 };
                 if cofactor == 1 {
-                    relations.push(rel)
+                    rels.push(rel)
                 } else {
                     if let Some(rr) = combine_large_relation(&mut larges, &rel, &Uint::from(n)) {
-                        relations.push(rr);
+                        rels.push(rr);
                         extras += 1;
                     }
                 }
             }
         }
-        if relations.len() > primes.len() + 10 {
+        if rels.len() > primes.len() + 10 {
             break;
         }
         if DEBUG {
             eprintln!(
                 "Found {} smooths (cofactors: {} combined, {} pending)",
-                relations.len(),
+                rels.len(),
                 extras,
                 larges.len(),
             );
@@ -140,11 +158,44 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
         interval.fill(0u8);
     }
 
-    final_step(&Uint::from(n), &relations, DEBUG).map(|(a, b)| {
-        let (a, b) = (a.low_u64(), b.low_u64());
-        assert_eq!(n, a * b);
-        (a, b)
-    })
+    // Make matrix
+    let mut pindices = [0u8; 256];
+    for (idx, p) in primes.iter().enumerate() {
+        pindices[p.p as usize] = idx as u8 + 1;
+    }
+    let size = primes.len() + 1;
+    let mut cols = vec![];
+    for r in &rels {
+        let mut v = BitVec::zeros(size);
+        for &(p, exp) in &r.factors {
+            if exp % 2 == 0 {
+                continue;
+            }
+            if p == -1 {
+                v.set(0, true)
+            } else {
+                v.set(pindices[p as usize] as usize, true)
+            }
+        }
+        cols.push(v)
+    }
+    // Solve and factor
+    if cols.len() == 0 {
+        // no matrix ??
+        return None;
+    }
+    let k = matrix::kernel_gauss(cols);
+    for eq in k {
+        let mut rs = vec![];
+        for i in eq.into_usizes().into_iter() {
+            rs.push(rels[i].clone());
+        }
+        let (a, b) = relations::combine(&Uint::from(n), &rs);
+        if let Some((p, q)) = relations::try_factor(&Uint::from(n), a, b) {
+            return Some((p.low_u64(), q.low_u64()));
+        }
+    }
+    None
 }
 
 pub fn select_multiplier(n: u64) -> (u32, f64) {
@@ -192,4 +243,21 @@ fn expected_smooth_magnitude(n: u64) -> f64 {
         res += exp * (p as f64).ln();
     }
     res
+}
+
+#[test]
+fn test_qsieve() {
+    assert_eq!(qsieve(781418872441), Some((883979, 883979)));
+    let mut factored = 0;
+    for n in 1 << 49..(1 << 49) + 2000 {
+        if crate::fbase::certainly_composite(n) {
+            let Some((p, q)) = qsieve(n) else {
+                panic!("FAIL {}", n);
+            };
+            assert_eq!(p * q, n);
+            assert!(p > 1 && q > 1);
+            factored += 1;
+        }
+    }
+    eprintln!("{} numbers factored", factored);
 }

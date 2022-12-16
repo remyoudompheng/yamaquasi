@@ -14,6 +14,7 @@ pub mod qsieve;
 pub mod qsieve64;
 pub mod sieve;
 pub mod siqs;
+pub mod squfof;
 
 // We need to perform modular multiplication modulo the input number.
 pub type Int = arith::I1024;

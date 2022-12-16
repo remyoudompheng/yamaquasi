@@ -5,7 +5,7 @@
 //! Routines related to the quadratic sieve factor base.
 //! This file is common to all variants (QS, MPQS, SIQS).
 
-use crate::arith;
+use crate::arith::{self, Num};
 use crate::Uint;
 
 #[derive(Clone, Debug)]
@@ -116,9 +116,11 @@ pub fn prepare_factor_base(nk: &Uint, primes: &[u32]) -> Vec<Prime> {
 // never an Euler liar (probability < 1e-6), but for example
 // 2^(n-1) = 1 mod n for n = 173142166387457
 pub fn certainly_composite(n: u64) -> bool {
+    use bnum::types::U128;
     if n > 2 && n % 2 == 0 {
         return true;
     }
-    let x = arith::pow_mod(2, n / 2, n);
+    let n128 = U128::from(n);
+    let x = arith::pow_mod(U128::from(2u64), n128 >> 1, n128).low_u64();
     x != 1 && x != n - 1
 }

@@ -211,7 +211,7 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Option<(Uint, U
 }
 
 /// Combine relations into an identity a^2 = b^2
-fn combine(n: &Uint, rels: &[Relation]) -> (Uint, Uint) {
+pub fn combine(n: &Uint, rels: &[Relation]) -> (Uint, Uint) {
     // Check that the product is a square
     let mut a = Uint::one();
     for r in rels {
@@ -238,7 +238,7 @@ fn combine(n: &Uint, rels: &[Relation]) -> (Uint, Uint) {
 }
 
 /// Using a^2 = b^2 mod n, try to factor n
-fn try_factor(n: &Uint, a: Uint, b: Uint) -> Option<(Uint, Uint)> {
+pub fn try_factor(n: &Uint, a: Uint, b: Uint) -> Option<(Uint, Uint)> {
     if a == b || a + b == *n {
         // Trivial square relation
         return None;

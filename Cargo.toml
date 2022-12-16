@@ -36,6 +36,6 @@ name = "sieve"
 harness = false
 
 [[bench]]
-name = "qsieve64"
+name = "factor64"
 harness = false
 
