@@ -146,8 +146,8 @@ pub struct Poly {
 }
 
 impl Poly {
-    pub fn prepare_prime(&self, p: &Prime, offset: i32) -> [Option<u32>; 2] {
-        let off: u32 = p.div.modi32(offset);
+    pub fn prepare_prime(&self, p: &Prime, offset: i32) -> sieve::SievePrime {
+        let off: u32 = p.div.div31.modi32(offset);
         let shift = |r: u32| -> u32 {
             if r < off as u32 {
                 r + p.p as u32 - off
@@ -157,7 +157,7 @@ impl Poly {
         };
 
         // Determine roots r1, r2 such that P(offset+r)==0 mod p.
-        if p.p == 2 {
+        let offsets = if p.p == 2 {
             // We don't really know what will happen.
             [Some(0), Some(1)]
         } else {
@@ -169,6 +169,10 @@ impl Poly {
                 Some(shift(p.div.divmod64((p.p + p.r - b) * ainv).1 as u32)),
                 Some(shift(p.div.divmod64((2 * p.p - p.r - b) * ainv).1 as u32)),
             ]
+        };
+        sieve::SievePrime {
+            p: p.p as u32,
+            offsets,
         }
     }
 }
@@ -188,7 +192,7 @@ fn test_poly_prime() {
         b: U256::from_str("2255304218805619815720698662795").unwrap(),
         d: U256::from(3691742787015739u64),
     };
-    for r in poly.prepare_prime(&p, 0) {
+    for r in poly.prepare_prime(&p, 0).offsets {
         let Some(r) = r else { continue };
         let x1: Uint = Uint::cast_from(poly.a) * Uint::from(r) + Uint::cast_from(poly.b);
         let x1p: u64 = (x1 % Uint::from(p.p)).to_u64().unwrap();
@@ -404,8 +408,8 @@ fn mpqs_poly(pol: &Poly, n: Uint, primes: &[Prime], use_double: bool, rels: &RwL
 
     let start_offset = -(1 << mlog);
     let end_offset = 1 << mlog;
-    let mut state = sieve::Sieve::new(start_offset, nblocks, primes, |_, p, offset| {
-        pol.prepare_prime(p, offset as i32)
+    let mut state = sieve::Sieve::new(start_offset, nblocks, primes, |_, p| {
+        pol.prepare_prime(p, start_offset as i32)
     });
     if nblocks == 0 {
         sieve_block_poly(&sieve, &mut state);

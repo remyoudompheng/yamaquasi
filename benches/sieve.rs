@@ -88,7 +88,7 @@ brunch::benches! {
         .run_seeded((&n, &fb, a_s.first().unwrap()), |(n, fb, a)| {
             let pol = siqs::make_polynomial(n, a, 123);
             fb.iter().enumerate().map(|(pidx, p)|
-                pol.prepare_prime(pidx, p, 12345, a)).last();
+                pol.prepare_prime(pidx, p, &p.div.div31, 12345, a)).last();
         })
     },
     // Block sieve
@@ -224,8 +224,8 @@ brunch::benches! {
         .run_seeded(s, |s| {
             let mut s1 = s.clone();
             s1.sieve_block();
-            let idxs = s1.smooths(86).0;
             // Inaccurate tests due to sieve optimisations.
+            //let idxs = s1.smooths(86).0;
             //assert!(15 <= idxs.len() && idxs.len() <= 30);
             //eprintln!("{}", idxs.len());
             s1.next_block();

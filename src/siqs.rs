@@ -74,20 +74,30 @@ pub fn siqs(n: &Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Vec
     let maxlarge: u64 = maxprime * large_prime_factor(&n, use_double);
     eprintln!("Max large prime {}", maxlarge);
 
+    // Prepare packed auxiliary numbers (the Prime structure is > 64 bytes large)
+    // They are constant over the whole process.
+    // We need for each p the in factor base:
+    // * interval start offset mod p (24 bits)
+    // * prime number p (24 bits)
+    // * multiplier and shift for Divider31 (32 + 8 bits)
+    // We pack them as (u64, u32)
+    //
+    let start_offset: i64 = -(1 << mlog);
+    let mut pdata = vec![];
+    for p in primes {
+        let off = p.div.modi64(start_offset) as u64;
+        let arith::Divider31 { p, m31, s31 } = p.div.div31;
+        pdata.push(SieveSIQS::pack_pdata(off, p, s31, m31));
+    }
+
     let s = SieveSIQS {
         n,
         primes,
         rels: RwLock::new(RelationSet::new(*n, maxlarge)),
+        maxlarge,
         use_double,
+        pdata,
     };
-
-    // Precompute start offset modulo the factor base.
-    // It is a constant over the whole process.
-    let start_offset: i64 = -(1 << mlog);
-    let offsets_mod_p: Vec<u32> = primes
-        .iter()
-        .map(|p| p.div.modi64(start_offset) as u32)
-        .collect();
 
     let polys_done = AtomicUsize::new(0);
     let gap = AtomicUsize::new(fb);
@@ -145,7 +155,7 @@ pub fn siqs(n: &Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Vec
                         return;
                     }
                     let pol = make_polynomial(n, a, idx);
-                    siqs_sieve_poly(&s, n, a, &pol, primes, &offsets_mod_p);
+                    siqs_sieve_poly(&s, n, a, &pol);
                     handle_result();
                 });
             })
@@ -153,7 +163,7 @@ pub fn siqs(n: &Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Vec
             // Single-threaded
             for idx in 0..polys_per_a {
                 let pol = make_polynomial(n, a, idx);
-                siqs_sieve_poly(&s, n, a, &pol, primes, &offsets_mod_p);
+                siqs_sieve_poly(&s, n, a, &pol);
                 let enough = handle_result();
                 if enough {
                     break;
@@ -485,25 +495,34 @@ pub struct Poly {
 
 impl Poly {
     #[inline]
-    pub fn prepare_prime(&self, idx: usize, p: &Prime, off: u32, a: &A) -> [Option<u32>; 2] {
+    pub fn prepare_prime(
+        &self,
+        idx: usize,
+        prime: &Prime,
+        div31: &arith::Divider31,
+        off: u32,
+        a: &A,
+    ) -> sieve::SievePrime {
+        let p32 = div31.p;
         let shift = |r: u32| -> u32 {
             if r < off as u32 {
-                r + p.p as u32 - off
+                r + p32 - off
             } else {
                 r - off
             }
         };
 
         // Compute polynomial roots.
-        let p32 = p.p as u32;
-        if p.p == 2 {
+        let offsets = if div31.p == 2 {
             // A x^2 + C
             let c2 = self.c.low_u64() & 1;
             [Some(shift(c2 as u32)), None]
-        } else if p32 < a.factor_min || p32 > a.factor_max || !a.factors.iter().any(|q| q.p == p.p)
+        } else if p32 < a.factor_min
+            || p32 > a.factor_max
+            || !a.factors.iter().any(|q| q.p == p32 as u64)
         {
             // Compute (±r - B)/A = (-B/A) ± (r/p) solutions of (Ax+B)^2 = N
-            let b_div_a = p32 - p.div.modi32(self.bmodp[idx] as i32) as u32;
+            let b_div_a = p32 - div31.modi32(self.bmodp[idx] as i32) as u32;
             let rp = a.rp[idx];
             [
                 Some(shift({
@@ -526,13 +545,17 @@ impl Poly {
             // p is a factor of A.
             // 2Bx + C, root is -C/2B
             let bmodp = self.bmodp[idx] as u64;
-            let mut cp = p.div.mod_uint(&self.c.abs().to_bits());
+            let mut cp = prime.div.mod_uint(&self.c.abs().to_bits());
             if !self.c.is_negative() {
-                cp = p.p - cp;
+                cp = p32 as u64 - cp;
             }
-            let r = p.div.divmod64(cp * p.div.inv(2 * bmodp as u64).unwrap()).1 as u32;
+            let r = prime
+                .div
+                .divmod64(cp * prime.div.inv(2 * bmodp as u64).unwrap())
+                .1 as u32;
             [Some(shift(r)), None]
-        }
+        };
+        sieve::SievePrime { p: p32, offsets }
     }
 }
 
@@ -586,14 +609,7 @@ pub fn make_polynomial(n: &Uint, a: &A, idx: usize) -> Poly {
 
 // Sieving process
 
-fn siqs_sieve_poly(
-    s: &SieveSIQS,
-    n: &Uint,
-    a: &A,
-    pol: &Poly,
-    primes: &[Prime],
-    offsets_mod_p: &[u32],
-) -> () {
+fn siqs_sieve_poly(s: &SieveSIQS, n: &Uint, a: &A, pol: &Poly) -> () {
     let mlog = interval_logsize(&n);
     let nblocks: usize = (2 << mlog) / BLOCK_SIZE;
     if DEBUG {
@@ -606,8 +622,9 @@ fn siqs_sieve_poly(
     // Construct initial state.
     let start_offset: i64 = -(1 << mlog);
     let end_offset: i64 = 1 << mlog;
-    let mut state = sieve::Sieve::new(start_offset, nblocks, primes, move |pidx, p, offset| {
-        pol.prepare_prime(pidx, p, offsets_mod_p[pidx], a)
+    let mut state = sieve::Sieve::new(start_offset, nblocks, s.primes, move |pidx, p| {
+        let (off, div31) = SieveSIQS::unpack_pdata(s.pdata[pidx]);
+        pol.prepare_prime(pidx, p, &div31, off as u32, a)
     });
     if nblocks == 0 {
         sieve_block_poly(s, &pol, a, &mut state);
@@ -623,6 +640,34 @@ struct SieveSIQS<'a> {
     primes: &'a [Prime],
     use_double: bool,
     rels: RwLock<RelationSet>,
+    maxlarge: u64,
+    pdata: Vec<(u64, u32)>,
+}
+
+impl<'a> SieveSIQS<'a> {
+    #[inline]
+    fn pack_pdata(off: u64, p: u32, s31: u32, m31: u32) -> (u64, u32) {
+        (
+            (off as u64) << 32 | (p as u64) << 8 | s31 as u64,
+            m31 as u32,
+        )
+    }
+
+    #[inline]
+    fn unpack_pdata(t: (u64, u32)) -> (u64, arith::Divider31) {
+        let (x, m31) = t;
+        let off = x >> 32;
+        let p = (x as u32) >> 8;
+        let s31 = x as u8;
+        (
+            off,
+            arith::Divider31 {
+                p,
+                m31,
+                s31: s31 as u32,
+            },
+        )
+    }
 }
 
 // Sieve using a selected polynomial
@@ -823,7 +868,7 @@ fn test_poly_prepare() {
             }
             for (pidx, p) in fb.iter().enumerate() {
                 // Roots are roots of Ax^2+2Bx+C modulo p.
-                for r in pol.prepare_prime(pidx, &p, 0, &a) {
+                for r in pol.prepare_prime(pidx, &p, &p.div.div31, 0, &a).offsets {
                     let Some(r) = r else { continue };
                     let r = r as u64;
                     let v = pa * Uint::from(r * r) + pb * Uint::from(2 * r);

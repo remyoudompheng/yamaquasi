@@ -14,7 +14,7 @@ use crate::arith::{isqrt, Num};
 use crate::fbase::{self, Prime};
 use crate::params::{self, large_prime_factor, BLOCK_SIZE};
 use crate::relations::{Relation, RelationSet};
-use crate::sieve::Sieve;
+use crate::sieve::{Sieve, SievePrime};
 use crate::{Int, Uint};
 
 pub fn qsieve(n: Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Vec<Relation> {
@@ -167,8 +167,13 @@ impl<'a> SieveQS<'a> {
     }
 
     pub fn init(&self, sieves: Option<(Sieve<'a>, Sieve<'a>)>) -> (Sieve<'a>, Sieve<'a>) {
-        let f1 = |pidx, p, offset| {
-            // Return r such that nsqrt + offset + r is a root of n.
+        let offset = if let Some((s1, _)) = sieves.as_ref() {
+            s1.offset
+        } else {
+            0
+        };
+        let f1 = |pidx, p| {
+            // Return r such that nsqrt + r is a root of n.
             let p: &'a Prime = p;
             let base = self.nsqrt_mods[pidx] as u64;
             let off: u64 = p.div.modi64(offset);
@@ -180,10 +185,13 @@ impl<'a> SieveQS<'a> {
             while s2 >= p.p {
                 s2 -= p.p
             }
-            [Some(s1 as u32), Some(s2 as u32)]
+            SievePrime {
+                p: p.p as u32,
+                offsets: [Some(s1 as u32), Some(s2 as u32)],
+            }
         };
-        let f2 = |pidx, p, offset| {
-            // Return r such that nsqrt - (offset + r + 1) is a root of n.
+        let f2 = |pidx, p| {
+            // Return r such that nsqrt - (r + 1) is a root of n.
             let p: &'a Prime = p;
             let base = self.nsqrt_mods[pidx] as u64;
             let off: u64 = p.div.modi64(offset);
@@ -195,7 +203,10 @@ impl<'a> SieveQS<'a> {
             while s2 >= p.p {
                 s2 -= p.p
             }
-            [Some(s1 as u32), Some(s2 as u32)]
+            SievePrime {
+                p: p.p as u32,
+                offsets: [Some(s1 as u32), Some(s2 as u32)],
+            }
         };
 
         if let Some((mut s1, mut s2)) = sieves {

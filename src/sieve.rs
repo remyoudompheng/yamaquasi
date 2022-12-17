@@ -121,12 +121,19 @@ pub struct Sieve<'a> {
     pub blogsize: usize,
 }
 
+pub struct SievePrime {
+    pub p: u32,
+    pub offsets: [Option<u32>; 2],
+}
+
 impl<'a> Sieve<'a> {
     // Initialize sieve starting at offset = -M
-    // Function f determines starting offsets for a given prime.
+    // Function f determines starting offsets for a given prime
+    // and returns log(p). This allows reading log(p) from an
+    // alterante memory location when relevant.
     pub fn new<F>(offset: i64, nblocks: usize, primes: &'a [Prime], f: F) -> Self
     where
-        F: Fn(usize, &'a Prime, i64) -> [Option<u32>; 2],
+        F: Fn(usize, &'a Prime) -> SievePrime,
     {
         // Skip enough primes to skip ~half of operations
         let pskip = match primes.len() {
@@ -165,9 +172,12 @@ impl<'a> Sieve<'a> {
             (vec![], vec![])
         };
         let mut overflows = 0;
-        for (idx, p) in primes.iter().enumerate() {
-            let [o1, o2] = f(idx, p, offset);
-            let l = 32 - u32::leading_zeros(p.p as u32) as usize;
+        for (idx, prime) in primes.iter().enumerate() {
+            let SievePrime {
+                p,
+                offsets: [o1, o2],
+            } = f(idx, prime);
+            let l = 32 - u32::leading_zeros(p as u32) as usize;
             if l >= log {
                 // Register new prime size
                 while log <= l && log < 16 {
@@ -178,11 +188,11 @@ impl<'a> Sieve<'a> {
             if l <= 15 {
                 // Small prime
                 if let Some(o1) = o1 {
-                    cprimes.push(p);
+                    cprimes.push(prime);
                     offs.push(o1 as u16);
                 }
                 if let Some(o2) = o2 {
-                    cprimes.push(p);
+                    cprimes.push(prime);
                     offs.push(o2 as u16);
                 }
             } else {
@@ -214,7 +224,7 @@ impl<'a> Sieve<'a> {
                                 }
                             }
                         }
-                        off += p.p as usize;
+                        off += p as usize;
                     }
                 }
             }
@@ -268,7 +278,7 @@ impl<'a> Sieve<'a> {
     // polynomial is sieved over a huge interval.
     pub fn rehash<F>(&mut self, f: F)
     where
-        F: Fn(usize, &'a Prime, i64) -> [Option<u32>; 2],
+        F: Fn(usize, &'a Prime) -> SievePrime,
     {
         self.blk_no = 0;
         let nblocks = self.largeoffs.len();
@@ -285,7 +295,7 @@ impl<'a> Sieve<'a> {
                 continue; // Small prime
             }
             let l = 32 - u32::leading_zeros(p.p as u32) as usize;
-            for o in f(idx, p, self.offset) {
+            for o in f(idx, p).offsets {
                 let Some(o) = o else { continue };
                 let mut off = o as usize;
                 loop {

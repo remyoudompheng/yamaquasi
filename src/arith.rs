@@ -173,8 +173,7 @@ pub struct Dividers {
     m16: u32,
     s16: usize,
     // Multiplier for 31-bit division
-    m31: u32,
-    s31: usize,
+    pub div31: Divider31,
     // Multiplier for 64-bit division
     m64: u64,
     r64: u64,
@@ -196,8 +195,11 @@ impl Dividers {
                 p,
                 m16: 1,
                 s16: 1,
-                m31: 1,
-                s31: 1,
+                div31: Divider31 {
+                    p: 2,
+                    m31: 1,
+                    s31: 1,
+                },
                 m64: 1,
                 r64: 0,
                 s64: 1,
@@ -210,7 +212,7 @@ impl Dividers {
         let m16 = (m128 >> (sz - 17)).low_u64() as u32 + 1; // 17 bits
         let s16 = 128 + 17 - sz as usize; // m16 >> s16 = m128 >> 128
         let m31 = (m128 >> (sz - 32)).low_u64() as u32 + 1; // 32 bits
-        let s31 = 128 + 32 - sz as usize; // m32 >> s32 = m128 >> 128
+        let s31 = 128 + 32 - sz as u32; // m32 >> s32 = m128 >> 128
         let m64 = (m128 >> (sz - 64)).low_u64() + 1; // 64 bits
         let r64 = (U256::one() << 64) % (p as u64);
         let s64 = 128 + 64 - sz as usize; // m64 >> s64 = m128 >> 128
@@ -218,8 +220,7 @@ impl Dividers {
             p,
             m16,
             s16,
-            m31,
-            s31,
+            div31: Divider31 { p, m31, s31 },
             m64,
             r64,
             s64,
@@ -235,12 +236,6 @@ impl Dividers {
         n - q * self.p as u16
     }
 
-    pub fn modu31(&self, n: u32) -> u32 {
-        let nm = (n as u64) * (self.m31 as u64);
-        let q = (nm >> self.s31) as u32;
-        n - q * self.p as u32
-    }
-
     #[inline]
     pub fn divmod64(&self, n: u64) -> (u64, u64) {
         let nm = (n as u128) * (self.m64 as u128);
@@ -250,18 +245,6 @@ impl Dividers {
             (q - 1, self.p as u64 - (qp - n))
         } else {
             (q, n - qp)
-        }
-    }
-
-    pub fn modi32(&self, n: i32) -> u32 {
-        if n < 0 {
-            let m = self.modu31((-n) as u32);
-            if m == 0 {
-                return 0;
-            }
-            self.p as u32 - m
-        } else {
-            self.modu31(n as u32)
         }
     }
 
@@ -397,6 +380,35 @@ impl Dividers {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct Divider31 {
+    pub p: u32,
+    pub m31: u32,
+    pub s31: u32,
+}
+
+impl Divider31 {
+    #[inline]
+    pub fn modi32(&self, n: i32) -> u32 {
+        if n < 0 {
+            let m = self.modu31((-n) as u32);
+            if m == 0 {
+                return 0;
+            }
+            self.p as u32 - m
+        } else {
+            self.modu31(n as u32)
+        }
+    }
+
+    #[inline]
+    pub fn modu31(&self, n: u32) -> u32 {
+        let nm = (n as u64) * (self.m31 as u64);
+        let q = (nm >> self.s31) as u32;
+        n - q * self.p as u32
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -478,7 +490,7 @@ mod tests {
             let d = Dividers::new(p);
             for n in M32..M32 + std::cmp::max(1000, 2 * p) {
                 let n = n as u32;
-                assert_eq!(n % p, d.modu31(n as u32));
+                assert_eq!(n % p, d.div31.modu31(n as u32));
             }
             let p = p as u64;
             for n in M64..M64 + std::cmp::max(1000, 2 * p) {
