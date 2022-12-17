@@ -14,7 +14,7 @@ use bitvec_simd::BitVec;
 use crate::arith::{self, Num};
 use crate::fbase::{Prime, SMALL_PRIMES};
 use crate::matrix;
-use crate::relations::{self, combine_large_relation, Relation};
+use crate::relations::{self, Relation};
 use crate::Uint;
 
 const DEBUG: bool = false;
@@ -63,6 +63,7 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
         eprintln!("Polynomial x^2 + {} x - {}", b, c);
     }
 
+    let dummy_rset = relations::RelationSet::new(Uint::from(n), 0);
     let mut rels = vec![];
     let mut larges = HashMap::new();
     let mut extras = 0;
@@ -133,13 +134,17 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
                     x: Uint::from(u as u64),
                     cofactor,
                     factors,
+                    pp: false,
                 };
                 if cofactor == 1 {
                     rels.push(rel)
                 } else {
-                    if let Some(rr) = combine_large_relation(&mut larges, &rel, &Uint::from(n)) {
+                    if let Some(r0) = larges.get(&cofactor) {
+                        let rr = dummy_rset.combine(&rel, r0);
                         rels.push(rr);
                         extras += 1;
+                    } else {
+                        larges.insert(cofactor, rel);
                     }
                 }
             }

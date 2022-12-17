@@ -86,7 +86,7 @@ pub fn squfof(n: u64) -> Option<(u64, u64)> {
 }
 
 fn maybe_square(n: u64) -> bool {
-    return (n & 6 == 0 || n & 7 == 4) && (n + 1) % 5 <= 2
+    (n & 6 == 0 || n & 7 == 4) && (n + 1) % 5 <= 2
 }
 
 // Returns floored square root of n.

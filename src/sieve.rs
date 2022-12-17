@@ -200,10 +200,13 @@ impl<'a> Sieve<'a> {
                             let blen_p = largeoffs.get_unchecked_mut(blk_no).get_unchecked_mut(b);
                             let blen = *blen_p;
                             if blen < BUCKETSIZE as u8 {
-                                *largehits
-                                    .get_unchecked_mut(blk_no)
-                                    .get_unchecked_mut(b * BUCKETSIZE + blen as usize) =
-                                    (blk_off as u16, l as u16, idx as u32);
+                                // std::mem::replace compiles to a single 64-bit mov
+                                _ = std::mem::replace(
+                                    largehits
+                                        .get_unchecked_mut(blk_no)
+                                        .get_unchecked_mut(b * BUCKETSIZE + blen as usize),
+                                    (blk_off as u16, l as u16, idx as u32),
+                                );
                                 *blen_p += 1;
                                 if *blen_p as usize + 1 == BUCKETSIZE {
                                     eprintln!("large bucket overflow!");

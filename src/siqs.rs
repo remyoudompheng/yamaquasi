@@ -17,9 +17,8 @@
 //! theorem.
 
 use std::cmp::{max, min};
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::RwLock;
 
 use bnum::cast::CastFrom;
 use num_traits::One;
@@ -28,7 +27,7 @@ use rayon::prelude::*;
 use crate::arith::{self, Num};
 use crate::fbase::{self, Prime};
 use crate::params::{self, BLOCK_SIZE};
-use crate::relations::{combine_large_relation, relation_gap, Relation};
+use crate::relations::{Relation, RelationSet};
 use crate::sieve;
 use crate::{Int, Uint, DEBUG};
 
@@ -68,56 +67,49 @@ pub fn siqs(n: &Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Vec
         a_quality(&a_ints) * 100.0
     );
 
-    let maxprime = primes.last().unwrap().p;
-    let maxlarge: u64 = maxprime * params::large_prime_factor(&n);
-    eprintln!("Max cofactor {}", maxlarge);
-
     let done = AtomicBool::new(false);
 
-    struct State {
-        relations: Vec<Relation>,
-        larges: HashMap<u64, Relation>,
-        extras: usize,
-        gap: usize,
-        polys_done: usize,
-        target: usize,
-    }
+    let maxprime = primes.last().unwrap().p;
+    let use_double = n.bits() > 256;
+    let maxlarge: u64 = maxprime * large_prime_factor(&n, use_double);
+    eprintln!("Max large prime {}", maxlarge);
 
-    let state = Mutex::new(State {
-        relations: vec![],
-        larges: HashMap::new(),
-        extras: 0,
-        gap: fb,
-        polys_done: 0,
-        target: primes.len() * 8 / 10,
-    });
+    let s = SieveSIQS {
+        n,
+        primes,
+        rels: RwLock::new(RelationSet::new(*n, maxlarge)),
+        use_double,
+    };
 
-    let handle_result = |found: &mut Vec<Relation>, foundlarge: Vec<Relation>| {
-        let mut s = state.lock().unwrap();
-        s.relations.append(found);
-        for r in foundlarge {
-            if let Some(rr) = combine_large_relation(&mut s.larges, &r, &n) {
-                if rr.factors.iter().all(|(_, exp)| exp % 2 == 0) {
-                    // FIXME: Poor choice of A's can lead to duplicate relations.
-                    eprintln!("FIXME: ignoring trivial relation");
-                    //eprintln!("{:?}", rr.factors);
-                } else {
-                    s.relations.push(rr);
-                    s.extras += 1;
-                }
-            }
-        }
-        s.polys_done += 1;
+    let polys_done = AtomicUsize::new(0);
+    let gap = AtomicUsize::new(fb);
+    let target = AtomicUsize::new(primes.len() * 8 / 10);
 
-        if s.relations.len() >= s.target {
-            s.gap = relation_gap(&s.relations);
-            if s.gap == 0 {
+    let handle_result = || -> bool {
+        let rlen = {
+            let rels = s.rels.read().unwrap();
+            rels.len()
+        };
+
+        polys_done.fetch_add(1, Ordering::SeqCst);
+
+        if rlen >= target.load(Ordering::Relaxed) {
+            // unlikely
+            let rgap = {
+                let rels = s.rels.read().unwrap();
+                rels.gap()
+            };
+            gap.store(rgap, Ordering::Relaxed);
+            if rgap == 0 {
                 eprintln!("Found enough relations");
                 done.store(true, Ordering::Relaxed);
                 return true;
             } else {
-                eprintln!("Need {} additional relations", s.gap);
-                s.target += s.gap + std::cmp::min(10, fb as usize / 4);
+                eprintln!("Need {} additional relations", rgap);
+                target.store(
+                    rlen + rgap + std::cmp::min(10, fb as usize / 4),
+                    Ordering::SeqCst,
+                );
             }
         }
         false
@@ -145,40 +137,36 @@ pub fn siqs(n: &Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Vec
                         return;
                     }
                     let pol = make_polynomial(n, a, idx);
-                    let (mut found, foundlarge) = siqs_sieve_poly(n, a, &pol, primes);
-                    handle_result(&mut found, foundlarge);
+                    siqs_sieve_poly(&s, n, a, &pol, primes);
+                    handle_result();
                 });
             })
         } else {
             // Single-threaded
             for idx in 0..polys_per_a {
                 let pol = make_polynomial(n, a, idx);
-                let (mut found, foundlarge) = siqs_sieve_poly(n, a, &pol, primes);
-                let enough = handle_result(&mut found, foundlarge);
+                siqs_sieve_poly(&s, n, a, &pol, primes);
+                let enough = handle_result();
                 if enough {
                     break;
                 }
             }
         }
-        let s = state.lock().unwrap();
-        eprintln!(
-            "Sieved {}M {} polys found {} smooths (cofactors: {} combined, {} pending)",
-            ((s.polys_done) << (mlog + 1 - 10)) >> 10,
-            s.polys_done,
-            s.relations.len(),
-            s.extras,
-            s.larges.len(),
-        );
-        let gap = s.gap;
-        if gap == 0 {
+        let pdone = polys_done.load(Ordering::Relaxed);
+        let rels = s.rels.read().unwrap();
+        rels.log_progress(format!(
+            "Sieved {}M {} polys",
+            ((pdone) << (mlog + 1 - 10)) >> 10,
+            pdone,
+        ));
+        if gap.load(Ordering::Relaxed) == 0 {
             break;
         }
     }
-    let s = state.into_inner().unwrap();
-    if s.gap != 0 {
+    if gap.load(Ordering::Relaxed) != 0 {
         panic!("Internal error: not enough smooth numbers with selected parameters");
     }
-    s.relations
+    s.rels.into_inner().unwrap().into_inner()
 }
 
 // Parameters:
@@ -242,8 +230,34 @@ fn interval_logsize(n: &Uint) -> u32 {
     let sz = n.bits();
     match sz {
         0..=119 => 15,
-        120..=330 => 14 + sz / 70, // 15..19
+        // 270 bits => we want mlog=18
+        // 300 bits => we want mlog=19
+        120..=330 => 14 + sz / 60, // 16..19
         _ => 20,
+    }
+}
+
+fn large_prime_factor(n: &Uint, doubles: bool) -> u64 {
+    let sz = n.bits();
+    match sz {
+        0..=49 => {
+            // Large cofactors for extremely small numbers
+            // to compensate small intervals
+            100 + 2 * n.bits() as u64
+        }
+        50..=100 =>
+        // Polynomials are scarce, we need many relations:
+        {
+            300 - 2 * n.bits() as u64 // 200..100
+        }
+        _ => {
+            // Less large primes if we use double large primes.
+            if doubles {
+                n.bits() as u64 / 16
+            } else {
+                n.bits() as u64
+            }
+        }
     }
 }
 
@@ -548,12 +562,7 @@ pub fn make_polynomial(n: &Uint, a: &A, idx: usize) -> Poly {
 
 // Sieving process
 
-fn siqs_sieve_poly(
-    n: &Uint,
-    a: &A,
-    pol: &Poly,
-    primes: &[Prime],
-) -> (Vec<Relation>, Vec<Relation>) {
+fn siqs_sieve_poly(s: &SieveSIQS, n: &Uint, a: &A, pol: &Poly, primes: &[Prime]) {
     let mlog = interval_logsize(&n);
     let nblocks: usize = (2 << mlog) / BLOCK_SIZE;
     if DEBUG {
@@ -563,13 +572,6 @@ fn siqs_sieve_poly(
         );
     }
 
-    // Sieve from -M to M
-    let sieve = SieveSIQS {
-        n,
-        primes,
-        factors: &a.factors,
-        pol,
-    };
     // Construct initial state.
     let start_offset: i64 = -(1 << mlog);
     let end_offset: i64 = 1 << mlog;
@@ -577,44 +579,43 @@ fn siqs_sieve_poly(
         pol.prepare_prime(pidx, p, offset, a)
     });
     if nblocks == 0 {
-        return sieve_block_poly(&sieve, &mut state);
+        sieve_block_poly(s, &pol, a, &mut state);
     }
-    let mut result: Vec<Relation> = vec![];
-    let mut extras: Vec<Relation> = vec![];
     while state.offset < end_offset {
-        let (mut x, mut y) = sieve_block_poly(&sieve, &mut state);
-        result.append(&mut x);
-        extras.append(&mut y);
+        sieve_block_poly(s, &pol, a, &mut state);
         state.next_block();
     }
-    (result, extras)
 }
 
 struct SieveSIQS<'a> {
     n: &'a Uint,
     primes: &'a [Prime],
-    factors: &'a [&'a Prime],
-    pol: &'a Poly,
+    use_double: bool,
+    rels: RwLock<RelationSet>,
 }
 
 // Sieve using a selected polynomial
-fn sieve_block_poly(s: &SieveSIQS, st: &mut sieve::Sieve) -> (Vec<Relation>, Vec<Relation>) {
+fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
     st.sieve_block();
 
     let maxprime = s.primes.last().unwrap().p;
-    let maxlarge = maxprime * params::large_prime_factor(&s.n);
-    let mut result = vec![];
-    let mut extras = vec![];
+    let maxlarge = maxprime * large_prime_factor(&s.n, s.use_double);
+    assert!(maxlarge == (maxlarge as u32) as u64);
+    let max_cofactor: u64 = if s.use_double {
+        maxlarge * maxlarge
+    } else {
+        maxlarge
+    };
 
-    let target = s.n.bits() / 2 + interval_logsize(&s.n) - maxlarge.bits();
-    let (a, b, c, n) = (s.pol.a, s.pol.b, s.pol.c, s.n);
+    let target = s.n.bits() / 2 + interval_logsize(&s.n) - max_cofactor.bits();
+    let n = s.n;
     let (idx, facss) = st.smooths(target as u8);
     for (i, facs) in idx.into_iter().zip(facss) {
         let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
         // Evaluate polynomial Ax^2 + 2Bx+ C
         let x = Int::from(st.offset + (i as i64));
-        let ax_b = Int::from_bits(a) * x + Int::from_bits(b);
-        let v = (ax_b + Int::from_bits(b)) * x + c;
+        let ax_b = Int::from_bits(pol.a) * x + Int::from_bits(pol.b);
+        let v = (ax_b + Int::from_bits(pol.b)) * x + pol.c;
         // xrel^2 = (Ax+B)^2 = A * v mod n
         // v is never divisible by A
         if v.is_negative() {
@@ -638,11 +639,15 @@ fn sieve_block_poly(s: &SieveSIQS, st: &mut sieve::Sieve) -> (Vec<Relation>, Vec
             }
         }
         let Some(cofactor) = cofactor.to_u64() else { continue };
-        if cofactor > maxlarge {
+        if cofactor > max_cofactor {
+            continue;
+        }
+        let pq = fbase::try_factor64(cofactor);
+        if pq.is_none() && cofactor > maxlarge {
             continue;
         }
         // Complete with factors of A
-        for f in s.factors {
+        for f in &a.factors {
             if let Some(idx) = factors.iter().position(|&(p, _)| p as u64 == f.p) {
                 factors[idx].1 += 1;
             } else {
@@ -651,31 +656,18 @@ fn sieve_block_poly(s: &SieveSIQS, st: &mut sieve::Sieve) -> (Vec<Relation>, Vec
         }
         let xrel = ax_b.abs().to_bits() % n;
         let xrel = if v.is_negative() { n - xrel } else { xrel };
-        if cofactor == 1 {
-            if DEBUG {
-                eprintln!("i={} smooth {}", i, v);
-            }
-            let rel = Relation {
-                x: xrel,
-                cofactor: 1,
-                factors,
-            };
-            debug_assert!(rel.verify(&s.n));
-            result.push(rel);
-        } else {
-            if DEBUG {
-                eprintln!("x={} smooth {} cofactor {}", x, v, cofactor);
-            }
-            let rel = Relation {
-                x: xrel,
-                cofactor: cofactor,
-                factors,
-            };
-            debug_assert!(rel.verify(s.n));
-            extras.push(rel);
+        if DEBUG {
+            eprintln!("x={} smooth {} cofactor {}", x, v, cofactor);
         }
+        let rel = Relation {
+            x: xrel,
+            cofactor,
+            factors,
+            pp: false,
+        };
+        debug_assert!(rel.verify(&s.n));
+        s.rels.write().unwrap().add(rel, pq);
     }
-    (result, extras)
 }
 
 #[test]

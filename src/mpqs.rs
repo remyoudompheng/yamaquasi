@@ -8,7 +8,7 @@
 //! Robert D. Silverman, The multiple polynomial quadratic sieve
 //! Math. Comp. 48, 1987, https://doi.org/10.1090/S0025-5718-1987-0866119-8
 
-use std::collections::HashMap;
+use std::sync::RwLock;
 
 use bnum::cast::CastFrom;
 use num_traits::One;
@@ -17,7 +17,7 @@ use rayon::prelude::*;
 use crate::arith::{inv_mod, isqrt, pow_mod, Num, U256};
 use crate::fbase::{self, Prime};
 use crate::params::{self, BLOCK_SIZE};
-use crate::relations::{combine_large_relation, relation_gap, Relation};
+use crate::relations::{Relation, RelationSet};
 use crate::sieve;
 use crate::{Int, Uint, DEBUG};
 
@@ -35,9 +35,6 @@ pub fn mpqs(n: Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Vec<
     eprintln!("Factor base size {} ({:?})", primes.len(), smallprimes);
 
     let mut target = primes.len() * 8 / 10;
-    let mut relations = vec![];
-    let mut larges = HashMap::<u64, Relation>::new();
-    let mut extras = 0;
     let fb = primes.len();
     let mlog = mpqs_interval_logsize(&n);
     if mlog >= 20 {
@@ -70,36 +67,36 @@ pub fn mpqs(n: Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Vec<
     let mut polys = select_polys(polybase, polystride as usize, &n);
     let mut polyidx = 0;
     let mut polys_done = 0;
+    let use_double = n.bits() > 256;
     eprintln!("Generated {} polynomials", polys.len());
-    let maxlarge: u64 = maxprime * large_prime_factor(&n);
+    let maxlarge: u64 = maxprime * large_prime_factor(&n, use_double);
+    let rels = RwLock::new(RelationSet::new(n, maxlarge));
     eprintln!("Max cofactor {}", maxlarge);
     loop {
         // Pop next polynomial.
         if polyidx == polys.len() {
-            let gap = relation_gap(&relations);
+            let rels = rels.read().unwrap();
+            let gap = rels.gap();
             if gap == 0 {
                 eprintln!("Found enough relations");
                 break;
             }
-            eprintln!(
-                "Sieved {}M {} polys found {} smooths (cofactors: {} combined, {} pending)",
+            rels.log_progress(format!(
+                "Sieved {}M {} polys",
                 ((polys_done) << (mlog + 1 - 10)) >> 10,
                 polys_done,
-                relations.len(),
-                extras,
-                larges.len(),
-            );
+            ));
             polybase += Uint::from(polystride);
             polys = select_polys(polybase, polystride as usize, &n);
             polyidx = 0;
             eprintln!("Generated {} polynomials", polys.len());
         }
-        let mut results: Vec<(Vec<_>, Vec<_>)> = if let Some(pool) = tpool {
+        if let Some(pool) = tpool {
             // Parallel sieving: do all polynomials at once.
             let v = pool.install(|| {
                 (&polys[polyidx..])
                     .par_iter()
-                    .map(|p| mpqs_poly(p, n, &primes))
+                    .map(|p| mpqs_poly(p, n, &primes, use_double, &rels))
                     .collect()
             });
             polys_done += polys.len() - polyidx;
@@ -110,19 +107,11 @@ pub fn mpqs(n: Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Vec<
             let pol = &polys[polyidx];
             polyidx += 1;
             polys_done += 1;
-            vec![mpqs_poly(pol, n, &primes)]
-        };
-        for (ref mut found, foundlarge) in &mut results {
-            relations.append(found);
-            for r in foundlarge {
-                if let Some(rr) = combine_large_relation(&mut larges, &r, &n) {
-                    relations.push(rr);
-                    extras += 1;
-                }
-            }
+            mpqs_poly(pol, n, &primes, use_double, &rels);
         }
-        if relations.len() >= target {
-            let gap = relation_gap(&relations);
+        let rels = rels.read().unwrap();
+        if rels.len() >= target {
+            let gap = rels.gap();
             if gap == 0 {
                 eprintln!("Found enough relations");
                 break;
@@ -132,15 +121,15 @@ pub fn mpqs(n: Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Vec<
             }
         }
     }
-    eprintln!(
-        "Sieved {}M {} polys found {} smooths (cofactors: {} combined, {} pending)",
-        ((polys_done) << (mlog + 1 - 10)) >> 10,
-        polys_done,
-        relations.len(),
-        extras,
-        larges.len(),
-    );
-    relations
+    {
+        let r = rels.read().unwrap();
+        r.log_progress(format!(
+            "Sieved {}M {} polys",
+            ((polys_done) << (mlog + 1 - 10)) >> 10,
+            polys_done,
+        ));
+    }
+    rels.into_inner().unwrap().into_inner()
 }
 
 /// A polynomial is an omitted quadratic Ax^2 + Bx + C
@@ -387,7 +376,7 @@ fn test_select_poly() {
 }
 
 // One MPQS unit of work, identified by an integer 'idx'.
-fn mpqs_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Relation>) {
+fn mpqs_poly(pol: &Poly, n: Uint, primes: &[Prime], use_double: bool, rels: &RwLock<RelationSet>) {
     let mlog = mpqs_interval_logsize(&n);
     let nblocks = (2 << mlog) / BLOCK_SIZE;
     if DEBUG {
@@ -409,6 +398,8 @@ fn mpqs_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Relat
         pol,
         dinv,
         d2inv,
+        use_double,
+        rels: rels,
     };
 
     let start_offset = -(1 << mlog);
@@ -417,17 +408,12 @@ fn mpqs_poly(pol: &Poly, n: Uint, primes: &[Prime]) -> (Vec<Relation>, Vec<Relat
         pol.prepare_prime(p, offset as i32)
     });
     if nblocks == 0 {
-        return sieve_block_poly(&sieve, &mut state);
+        sieve_block_poly(&sieve, &mut state);
     }
-    let mut result: Vec<Relation> = vec![];
-    let mut extras: Vec<Relation> = vec![];
     while state.offset < end_offset {
-        let (mut x, mut y) = sieve_block_poly(&sieve, &mut state);
-        result.append(&mut x);
-        extras.append(&mut y);
+        sieve_block_poly(&sieve, &mut state);
         state.next_block();
     }
-    (result, extras)
 }
 
 fn mpqs_interval_logsize(n: &Uint) -> u32 {
@@ -444,7 +430,7 @@ fn mpqs_interval_logsize(n: &Uint) -> u32 {
     }
 }
 
-fn large_prime_factor(n: &Uint) -> u64 {
+fn large_prime_factor(n: &Uint, doubles: bool) -> u64 {
     // Allow large cofactors up to FACTOR * largest prime
     let sz = n.bits();
     match sz {
@@ -458,7 +444,14 @@ fn large_prime_factor(n: &Uint) -> u64 {
         {
             300 - 2 * n.bits() as u64 // 200..100
         }
-        _ => n.bits() as u64,
+        _ => {
+            // Less large primes if we use double large primes.
+            if doubles {
+                n.bits() as u64 / 16
+            } else {
+                n.bits() as u64
+            }
+        }
     }
 }
 
@@ -468,19 +461,24 @@ struct SieveMPQS<'a> {
     pol: &'a Poly,
     dinv: Uint,
     d2inv: Uint,
+    use_double: bool,
+    rels: &'a RwLock<RelationSet>,
 }
 
 // Sieve using a selected polynomial
-fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) -> (Vec<Relation>, Vec<Relation>) {
+fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) {
     st.sieve_block();
 
     let offset = st.offset;
     let maxprime = s.primes.last().unwrap().p;
-    let maxlarge = maxprime * large_prime_factor(&s.n);
-    let mut result = vec![];
-    let mut extras = vec![];
-
-    let target = s.n.bits() / 2 + mpqs_interval_logsize(&s.n) - maxlarge.bits();
+    let maxlarge = maxprime * large_prime_factor(&s.n, s.use_double);
+    assert!(maxlarge == (maxlarge as u32) as u64);
+    let max_cofactor: u64 = if s.use_double {
+        maxlarge * maxlarge
+    } else {
+        maxlarge
+    };
+    let target = s.n.bits() / 2 + mpqs_interval_logsize(&s.n) - max_cofactor.bits();
     let (pol, n, dinv, d2inv) = (s.pol, &s.n, &s.dinv, &s.d2inv);
     let (idxs, facss) = st.smooths(target as u8);
     for (i, facs) in idxs.into_iter().zip(facss) {
@@ -508,34 +506,29 @@ fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) -> (Vec<Relation>, Vec
             factors.push((p.p as i64, exp));
         }
         let Some(cofactor) = cofactor.to_u64() else { continue };
-        if cofactor > maxlarge {
+        if cofactor > max_cofactor {
             continue;
         }
+        let pq = fbase::try_factor64(cofactor);
+        if pq.is_none() && cofactor > maxlarge {
+            continue;
+        }
+
         let sabs = (x.abs().to_bits() * dinv) % n;
         let xrel = if candidate.is_negative() {
             n - sabs
         } else {
             sabs
         };
-        if cofactor == 1 {
-            if DEBUG {
-                eprintln!("i={} smooth {}", i, cabs);
-            }
-            result.push(Relation {
-                x: xrel,
-                cofactor: 1,
-                factors,
-            });
-        } else {
-            if DEBUG {
-                eprintln!("i={} smooth {} cofactor {}", i, cabs, cofactor);
-            }
-            extras.push(Relation {
-                x: xrel,
-                cofactor: cofactor,
-                factors,
-            });
+        if DEBUG {
+            eprintln!("i={} smooth {} cofactor {}", i, cabs, cofactor);
         }
+        let rel = Relation {
+            x: xrel,
+            cofactor,
+            factors,
+            pp: false,
+        };
+        s.rels.write().unwrap().add(rel, pq);
     }
-    (result, extras)
 }

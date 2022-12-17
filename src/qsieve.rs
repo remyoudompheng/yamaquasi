@@ -8,12 +8,12 @@
 //! J. Gerver, Factoring Large Numbers with a Quadratic Sieve
 //! https://www.jstor.org/stable/2007781
 
-use std::collections::HashMap;
+use std::sync::RwLock;
 
 use crate::arith::{isqrt, Num};
 use crate::fbase::{self, Prime};
 use crate::params::{self, large_prime_factor, BLOCK_SIZE};
-use crate::relations::{combine_large_relation, relation_gap, Relation};
+use crate::relations::{Relation, RelationSet};
 use crate::sieve::Sieve;
 use crate::{Int, Uint};
 
@@ -30,10 +30,6 @@ pub fn qsieve(n: Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Ve
     let smallprimes: Vec<u64> = primes.iter().map(|f| f.p).take(10).collect();
     eprintln!("Factor base size {} ({:?})", primes.len(), smallprimes);
 
-    // Prepare sieve
-    let maxlarge: u64 = primes.last().unwrap().p * large_prime_factor(&n);
-    eprintln!("Max cofactor {}", maxlarge);
-
     // Naïve quadratic sieve with polynomial x²-n (x=-M..M)
     // Max value is X = sqrt(n) * M
     // Smooth bound Y = exp(1/2 sqrt(log X log log X))
@@ -49,54 +45,35 @@ pub fn qsieve(n: Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Ve
     // Backward: polynomial (R-1-x)^2 - N where r = isqrt(N)
     // => roots are sqrt(N) + R-1
 
-    let mut relations = vec![];
     let mut target = primes.len() * 8 / 10;
-    let mut larges = HashMap::<u64, Relation>::new();
-    let mut extras = 0;
 
     let qs = SieveQS::new(n, primes);
+    eprintln!("Max large prime {}", qs.maxlarge);
     // Construct 2 initial states, forward and backwards.
     let (mut s_fwd, mut s_bck) = qs.init(None);
     loop {
-        let (r1, r2) = if let Some(pool) = tpool {
+        if let Some(pool) = tpool {
             pool.install(|| {
                 rayon::join(
                     || sieve_block(&qs, &mut s_fwd, false),
                     || sieve_block(&qs, &mut s_bck, true),
                 )
-            })
+            });
         } else {
-            (
-                sieve_block(&qs, &mut s_fwd, false),
-                sieve_block(&qs, &mut s_bck, true),
-            )
-        };
-        let (mut found, foundlarge) = r1;
-        if found.len() > primes.len() + 16 {
+            sieve_block(&qs, &mut s_fwd, false);
+            sieve_block(&qs, &mut s_bck, true);
+        }
+        let mut rels = qs.rels.write().unwrap();
+        if rels.len() > primes.len() + 16 {
             // Too many relations! May happen for very small inputs.
-            relations.extend_from_slice(&mut found[..primes.len() + 16]);
-            let gap = relation_gap(&relations);
+            rels.complete.truncate(primes.len() + 16);
+            let gap = rels.gap();
             if gap == 0 {
                 eprintln!("Found enough relations");
                 break;
             } else {
                 eprintln!("Need {} additional relations", gap);
-                target = relations.len() + gap + 16;
-            }
-        }
-        relations.append(&mut found);
-        for r in foundlarge {
-            if let Some(rr) = combine_large_relation(&mut larges, &r, &n) {
-                relations.push(rr);
-                extras += 1;
-            }
-        }
-        let (mut found, foundlarge) = r2;
-        relations.append(&mut found);
-        for r in foundlarge {
-            if let Some(rr) = combine_large_relation(&mut larges, &r, &n) {
-                relations.push(rr);
-                extras += 1;
+                target = rels.len() + gap + 16;
             }
         }
 
@@ -118,33 +95,34 @@ pub fn qsieve(n: Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Ve
             eprintln!(
                 "Sieved {}M found {} smooths (cofactors: {} combined, {} pending)",
                 sieved >> 20,
-                relations.len(),
-                extras,
-                larges.len(),
+                rels.len(),
+                rels.n_combined,
+                rels.n_partials,
             );
         }
         // For small n the sieve must stop quickly:
         // test whether we already have enough relations.
-        if n.bits() < 64 || relations.len() >= target {
-            let gap = relation_gap(&relations);
+        if n.bits() < 64 || rels.len() >= target {
+            let gap = rels.gap();
             if gap == 0 {
                 eprintln!("Found enough relations");
                 break;
             } else {
                 eprintln!("Need {} additional relations", gap);
-                target = relations.len() + gap + 10;
+                target = rels.len() + gap + 10;
             }
         }
     }
     let sieved = s_fwd.offset + s_bck.offset;
+    let rels = qs.rels.into_inner().unwrap();
     eprintln!(
         "Sieved {:.1}M found {} smooths (cofactors: {} combined, {} pending)",
         (sieved as f64) / ((1 << 20) as f64),
-        relations.len(),
-        extras,
-        larges.len(),
+        rels.len(),
+        rels.n_combined,
+        rels.n_partials,
     );
-    relations
+    rels.into_inner()
 }
 
 pub struct SieveQS<'a> {
@@ -153,6 +131,9 @@ pub struct SieveQS<'a> {
     // Precomputed nsqrt_mods modulo the factor base.
     nsqrt_mods: Vec<u32>,
     primes: &'a [Prime],
+
+    maxlarge: u64,
+    rels: RwLock<RelationSet>,
 }
 
 impl<'a> SieveQS<'a> {
@@ -162,11 +143,15 @@ impl<'a> SieveQS<'a> {
             .iter()
             .map(|p| p.div.mod_uint(&nsqrt) as u32)
             .collect();
+        // Prepare sieve
+        let maxlarge: u64 = primes.last().unwrap().p * large_prime_factor(&n);
         SieveQS {
             n,
             nsqrt,
             primes,
             nsqrt_mods,
+            maxlarge,
+            rels: RwLock::new(RelationSet::new(n, maxlarge)),
         }
     }
 
@@ -225,15 +210,13 @@ impl<'a> SieveQS<'a> {
     }
 }
 
-fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) -> (Vec<Relation>, Vec<Relation>) {
+fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
     st.sieve_block();
 
     let len: usize = BLOCK_SIZE;
     let offset = st.offset;
     let maxprime = st.primes.last().unwrap().p;
     let maxlarge = maxprime * large_prime_factor(&s.n);
-    let mut result = vec![];
-    let mut extras = vec![];
     let magnitude =
         u64::BITS - u64::leading_zeros(std::cmp::max(st.offset.abs() as u64, len as u64));
     let target = s.n.bits() / 2 + magnitude - maxlarge.bits();
@@ -271,18 +254,17 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) -> (Vec<Relation>, V
         let rel = Relation {
             x: x.abs().to_bits(),
             cofactor,
+            pp: false,
             factors,
         };
         debug_assert!(
             rel.verify(&s.n),
             "INTERNAL ERROR: failed relation check {:?}",
-            rel
+            &rel
         );
-        if cofactor == 1 {
-            result.push(rel)
-        } else {
-            extras.push(rel)
-        }
+        s.rels
+            .write()
+            .unwrap()
+            .add(rel, fbase::try_factor64(cofactor));
     }
-    (result, extras)
 }
