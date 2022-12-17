@@ -114,8 +114,9 @@ pub struct Sieve<'a> {
     // Cache for large prime hits
     // In each bucket, store the idx of an element of primes
     // A zero value means an empty slot.
-    // Elements are: (block offset, log(p), pidx)
-    pub largehits: Vec<Vec<(u16, u16, u32)>>,
+    // Elements are bitfields defined by large_entry()
+    // containing (block offset, log(p), pidx)
+    pub largehits: Vec<Vec<u32>>,
     pub largeoffs: Vec<Vec<u8>>,
     pub blogsize: usize,
 }
@@ -157,7 +158,7 @@ impl<'a> Sieve<'a> {
         let (mut largehits, mut largeoffs) = if maxprime > BLOCK_SIZE as u64 {
             // No need to allocate large maps.
             (
-                vec![vec![(0u16, 0u16, 0u32); BUCKETSIZE * nbuckets]; nblocks],
+                vec![vec![0u32; BUCKETSIZE * nbuckets]; nblocks],
                 vec![vec![0u8; nbuckets]; nblocks],
             )
         } else {
@@ -194,6 +195,7 @@ impl<'a> Sieve<'a> {
                             break;
                         }
                         let blk_off = off % BLOCK_SIZE;
+                        let bucket_off = blk_off % (1 << blogsize);
                         // Insert in large table
                         let b = blk_off >> blogsize;
                         unsafe {
@@ -201,12 +203,10 @@ impl<'a> Sieve<'a> {
                             let blen = *blen_p;
                             if blen < BUCKETSIZE as u8 {
                                 // std::mem::replace compiles to a single 64-bit mov
-                                _ = std::mem::replace(
-                                    largehits
-                                        .get_unchecked_mut(blk_no)
-                                        .get_unchecked_mut(b * BUCKETSIZE + blen as usize),
-                                    (blk_off as u16, l as u16, idx as u32),
-                                );
+                                *largehits
+                                    .get_unchecked_mut(blk_no)
+                                    .get_unchecked_mut(b * BUCKETSIZE + blen as usize) =
+                                    Self::to_large_entry(bucket_off as u8, l as u8, idx as u32);
                                 *blen_p += 1;
                                 if *blen_p as usize + 1 == BUCKETSIZE {
                                     eprintln!("large bucket overflow!");
@@ -243,6 +243,24 @@ impl<'a> Sieve<'a> {
         }
     }
 
+    #[inline]
+    fn to_large_entry(bucket_off: u8, logp: u8, pidx: u32) -> u32 {
+        // Encode as:
+        // logp-16 => 3 bits
+        // bucket_off => 9 bits
+        // pidx => 20 bits
+        ((logp as u32 - 16) << 29) | (bucket_off as u32) << 20 | pidx
+    }
+
+    #[inline]
+    fn from_large_entry(x: u32) -> (u32, u8, u32) {
+        (
+            (x >> 20) as u32 & 511, // bucket_off
+            16 + (x >> 29) as u8,   // logp
+            x & ((1 << 20) - 1),
+        )
+    }
+
     // Recompute largehits/largeoffs for next blocks.
     // This is onyl for classic quadratic sieve where a single
     // polynomial is sieved over a huge interval.
@@ -257,7 +275,7 @@ impl<'a> Sieve<'a> {
         }
         for i in 0..nblocks {
             self.largeoffs[i].fill(0);
-            self.largehits[i].fill((0, 0, 0));
+            self.largehits[i].fill(0u32);
         }
         for (idx, p) in self.primes.iter().enumerate() {
             if p.p < BLOCK_SIZE as u64 {
@@ -273,12 +291,13 @@ impl<'a> Sieve<'a> {
                         break;
                     }
                     let blk_off = off % BLOCK_SIZE;
+                    let bucket_off = blk_off % (1 << self.blogsize);
                     // Insert in large table
                     let b = self.bucket(blk_off as u16);
                     let blen = self.largeoffs[blk_no][b];
                     if blen < BUCKETSIZE as u8 {
                         self.largehits[blk_no][b * BUCKETSIZE + blen as usize] =
-                            (blk_off as u16, l as u16, idx as u32);
+                            Self::to_large_entry(bucket_off as u8, l as u8, idx as u32);
                         self.largeoffs[blk_no][b] = blen + 1;
                         if blen as usize + 1 == BUCKETSIZE {
                             eprintln!("large bucket overflow!");
@@ -357,11 +376,13 @@ impl<'a> Sieve<'a> {
             unsafe {
                 let bucket = largeidx.get_unchecked(i * BUCKETSIZE..(i + 1) * BUCKETSIZE);
                 for j in 0..BUCKETSIZE {
-                    let (off, logp, _) = *bucket.get_unchecked(j);
-                    if logp == 0 {
+                    let x: u32 = *bucket.get_unchecked(j);
+                    if x == 0 {
                         break;
                     }
-                    *blk.get_unchecked_mut(off as usize) += logp as u8;
+                    let (bucket_off, logp, _) = Self::from_large_entry(x);
+                    let off = (i << self.blogsize) + bucket_off as usize;
+                    *blk.get_unchecked_mut(off) += logp as u8;
                 }
             }
         }
@@ -488,11 +509,13 @@ impl<'a> Sieve<'a> {
         for j in 0..rlen {
             let r = res[j];
             let b = self.bucket(r);
-            for &(off, _, pidx) in &largeidx[b * BUCKETSIZE..(b + 1) * BUCKETSIZE] {
-                if pidx == 0 {
+            let boff = r & ((1 << self.blogsize) - 1);
+            for &x in &largeidx[b * BUCKETSIZE..(b + 1) * BUCKETSIZE] {
+                if x == 0 {
                     break;
                 }
-                if off == r {
+                let (off, _, pidx) = Self::from_large_entry(x);
+                if boff as u32 == off {
                     facs[j].push(&self.primes[pidx as usize]);
                 }
             }

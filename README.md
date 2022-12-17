@@ -103,6 +103,13 @@ interval `[0,M]` and the backward sieve interval `[-M,0]` simultaneously.
 It is used in the MPQS and the SIQS/HMPQS implementation to process a batch
 of polynomials over a thread pool.
 
+# Memory usage
+
+Implementation choices do not attempt to aggressively reduce memory usage
+and targets home devices with fewer than 16 cores and more than 4GB of memory.
+In particular it does not write relations to disk, but keeps them entirely
+in memory. Data structures are optimized only for cache-sensitive parts of the code.
+
 ## Linear algebra
 
 Kernel computation for mod 2 matrices is done through a naïve Gauss reduction
