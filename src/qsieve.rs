@@ -111,7 +111,9 @@ pub fn qsieve(
         }
 
         let sieved = s_fwd.offset + s_bck.offset;
-        let do_print = if sieved > (200 << 20) {
+        let do_print = if sieved > (5 << 30) {
+            sieved % (500 << 20) == 0
+        } else if sieved > (500 << 20) {
             sieved % (50 << 20) == 0
         } else {
             sieved % (10 << 20) == 0

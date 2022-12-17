@@ -96,7 +96,7 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(5133);
         let fb = fbase::prepare_factor_base(&n, &primes[..]);
-        let qs = qsieve::SieveQS::new(n, &fb);
+        let qs = qsieve::SieveQS::new(n, &fb, 10_000_000, false);
         let s = qs.init(None).0;
         Bench::new("clone sieve structure (no-op)")
         .run_seeded(s, |s| {
@@ -107,7 +107,7 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(5133);
         let fb = fbase::prepare_factor_base(&n, &primes[..]);
-        let qs = qsieve::SieveQS::new(n, &fb);
+        let qs = qsieve::SieveQS::new(n, &fb, 10_000_000, false);
         let s = qs.init(None).0;
         Bench::new("sieve 32k block with ~2500 primes")
         .run_seeded(s, |s| {
@@ -121,7 +121,7 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(20000);
         let fb = fbase::prepare_factor_base(&n, &primes[..]);
-        let qs = qsieve::SieveQS::new(n, &fb);
+        let qs = qsieve::SieveQS::new(n, &fb, 10_000_000, false);
         let s = qs.init(None).0;
         Bench::new("sieve 32k block with ~10000 primes")
         .run_seeded(s, |s| {
@@ -135,7 +135,7 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(100000);
         let fb = fbase::prepare_factor_base(&n, &primes[..]);
-        let qs = qsieve::SieveQS::new(n, &fb);
+        let qs = qsieve::SieveQS::new(n, &fb, 10_000_000, false);
         let s = qs.init(None).0;
         Bench::new("sieve 32k block with ~50000 primes")
         .run_seeded(s, |s| {
@@ -149,7 +149,7 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(5133);
         let fb = fbase::prepare_factor_base(&n, &primes[3..]);
-        let qs = qsieve::SieveQS::new(n, &fb);
+        let qs = qsieve::SieveQS::new(n, &fb, 10_000_000, false);
         let s = qs.init(None).0;
         Bench::new("sieve 32k block with [3..2500] primes")
         .run_seeded(s, |s| {
@@ -162,7 +162,7 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(20000);
         let fb = fbase::prepare_factor_base(&n, &primes[5..]);
-        let qs = qsieve::SieveQS::new(n, &fb);
+        let qs = qsieve::SieveQS::new(n, &fb, 10_000_000, false);
         let s = qs.init(None).0;
         Bench::new("sieve 32k block with [5..10000] primes")
         .run_seeded(s, |s| {
@@ -175,7 +175,7 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(100000);
         let fb = fbase::prepare_factor_base(&n, &primes[10..]);
-        let qs = qsieve::SieveQS::new(n, &fb);
+        let qs = qsieve::SieveQS::new(n, &fb, 10_000_000, false);
         let s = qs.init(None).0;
         Bench::new("sieve 32k block with [10..50000] primes")
         .run_seeded(s, |s| {
@@ -188,7 +188,7 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(5133);
         let fb = fbase::prepare_factor_base(&n, &primes[..]);
-        let qs = qsieve::SieveQS::new(n, &fb);
+        let qs = qsieve::SieveQS::new(n, &fb, 10_000_000, false);
         let s = qs.init(None).0;
         Bench::new("sieve+factor 32k block with ~2500 primes")
         .run_seeded(s, |s| {
@@ -203,7 +203,7 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(20000);
         let fb = fbase::prepare_factor_base(&n, &primes[..]);
-        let qs = qsieve::SieveQS::new(n, &fb);
+        let qs = qsieve::SieveQS::new(n, &fb, 10_000_000, false);
         let s = qs.init(None).0;
         Bench::new("sieve+factor 32k block with ~10000 primes")
         .run_seeded(s, |s| {
@@ -218,7 +218,7 @@ brunch::benches! {
         let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
         let primes = fbase::primes(100000);
         let fb = fbase::prepare_factor_base(&n, &primes[..]);
-        let qs = qsieve::SieveQS::new(n, &fb);
+        let qs = qsieve::SieveQS::new(n, &fb, 10_000_000, false);
         let s = qs.init(None).0;
         Bench::new("sieve+factor 32k block with ~50000 primes")
         .run_seeded(s, |s| {
