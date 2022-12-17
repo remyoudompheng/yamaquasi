@@ -18,7 +18,7 @@ use yamaquasi::arith::{Num, U1024};
 use yamaquasi::fbase;
 use yamaquasi::relations::final_step;
 use yamaquasi::Uint;
-use yamaquasi::{mpqs, qsieve, qsieve64, siqs};
+use yamaquasi::{mpqs, params, qsieve, qsieve64, siqs};
 
 fn main() {
     let arg = arguments::parse(std::env::args()).unwrap();
@@ -30,11 +30,15 @@ fn main() {
         eprintln!("  --mode qs|qs64|mpqs|siqs: force algorithm selection");
         eprintln!("  --threads N:              enable up to N computation threads");
         eprintln!("  --fb F:                   override automatic factor base size");
+        eprintln!("  --large B1:               multiplier for large primes");
+        eprintln!("  --use-double true|false:  use double large prime");
         return;
     }
     let mode = arg.get::<String>("mode").unwrap_or("mpqs".into());
     let threads = arg.get::<usize>("threads");
     let fb_user = arg.get::<u32>("fb");
+    let large = arg.get::<u64>("large");
+    let double = arg.get::<bool>("use-double");
     let number = &arg.orphans[0];
     let n = U1024::from_str(number).expect("could not read decimal number");
     const MAXBITS: u32 = 2 * (256 - 30);
@@ -81,10 +85,15 @@ fn main() {
     });
     let tpool = tpool.as_ref();
 
+    let prefs = params::Preferences {
+        fb_size: fb_user,
+        large_factor: large,
+        use_double: double,
+    };
     let rels = match &mode[..] {
-        "qs" => qsieve::qsieve(nk, fb_user, tpool),
-        "mpqs" => mpqs::mpqs(nk, fb_user, tpool),
-        "siqs" => siqs::siqs(&nk, fb_user, tpool),
+        "qs" => qsieve::qsieve(nk, &prefs, tpool),
+        "mpqs" => mpqs::mpqs(nk, &prefs, tpool),
+        "siqs" => siqs::siqs(&nk, &prefs, tpool),
         _ => {
             eprintln!("Invalid operation mode {:?}", mode);
             return;

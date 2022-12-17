@@ -595,7 +595,7 @@ fn test_sieve_block() {
     let primes = fbase::primes(5133);
     let fb = fbase::prepare_factor_base(&n, &primes[..]);
     let nsqrt = crate::arith::isqrt(n);
-    let qs = qsieve::SieveQS::new(n, &fb[..]);
+    let qs = qsieve::SieveQS::new(n, &fb[..], 1 << 30, false);
     let mut s = qs.init(None).0;
     s.sieve_block();
     let expect: &[u16] = &[

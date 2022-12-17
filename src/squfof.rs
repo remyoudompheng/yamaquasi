@@ -134,6 +134,12 @@ fn test_squfof() {
             assert!(x > 1 && y > 1 && x * y == p * q);
         }
     }
+
+    // Primes
+    let ps: &[u64] = &[1429332497];
+    for &p in ps {
+        assert_eq!(squfof(p), None);
+    }
 }
 
 #[test]

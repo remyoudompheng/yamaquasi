@@ -31,10 +31,14 @@ use crate::relations::{Relation, RelationSet};
 use crate::sieve;
 use crate::{Int, Uint, DEBUG};
 
-pub fn siqs(n: &Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Vec<Relation> {
+pub fn siqs(
+    n: &Uint,
+    prefs: &params::Preferences,
+    tpool: Option<&rayon::ThreadPool>,
+) -> Vec<Relation> {
     // Choose factor base. Sieve twice the number of primes
     // (n will be a quadratic residue for only half of them)
-    let fb = fb.unwrap_or(params::factor_base_size(&n));
+    let fb = prefs.fb_size.unwrap_or(params::factor_base_size(&n));
     let primes = fbase::primes(2 * fb);
     eprintln!("Smoothness bound {}", primes.last().unwrap());
     let primes: Vec<Prime> = fbase::prepare_factor_base(&n, &primes);
@@ -70,7 +74,7 @@ pub fn siqs(n: &Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Vec
     let done = AtomicBool::new(false);
 
     let maxprime = primes.last().unwrap().p;
-    let use_double = n.bits() > 256;
+    let use_double = prefs.use_double.unwrap_or(n.bits() > 256);
     let maxlarge: u64 = maxprime * large_prime_factor(&n, use_double);
     eprintln!("Max large prime {}", maxlarge);
 
@@ -638,9 +642,9 @@ fn siqs_sieve_poly(s: &SieveSIQS, n: &Uint, a: &A, pol: &Poly) -> () {
 struct SieveSIQS<'a> {
     n: &'a Uint,
     primes: &'a [Prime],
+    maxlarge: u64,
     use_double: bool,
     rels: RwLock<RelationSet>,
-    maxlarge: u64,
     pdata: Vec<(u64, u32)>,
 }
 
@@ -674,8 +678,7 @@ impl<'a> SieveSIQS<'a> {
 fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
     st.sieve_block();
 
-    let maxprime = s.primes.last().unwrap().p;
-    let maxlarge = maxprime * large_prime_factor(&s.n, s.use_double);
+    let maxlarge = s.maxlarge;
     assert!(maxlarge == (maxlarge as u32) as u64);
     let max_cofactor: u64 = if s.use_double {
         maxlarge * maxlarge

@@ -1,5 +1,12 @@
 use crate::Uint;
 
+// User preferences
+pub struct Preferences {
+    pub fb_size: Option<u32>,
+    pub large_factor: Option<u64>,
+    pub use_double: Option<bool>,
+}
+
 // Fits L1 cache size per core on most reasonable CPUs.
 pub const BLOCK_SIZE: usize = 32 * 1024;
 

@@ -17,10 +17,29 @@ use crate::relations::{Relation, RelationSet};
 use crate::sieve::{Sieve, SievePrime};
 use crate::{Int, Uint};
 
-pub fn qsieve(n: Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Vec<Relation> {
-    // Choose factor base. Sieve twice the number of primes
+pub fn qsieve(
+    n: Uint,
+    prefs: &params::Preferences,
+    tpool: Option<&rayon::ThreadPool>,
+) -> Vec<Relation> {
+    let use_double = prefs.use_double.unwrap_or(n.bits() > 200);
+
+    // Choose factor base among twice the number of needed primes
     // (n will be a quadratic residue for only half of them)
-    let fb = fb.unwrap_or(params::factor_base_size(&n));
+    //
+    // Compared to MPQS, classical quadratic sieve uses a single huge interval
+    // so resulting numbers can be larger by 15-30 bits. Choose factor base size
+    // as if n was larger than it really is.
+    let shift = if n.bits() > 100 {
+        (n.bits() - 100) / 10
+    } else {
+        0
+    };
+    let fb = prefs
+        .fb_size
+        .unwrap_or(params::factor_base_size(&(n << shift)));
+    // When using double large primes, use a smaller factor base.
+    let fb = if use_double { fb * 3 / 4 } else { fb };
     let primes = fbase::primes(2 * fb);
     eprintln!("Smoothness bound {}", primes.last().unwrap());
     let primes: Vec<Prime> = fbase::prepare_factor_base(&n, &primes);
@@ -47,7 +66,13 @@ pub fn qsieve(n: Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Ve
 
     let mut target = primes.len() * 8 / 10;
 
-    let qs = SieveQS::new(n, primes);
+    let mut maxlarge: u64 =
+        primes.last().unwrap().p * prefs.large_factor.unwrap_or(large_prime_factor(&n));
+    if use_double {
+        // When using double large primes, use smaller larges.
+        maxlarge /= 2
+    }
+    let qs = SieveQS::new(n, primes, maxlarge, use_double);
     eprintln!("Max large prime {}", qs.maxlarge);
     // Construct 2 initial states, forward and backwards.
     let (mut s_fwd, mut s_bck) = qs.init(None);
@@ -92,13 +117,7 @@ pub fn qsieve(n: Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Ve
             sieved % (10 << 20) == 0
         };
         if do_print {
-            eprintln!(
-                "Sieved {}M found {} smooths (cofactors: {} combined, {} pending)",
-                sieved >> 20,
-                rels.len(),
-                rels.n_combined,
-                rels.n_partials,
-            );
+            rels.log_progress(format!("Sieved {}M", sieved >> 20,));
         }
         // For small n the sieve must stop quickly:
         // test whether we already have enough relations.
@@ -133,24 +152,25 @@ pub struct SieveQS<'a> {
     primes: &'a [Prime],
 
     maxlarge: u64,
+    use_double: bool,
     rels: RwLock<RelationSet>,
 }
 
 impl<'a> SieveQS<'a> {
-    pub fn new(n: Uint, primes: &'a [Prime]) -> Self {
+    pub fn new(n: Uint, primes: &'a [Prime], maxlarge: u64, use_double: bool) -> Self {
         let nsqrt = isqrt(n);
         let nsqrt_mods: Vec<u32> = primes
             .iter()
             .map(|p| p.div.mod_uint(&nsqrt) as u32)
             .collect();
         // Prepare sieve
-        let maxlarge: u64 = primes.last().unwrap().p * large_prime_factor(&n);
         SieveQS {
             n,
             nsqrt,
             primes,
             nsqrt_mods,
             maxlarge,
+            use_double,
             rels: RwLock::new(RelationSet::new(n, maxlarge)),
         }
     }
@@ -227,10 +247,15 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
     let len: usize = BLOCK_SIZE;
     let offset = st.offset;
     let maxprime = st.primes.last().unwrap().p;
-    let maxlarge = maxprime * large_prime_factor(&s.n);
+    let maxlarge = s.maxlarge;
+    let max_cofactor = if s.use_double {
+        maxlarge * maxlarge
+    } else {
+        maxlarge
+    };
     let magnitude =
         u64::BITS - u64::leading_zeros(std::cmp::max(st.offset.abs() as u64, len as u64));
-    let target = s.n.bits() / 2 + magnitude - maxlarge.bits();
+    let target = s.n.bits() / 2 + magnitude - max_cofactor.bits();
     assert!(target < 256);
     let n = &s.n;
     let (idxs, facss) = st.smooths(target as u8);
@@ -261,6 +286,14 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
             factors.push((p.p as i64, exp));
         }
         let Some(cofactor) = cofactor.to_u64() else { continue };
+        if cofactor > max_cofactor {
+            continue;
+        }
+        let pq = fbase::try_factor64(cofactor);
+        if pq.is_none() && cofactor > maxlarge {
+            continue;
+        }
+
         //println!("i={} smooth {} cofactor {}", i, cabs, cofactor);
         let rel = Relation {
             x: x.abs().to_bits(),
@@ -273,9 +306,6 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
             "INTERNAL ERROR: failed relation check {:?}",
             &rel
         );
-        s.rels
-            .write()
-            .unwrap()
-            .add(rel, fbase::try_factor64(cofactor));
+        s.rels.write().unwrap().add(rel, pq);
     }
 }

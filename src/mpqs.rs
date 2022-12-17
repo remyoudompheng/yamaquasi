@@ -21,10 +21,14 @@ use crate::relations::{Relation, RelationSet};
 use crate::sieve;
 use crate::{Int, Uint, DEBUG};
 
-pub fn mpqs(n: Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Vec<Relation> {
+pub fn mpqs(
+    n: Uint,
+    prefs: &params::Preferences,
+    tpool: Option<&rayon::ThreadPool>,
+) -> Vec<Relation> {
     // Choose factor base. Sieve twice the number of primes
     // (n will be a quadratic residue for only half of them)
-    let fb = fb.unwrap_or(params::factor_base_size(&n));
+    let fb = prefs.fb_size.unwrap_or(params::factor_base_size(&n));
     let primes = fbase::primes(2 * fb);
     eprintln!("Smoothness bound {}", primes.last().unwrap());
     let primes: Vec<Prime> = fbase::prepare_factor_base(&n, &primes);
