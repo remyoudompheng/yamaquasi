@@ -164,6 +164,7 @@ impl<'a> Sieve<'a> {
         } else {
             (vec![], vec![])
         };
+        let mut overflows = 0;
         for (idx, p) in primes.iter().enumerate() {
             let [o1, o2] = f(idx, p, offset);
             let l = 32 - u32::leading_zeros(p.p as u32) as usize;
@@ -209,7 +210,7 @@ impl<'a> Sieve<'a> {
                                     Self::to_large_entry(bucket_off as u8, l as u8, idx as u32);
                                 *blen_p += 1;
                                 if *blen_p as usize + 1 == BUCKETSIZE {
-                                    eprintln!("large bucket overflow!");
+                                    overflows += 1;
                                 }
                             }
                         }
@@ -218,6 +219,7 @@ impl<'a> Sieve<'a> {
                 }
             }
         }
+        assert!(overflows < 10, "large bucket overflow!");
         // Fill remainder of idx_by_log
         for l in log..16 {
             idx_by_log[l] = cprimes.len() as u32;
@@ -277,6 +279,7 @@ impl<'a> Sieve<'a> {
             self.largeoffs[i].fill(0);
             self.largehits[i].fill(0u32);
         }
+        let mut overflows = 0;
         for (idx, p) in self.primes.iter().enumerate() {
             if p.p < BLOCK_SIZE as u64 {
                 continue; // Small prime
@@ -300,13 +303,14 @@ impl<'a> Sieve<'a> {
                             Self::to_large_entry(bucket_off as u8, l as u8, idx as u32);
                         self.largeoffs[blk_no][b] = blen + 1;
                         if blen as usize + 1 == BUCKETSIZE {
-                            eprintln!("large bucket overflow!");
+                            overflows += 1;
                         }
                     }
                     off += p.p as usize;
                 }
             }
         }
+        assert!(overflows < 10, "large bucket overflow!");
     }
 
     pub fn sieve_block(&mut self) {
