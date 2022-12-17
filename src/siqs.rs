@@ -81,6 +81,14 @@ pub fn siqs(n: &Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Vec
         use_double,
     };
 
+    // Precompute start offset modulo the factor base.
+    // It is a constant over the whole process.
+    let start_offset: i64 = -(1 << mlog);
+    let offsets_mod_p: Vec<u32> = primes
+        .iter()
+        .map(|p| p.div.modi64(start_offset) as u32)
+        .collect();
+
     let polys_done = AtomicUsize::new(0);
     let gap = AtomicUsize::new(fb);
     let target = AtomicUsize::new(primes.len() * 8 / 10);
@@ -137,7 +145,7 @@ pub fn siqs(n: &Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Vec
                         return;
                     }
                     let pol = make_polynomial(n, a, idx);
-                    siqs_sieve_poly(&s, n, a, &pol, primes);
+                    siqs_sieve_poly(&s, n, a, &pol, primes, &offsets_mod_p);
                     handle_result();
                 });
             })
@@ -145,7 +153,7 @@ pub fn siqs(n: &Uint, fb: Option<u32>, tpool: Option<&rayon::ThreadPool>) -> Vec
             // Single-threaded
             for idx in 0..polys_per_a {
                 let pol = make_polynomial(n, a, idx);
-                siqs_sieve_poly(&s, n, a, &pol, primes);
+                siqs_sieve_poly(&s, n, a, &pol, primes, &offsets_mod_p);
                 let enough = handle_result();
                 if enough {
                     break;
@@ -325,9 +333,10 @@ pub struct A<'a> {
     // bj^2 = n mod pj, 0 mod pi (i != j)
     roots: Vec<[Uint; 2]>,
     // roots_mod_j[2i+1] is roots[j][i] mod factor base
+    // The roots are pre-multiplied by ainv to make preparation easier.
     roots_mod_p: Vec<Vec<u32>>,
-    // Precomputed a^-1 mod pi
-    ainv: Vec<u32>,
+    // Precomputed p.r / a mod p
+    rp: Vec<u32>,
 }
 
 fn a_quality(a_s: &[Uint]) -> f64 {
@@ -422,6 +431,12 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &[Prime]) -> A<'a> {
         }
         crt.push(c % a);
     }
+    // Compute modular inverses of A or 1 for prime factors of A.
+    let mut ainv = vec![];
+    for p in fbase {
+        let amod = p.div.mod_uint(a);
+        ainv.push(p.div.inv(amod).unwrap_or(1) as u32);
+    }
     // Compute basic roots
     let mut roots = vec![];
     for i in 0..afactors.len() {
@@ -437,15 +452,16 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &[Prime]) -> A<'a> {
             let mut v = vec![0u32; (fbase.len() + 15) & !15];
             assert!(v.len() % 16 == 0);
             for (idx, p) in fbase.iter().enumerate() {
-                v[idx] = p.div.mod_uint(&b) as u32;
+                let b_over_a = b * arith::U256::from(ainv[idx]);
+                v[idx] = p.div.mod_uint(&b_over_a) as u32;
             }
             roots_mod_p.push(v);
         }
     }
-    let mut ainv = vec![];
-    for p in fbase {
-        let amod = p.div.mod_uint(a);
-        ainv.push(p.div.inv(amod).unwrap_or(0) as u32);
+    // Compute sqrt(n)/A mod p
+    let mut rp = vec![];
+    for (pidx, p) in fbase.iter().enumerate() {
+        rp.push(p.div.divmod64(ainv[pidx] as u64 * p.r as u64).1 as u32);
     }
     A {
         a: *a,
@@ -454,7 +470,7 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &[Prime]) -> A<'a> {
         factor_max: afactors.last().unwrap().1.p as u32,
         roots,
         roots_mod_p,
-        ainv,
+        rp,
     }
 }
 
@@ -463,13 +479,13 @@ pub struct Poly {
     a: Uint,
     b: Uint,
     c: Int,
+    // Precomputed B/A mod p
     bmodp: Vec<u32>,
 }
 
 impl Poly {
     #[inline]
-    pub fn prepare_prime(&self, idx: usize, p: &Prime, offset: i64, a: &A) -> [Option<u32>; 2] {
-        let off = p.div.modi32(offset as i32);
+    pub fn prepare_prime(&self, idx: usize, p: &Prime, off: u32, a: &A) -> [Option<u32>; 2] {
         let shift = |r: u32| -> u32 {
             if r < off as u32 {
                 r + p.p as u32 - off
@@ -486,17 +502,25 @@ impl Poly {
             [Some(shift(c2 as u32)), None]
         } else if p32 < a.factor_min || p32 > a.factor_max || !a.factors.iter().any(|q| q.p == p.p)
         {
-            let ainv = a.ainv[idx] as u64;
-            // bmodp is at most len(a.factors) * p
-            let bmodp = self.bmodp[idx] as u64;
-            // A x + B = sqrt(n)
+            // Compute (±r - B)/A = (-B/A) ± (r/p) solutions of (Ax+B)^2 = N
+            let b_div_a = p32 - p.div.modi32(self.bmodp[idx] as i32) as u32;
+            let rp = a.rp[idx];
             [
-                Some(shift(
-                    p.div.divmod64((16 * p.p + p.r - bmodp) * ainv).1 as u32,
-                )),
-                Some(shift(
-                    p.div.divmod64((16 * p.p - p.r - bmodp) * ainv).1 as u32,
-                )),
+                Some(shift({
+                    let x = b_div_a + rp;
+                    if x >= p32 {
+                        x - p32
+                    } else {
+                        x
+                    }
+                })),
+                Some(shift({
+                    if rp <= b_div_a {
+                        b_div_a - rp
+                    } else {
+                        b_div_a + p32 - rp
+                    }
+                })),
             ]
         } else {
             // p is a factor of A.
@@ -562,7 +586,14 @@ pub fn make_polynomial(n: &Uint, a: &A, idx: usize) -> Poly {
 
 // Sieving process
 
-fn siqs_sieve_poly(s: &SieveSIQS, n: &Uint, a: &A, pol: &Poly, primes: &[Prime]) {
+fn siqs_sieve_poly(
+    s: &SieveSIQS,
+    n: &Uint,
+    a: &A,
+    pol: &Poly,
+    primes: &[Prime],
+    offsets_mod_p: &[u32],
+) -> () {
     let mlog = interval_logsize(&n);
     let nblocks: usize = (2 << mlog) / BLOCK_SIZE;
     if DEBUG {
@@ -575,8 +606,8 @@ fn siqs_sieve_poly(s: &SieveSIQS, n: &Uint, a: &A, pol: &Poly, primes: &[Prime])
     // Construct initial state.
     let start_offset: i64 = -(1 << mlog);
     let end_offset: i64 = 1 << mlog;
-    let mut state = sieve::Sieve::new(start_offset, nblocks, primes, |pidx, p, offset| {
-        pol.prepare_prime(pidx, p, offset, a)
+    let mut state = sieve::Sieve::new(start_offset, nblocks, primes, move |pidx, p, offset| {
+        pol.prepare_prime(pidx, p, offsets_mod_p[pidx], a)
     });
     if nblocks == 0 {
         sieve_block_poly(s, &pol, a, &mut state);

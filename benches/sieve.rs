@@ -84,6 +84,7 @@ brunch::benches! {
         let a_ints = siqs::select_a(&f, 40);
         let a_s: Vec<_> = a_ints.iter().map(|a_int| siqs::prepare_a(&f, a_int, &fb)).collect();
         Bench::new("prepare 1 SIQS polynomial (n = 256 bits)")
+        .with_samples(20_000)
         .run_seeded((&n, &fb, a_s.first().unwrap()), |(n, fb, a)| {
             let pol = siqs::make_polynomial(n, a, 123);
             fb.iter().enumerate().map(|(pidx, p)|
