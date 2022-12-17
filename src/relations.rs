@@ -49,12 +49,12 @@ impl Relation {
 ///
 /// We don't implement cycle finding to obtain smooth relations from a cycle
 /// of "double large relations".
-///
 /// Instead, a partial relation ("p") and a double large relation ("pp")
 /// can be combined to a partial relation (cofactor is a large prime).
-///
 /// A pp-relation can be combined with 2 matching p-relations
 /// to produce a complete relation.
+/// This is equivalent to finding cycles only in the connected component
+/// of single prime relations.
 #[derive(Default)]
 pub struct RelationSet {
     pub n: Uint,
@@ -197,6 +197,73 @@ impl RelationSet {
             assert!(ok);
         }
         eprintln!("[RelationSet] Combined {} double-large relations", deleted);
+        // FIXME: don't even attempt to find any relation cycle.
+        self.find_cycles();
+    }
+
+    fn find_cycles(&self) {
+        // Analyze remaining cycles
+        // Create a union find structure.
+
+        // prime => (parent, depth)
+        let mut forest = HashMap::<i32, (i32, u32)>::new();
+        fn root(forest: &HashMap<i32, (i32, u32)>, n: i32) -> Option<(i32, u32)> {
+            let mut node = n;
+            while let Some(&(r, l)) = forest.get(&node) {
+                if r == node {
+                    return Some((r, l));
+                }
+                node = r;
+            }
+            None
+        }
+        // Insert all keys in the forest
+        for &(p, q) in self.doubles.keys() {
+            if p == q {
+                panic!("impossible")
+            }
+            let (p, q) = (p as i32, q as i32);
+            let (rp, rq) = (root(&forest, p), root(&forest, q));
+            match (rp, rq) {
+                (None, None) => {
+                    // insert q with parent p
+                    forest.insert(p, (p, 1));
+                    forest.insert(q, (p, 0));
+                }
+                (Some((r1, _)), None) => {
+                    forest.insert(q, (r1, 0));
+                }
+                (None, Some((r2, _))) => {
+                    forest.insert(p, (r2, 0));
+                }
+                (Some((r1, l1)), Some((r2, l2))) => {
+                    if r1 != r2 {
+                        if l1 <= l2 {
+                            forest.insert(r1, (r1, l1 + 1));
+                            forest.insert(r2, (r1, 0));
+                        } else {
+                            forest.insert(r1, (r2, 0));
+                            forest.insert(r2, (r2, l2 + 1));
+                        }
+                    }
+                }
+            }
+        }
+        // Count connected components
+        let mut h0 = 0;
+        for (k, (v, _)) in forest.iter() {
+            if k == v {
+                h0 += 1;
+            }
+        }
+        // Check Euler characteristic
+        let e0 = forest.len();
+        let e1 = self.doubles.len();
+        let h1: i64 = h0 as i64 - (e0 as i64 - e1 as i64);
+        eprintln!(
+            "[RelationSet] V={} E={} components={} cycles={}",
+            e0, e1, h0, h1
+        );
     }
 
     // Tries to combine a relation with an existing one.
