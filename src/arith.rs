@@ -216,6 +216,10 @@ impl Dividers {
         let m64 = (m128 >> (sz - 64)).low_u64() + 1; // 64 bits
         let r64 = (U256::one() << 64) % (p as u64);
         let s64 = 128 + 64 - sz as usize; // m64 >> s64 = m128 >> 128
+        assert_eq!(r64, {
+            let m = (m64 - 1) >> (s64 - 64);
+            !m.wrapping_mul(p as u64) + 1
+        });
         Dividers {
             p,
             m16,
@@ -281,6 +285,9 @@ impl Dividers {
     #[inline]
     fn divmod_uint_inplace<const N: usize>(&self, digits: &mut [u64; N]) -> u64 {
         let mut carry: u64 = 0;
+        // self.m64 = ceil(2^k / p) >> s == ceil(2^(k-s) / p)
+        // Compute the actual quotient of 2^64 by p.
+        let m64 = (self.m64 - 1) >> (self.s64 - 64);
         for i in 0..N {
             let i = N - 1 - i;
             let d = digits[i];
@@ -290,7 +297,7 @@ impl Dividers {
             let (mut q, r) = self.divmod64(d);
             debug_assert!(q == d / self.p as u64);
             if carry != 0 {
-                q += carry * (self.m64 >> (self.s64 - 64));
+                q += carry * m64;
                 let (cq, cr) = self.divmod64(carry * self.r64 + r);
                 q += cq;
                 carry = cr;
@@ -532,19 +539,32 @@ mod tests {
     fn test_dividers_uint() {
         use crate::fbase::primes;
 
-        let n0: U1024 = pow_mod(
-            U1024::from(65537u64),
-            U1024::from(1_234_567_890u64),
-            (U1024::one() << 384) + U1024::one(),
-        );
-        let ps = primes(2000);
-        for p in ps {
-            let d = Dividers::new(p);
-            for i in 0..100u64 {
-                let n = n0 + U1024::from(i);
-                assert_eq!((n / (p as u64), n % (p as u64)), d.divmod_uint(&n));
+        let n0s: &[U1024] = &[
+            // Tricky carry
+            (U1024::one() << 64) + U1024::from(1_234_567_890u64),
+            (U1024::one() << 65) + U1024::from(1_234_567_890u64),
+            pow_mod(
+                U1024::from(65537u64),
+                U1024::from(1_234_567_890u64),
+                (U1024::one() << 384) + U1024::one(),
+            ),
+        ];
+        for n0 in n0s {
+            let ps = primes(2000);
+            for p in ps {
+                let d = Dividers::new(p);
+                for i in 0..100u64 {
+                    let n = n0 + U1024::from(i);
+                    assert_eq!((n / (p as u64), n % (p as u64)), d.divmod_uint(&n));
+                }
             }
         }
+
+        // Regression test: d.m64 ends with many zero bits.
+        let d = Dividers::new(274177);
+        let n = U1024::from_str("37714305606241449883").unwrap();
+        assert_eq!(d.mod_uint(&n), 0);
+        assert_eq!(d.divmod_uint(&n), (U1024::from(137554592858779 as u64), 0));
     }
 
     #[test]

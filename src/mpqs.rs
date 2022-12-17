@@ -533,6 +533,7 @@ fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) {
             factors,
             pp: false,
         };
+        debug_assert!(rel.verify(&n));
         s.rels.write().unwrap().add(rel, pq);
     }
 }
