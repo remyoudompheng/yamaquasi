@@ -8,11 +8,82 @@
 use crate::arith::{self, Num};
 use crate::Uint;
 
+/// A factor base consisting of 24-bit primes related to an input number N,
+/// along with useful precomputed data.
+/// To help with memory locality, each additional information is held
+/// in a separate vector.
 #[derive(Clone, Debug)]
-pub struct Prime {
+pub struct FBase {
+    pub primes: Vec<u32>,
+    // Square roots of N.
+    pub sqrts: Vec<u32>,
+    pub divs: Vec<arith::Dividers>,
+    // idx_by_log[i] is the index of the first prime
+    // such that bit_length == i.
+    //pub idx_by_log: [usize; 24+1],
+}
+
+impl FBase {
+    pub fn new(n: Uint, size: u32) -> Self {
+        let ps = primes(2 * size);
+        let mut primes = vec![];
+        let mut sqrts = vec![];
+        let mut divs = vec![];
+        for (p, r, div) in prepare_factor_base(&n, &ps) {
+            primes.push(p as u32);
+            sqrts.push(r as u32);
+            divs.push(div);
+        }
+        FBase {
+            primes,
+            sqrts,
+            divs,
+        }
+    }
+
+    pub fn smalls(&self) -> &[u32] {
+        if self.len() >= 10 {
+            &self.primes[..10]
+        } else {
+            &self.primes
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.primes.len()
+    }
+
+    pub fn bound(&self) -> u32 {
+        *self.primes.last().unwrap()
+    }
+
+    pub fn p(&self, idx: usize) -> u32 {
+        self.primes[idx]
+    }
+
+    pub fn r(&self, idx: usize) -> u32 {
+        self.sqrts[idx]
+    }
+
+    pub fn div(&self, idx: usize) -> &arith::Dividers {
+        &self.divs[idx]
+    }
+
+    // Returns a (large) structure for a given prime.
+    pub fn prime<'a>(&'a self, idx: usize) -> Prime<'a> {
+        Prime {
+            p: self.primes[idx] as u64,
+            r: self.sqrts[idx] as u64,
+            div: &self.divs[idx],
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Prime<'a> {
     pub p: u64, // prime number
     pub r: u64, // square root of N
-    pub div: arith::Dividers,
+    pub div: &'a arith::Dividers,
 }
 
 pub const SMALL_PRIMES: &[u64] = &[
@@ -93,17 +164,13 @@ pub fn primes(n: u32) -> Vec<u32> {
     primes
 }
 
-pub fn prepare_factor_base(nk: &Uint, primes: &[u32]) -> Vec<Prime> {
+fn prepare_factor_base(nk: &Uint, primes: &[u32]) -> Vec<(u64, u64, arith::Dividers)> {
     primes
         .into_iter()
         .filter_map(|&p| {
             let nk: u64 = *nk % (p as u64);
             let r = arith::sqrt_mod(nk, p as u64)?;
-            Some(Prime {
-                p: p as u64,
-                r: r,
-                div: arith::Dividers::new(p),
-            })
+            Some((p as u64, r, arith::Dividers::new(p)))
         })
         .collect()
 }

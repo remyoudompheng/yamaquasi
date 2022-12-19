@@ -25,7 +25,7 @@ use num_traits::One;
 use rayon::prelude::*;
 
 use crate::arith::{self, Num};
-use crate::fbase::{self, Prime};
+use crate::fbase::{self, FBase, Prime};
 use crate::params::{self, BLOCK_SIZE};
 use crate::relations::{Relation, RelationSet};
 use crate::sieve;
@@ -39,16 +39,10 @@ pub fn siqs(
     // Choose factor base. Sieve twice the number of primes
     // (n will be a quadratic residue for only half of them)
     let fb = prefs.fb_size.unwrap_or(params::factor_base_size(&n));
-    let primes = fbase::primes(2 * fb);
-    eprintln!("Smoothness bound {}", primes.last().unwrap());
-    let primes: Vec<Prime> = fbase::prepare_factor_base(&n, &primes);
-    let primes = &primes[..];
-    eprintln!("All primes {}", primes.len());
-    // Prepare factor base
-    let smallprimes: Vec<u64> = primes.iter().map(|f| f.p).take(10).collect();
-    eprintln!("Factor base size {} ({:?})", primes.len(), smallprimes);
+    let fbase = FBase::new(*n, fb);
+    eprintln!("Smoothness bound {}", fbase.bound());
+    eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls(),);
 
-    let fb = primes.len();
     let mlog = interval_logsize(&n);
     if mlog >= 20 {
         eprintln!("Sieving interval size {}M", 2 << (mlog - 20));
@@ -58,7 +52,7 @@ pub fn siqs(
 
     // Generate all values of A now.
     let nfacs = nfactors(n) as usize;
-    let factors = select_siqs_factors(primes, n, nfacs);
+    let factors = select_siqs_factors(&fbase, n, nfacs);
     let a_ints = select_a(&factors, a_value_count(n));
     let polys_per_a = 1 << (nfacs - 1);
     eprintln!(
@@ -73,7 +67,7 @@ pub fn siqs(
 
     let done = AtomicBool::new(false);
 
-    let maxprime = primes.last().unwrap().p;
+    let maxprime = fbase.bound() as u64;
     let use_double = prefs.use_double.unwrap_or(n.bits() > 256);
     let maxlarge: u64 = maxprime
         * prefs
@@ -91,7 +85,8 @@ pub fn siqs(
     //
     let start_offset: i64 = -(1 << mlog);
     let mut pdata = vec![];
-    for p in primes {
+    for idx in 0..fbase.len() {
+        let p = fbase.prime(idx);
         let off = p.div.modi64(start_offset) as u64;
         let arith::Divider31 { p, m31, s31 } = p.div.div31;
         pdata.push(SieveSIQS::pack_pdata(off, p, s31, m31));
@@ -99,7 +94,7 @@ pub fn siqs(
 
     let s = SieveSIQS {
         n,
-        primes,
+        fbase: &fbase,
         rels: RwLock::new(RelationSet::new(*n, maxlarge)),
         maxlarge,
         use_double,
@@ -107,8 +102,8 @@ pub fn siqs(
     };
 
     let polys_done = AtomicUsize::new(0);
-    let gap = AtomicUsize::new(fb);
-    let target = AtomicUsize::new(primes.len() * 8 / 10);
+    let gap = AtomicUsize::new(fbase.len());
+    let target = AtomicUsize::new(fbase.len() * 8 / 10);
 
     let handle_result = || -> bool {
         let rlen = {
@@ -143,7 +138,7 @@ pub fn siqs(
     let poly_idxs: Vec<usize> = (0..polys_per_a).collect();
 
     for a_int in a_ints.iter() {
-        let a = &prepare_a(&factors, a_int, primes);
+        let a = &prepare_a(&factors, a_int, &fbase);
         eprintln!(
             "Sieving A={} (factors {})",
             a.a,
@@ -293,7 +288,7 @@ pub struct Factors<'a> {
     pub target: Uint,
     pub nfacs: usize,
     // A sorted list of factors
-    pub factors: Vec<&'a Prime>,
+    pub factors: Vec<Prime<'a>>,
     // inverses[i][j] = pi^-1 mod pj
     pub inverses: Vec<Vec<u32>>,
 }
@@ -301,23 +296,26 @@ pub struct Factors<'a> {
 // Select factors of generated A values. It is enough to select about
 // twice the number of expected factors in A, because the number of
 // combinations is large enough to generate values close to the target.
-pub fn select_siqs_factors<'a>(fb: &'a [Prime], n: &'a Uint, nfacs: usize) -> Factors<'a> {
+pub fn select_siqs_factors<'a>(fb: &'a FBase, n: &'a Uint, nfacs: usize) -> Factors<'a> {
     let mlog = interval_logsize(n);
     // The target is sqrt(2N) / 2M. Don't go below 2000 for extremely small numbers.
     let target = max(Uint::from(2000u64), arith::isqrt(n >> 1) >> mlog);
-    let idx = fb.partition_point(|p| Uint::from(p.p).pow(nfacs as u32) < target);
+    let idx = fb
+        .primes
+        .partition_point(|&p| Uint::from(p as u64).pow(nfacs as u32) < target);
     // This may fail for very small n.
     assert!(idx > nfacs && idx + nfacs < fb.len());
-    let selection = if idx > 4 * nfacs && idx + 4 * nfacs < fb.len() {
-        &fb[idx - 2 * nfacs as usize..idx + 2 * nfacs as usize]
+    let selected_idx = if idx > 4 * nfacs && idx + 4 * nfacs < fb.len() {
+        idx - 2 * nfacs as usize..idx + 2 * nfacs as usize
     } else {
-        &fb[idx - nfacs as usize..idx + max(nfacs, 6) as usize]
+        idx - nfacs as usize..idx + max(nfacs, 6) as usize
     };
+    let selection: Vec<Prime> = selected_idx.map(|i| fb.prime(i)).collect();
     // Precompute inverses
     let mut inverses = vec![];
-    for p in selection {
+    for p in &selection {
         let mut row = vec![];
-        for q in selection {
+        for q in &selection {
             let pinvq = if p.p == q.p {
                 0
             } else {
@@ -342,7 +340,7 @@ pub fn select_siqs_factors<'a>(fb: &'a [Prime], n: &'a Uint, nfacs: usize) -> Fa
 /// then combine them for each polynomial (faster than computing 2^F vectors).
 pub struct A<'a> {
     a: Uint,
-    factors: Vec<&'a Prime>,
+    factors: Vec<Prime<'a>>,
     factor_min: u32,
     factor_max: u32,
     // Base data for polynomials:
@@ -427,11 +425,10 @@ pub fn select_a(f: &Factors, want: usize) -> Vec<Uint> {
     candidates[idx - min(idx, want / 2)..min(candidates.len(), idx + want / 2)].to_vec()
 }
 
-pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &[Prime]) -> A<'a> {
+pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase) -> A<'a> {
     let afactors: Vec<(usize, &Prime)> = f
         .factors
         .iter()
-        .copied()
         .enumerate()
         .filter(|(_, p)| p.div.mod_uint(a) == 0)
         .collect();
@@ -450,9 +447,10 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &[Prime]) -> A<'a> {
     }
     // Compute modular inverses of A or 1 for prime factors of A.
     let mut ainv = vec![];
-    for p in fbase {
-        let amod = p.div.mod_uint(a);
-        ainv.push(p.div.inv(amod).unwrap_or(1) as u32);
+    for pidx in 0..fbase.len() {
+        let div = fbase.div(pidx);
+        let amod = div.mod_uint(a);
+        ainv.push(div.inv(amod).unwrap_or(1) as u32);
     }
     // Compute basic roots
     let mut roots = vec![];
@@ -468,23 +466,28 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &[Prime]) -> A<'a> {
             let b = arith::U256::cast_from(roots[i][j]);
             let mut v = vec![0u32; (fbase.len() + 15) & !15];
             assert!(v.len() % 16 == 0);
-            for (idx, p) in fbase.iter().enumerate() {
-                let b_over_a = b * arith::U256::from(ainv[idx]);
-                v[idx] = p.div.mod_uint(&b_over_a) as u32;
+            for pidx in 0..fbase.len() {
+                let pdiv = fbase.div(pidx);
+                let b_over_a = b * arith::U256::from(ainv[pidx]);
+                v[pidx] = pdiv.mod_uint(&b_over_a) as u32;
             }
             roots_mod_p.push(v);
         }
     }
     // Compute sqrt(n)/A mod p
     let mut rp = vec![];
-    for (pidx, p) in fbase.iter().enumerate() {
-        rp.push(p.div.divmod64(ainv[pidx] as u64 * p.r as u64).1 as u32);
+    for pidx in 0..fbase.len() {
+        let r = fbase.r(pidx);
+        let pdiv = fbase.div(pidx);
+        rp.push(pdiv.divmod64(ainv[pidx] as u64 * r as u64).1 as u32);
     }
+    let factor_min = afactors[0].1.p as u32;
+    let factor_max = afactors.last().unwrap().1.p as u32;
     A {
         a: *a,
-        factors: afactors.iter().map(|(_, p)| p).copied().collect(),
-        factor_min: afactors[0].1.p as u32,
-        factor_max: afactors.last().unwrap().1.p as u32,
+        factors: afactors.into_iter().map(|(_, p)| p).cloned().collect(),
+        factor_min,
+        factor_max,
         roots,
         roots_mod_p,
         rp,
@@ -505,7 +508,7 @@ impl Poly {
     pub fn prepare_prime(
         &self,
         idx: usize,
-        prime: &Prime,
+        fbase: &FBase,
         div31: &arith::Divider31,
         off: u32,
         a: &A,
@@ -552,14 +555,12 @@ impl Poly {
             // p is a factor of A.
             // 2Bx + C, root is -C/2B
             let bmodp = self.bmodp[idx] as u64;
-            let mut cp = prime.div.mod_uint(&self.c.abs().to_bits());
+            let div = &fbase.divs[idx];
+            let mut cp = div.mod_uint(&self.c.abs().to_bits());
             if !self.c.is_negative() {
                 cp = p32 as u64 - cp;
             }
-            let r = prime
-                .div
-                .divmod64(cp * prime.div.inv(2 * bmodp as u64).unwrap())
-                .1 as u32;
+            let r = div.divmod64(cp * div.inv(2 * bmodp as u64).unwrap()).1 as u32;
             [Some(shift(r)), None]
         };
         sieve::SievePrime { p: p32, offsets }
@@ -629,9 +630,9 @@ fn siqs_sieve_poly(s: &SieveSIQS, n: &Uint, a: &A, pol: &Poly) -> () {
     // Construct initial state.
     let start_offset: i64 = -(1 << mlog);
     let end_offset: i64 = 1 << mlog;
-    let mut state = sieve::Sieve::new(start_offset, nblocks, s.primes, move |pidx, p| {
+    let mut state = sieve::Sieve::new(start_offset, nblocks, s.fbase, move |pidx| {
         let (off, div31) = SieveSIQS::unpack_pdata(s.pdata[pidx]);
-        pol.prepare_prime(pidx, p, &div31, off as u32, a)
+        pol.prepare_prime(pidx, s.fbase, &div31, off as u32, a)
     });
     if nblocks == 0 {
         sieve_block_poly(s, &pol, a, &mut state);
@@ -644,7 +645,7 @@ fn siqs_sieve_poly(s: &SieveSIQS, n: &Uint, a: &A, pol: &Poly) -> () {
 
 struct SieveSIQS<'a> {
     n: &'a Uint,
-    primes: &'a [Prime],
+    fbase: &'a FBase,
     maxlarge: u64,
     use_double: bool,
     rels: RwLock<RelationSet>,
@@ -704,10 +705,12 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
             factors.push((-1, 1));
         }
         let mut cofactor: Uint = v.abs().to_bits();
-        for p in facs {
+        for pidx in facs {
+            let p = s.fbase.p(pidx);
+            let div = s.fbase.div(pidx);
             let mut exp = 0;
             loop {
-                let (q, r) = p.div.divmod_uint(&cofactor);
+                let (q, r) = div.divmod_uint(&cofactor);
                 if r == 0 {
                     cofactor = q;
                     exp += 1;
@@ -717,7 +720,7 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
             }
             // FIXME: we should have exp > 0
             if exp > 0 {
-                factors.push((p.p as i64, exp));
+                factors.push((p as i64, exp));
             }
         }
         let Some(cofactor) = cofactor.to_u64() else { continue };
@@ -778,8 +781,7 @@ fn test_poly_a() {
         let want = if want > 50 { want / 20 } else { want };
 
         let fb_size = params::factor_base_size(n);
-        let ps = fbase::primes(fb_size);
-        let fb = fbase::prepare_factor_base(n, &ps);
+        let fb = fbase::FBase::new(*n, fb_size);
 
         let facs = select_siqs_factors(&fb, n, nfacs as usize);
         let target = facs.target;
@@ -834,12 +836,11 @@ fn test_poly_prepare() {
     use std::str::FromStr;
 
     const N240: &str = "1563849171863495214507949103370077342033765608728382665100245282240408041";
-    let n = &Uint::from_str(N240).unwrap();
-    let primes = fbase::primes(10000);
-    let fb = fbase::prepare_factor_base(&n, &primes[..]);
+    let n = Uint::from_str(N240).unwrap();
+    let fb = fbase::FBase::new(n, 10000);
     // Prepare A values
     // Only test 10 A values and 35 polynomials per A.
-    let f = select_siqs_factors(&fb[..], &n, 9);
+    let f = select_siqs_factors(&fb, &n, 9);
     let a_ints = select_a(&f, 10);
     for a_int in &a_ints {
         let a = prepare_a(&f, a_int, &fb);
@@ -849,8 +850,8 @@ fn test_poly_prepare() {
             for (j, p) in a.factors.iter().enumerate() {
                 let &[r1, r2] = r;
                 if i == j {
-                    assert_eq!((r1 * r1) % p.p, *n % p.p);
-                    assert_eq!((r2 * r2) % p.p, *n % p.p);
+                    assert_eq!((r1 * r1) % p.p, n % p.p);
+                    assert_eq!((r2 * r2) % p.p, n % p.p);
                 } else {
                     assert_eq!(r1 % p.p, 0);
                     assert_eq!(r2 % p.p, 0);
@@ -860,26 +861,29 @@ fn test_poly_prepare() {
         for idx in 0..35 {
             let idx = 7 * idx;
             // Generate and check each polynomial.
-            let pol = make_polynomial(n, &a, idx);
+            let pol = make_polynomial(&n, &a, idx);
             let (pa, pb, pc) = (pol.a, pol.b, pol.c);
             // B is a square root of N modulo A.
             assert_eq!((pb * pb) % pa, n % pa);
             // Check that (Ax+B)^2 - n = A(Ax^2+2Bx+C)
             for x in [1u64, 100, 50000] {
                 let u = pa * Uint::from(x) + pb;
-                let u = Int::from_bits(u * u) - Int::from_bits(*n);
+                let u = Int::from_bits(u * u) - Int::from_bits(n);
                 let v = pa * Uint::from(x * x) + (pb << 1) * Uint::from(x);
                 let v = Int::from_bits(v) + pc;
                 assert_eq!(u, Int::from_bits(pa) * v);
             }
-            for (pidx, p) in fb.iter().enumerate() {
+            for pidx in 0..fb.len() {
                 // Roots are roots of Ax^2+2Bx+C modulo p.
-                for r in pol.prepare_prime(pidx, &p, &p.div.div31, 0, &a).offsets {
+                for r in pol
+                    .prepare_prime(pidx, &fb, &fb.div(pidx).div31, 0, &a)
+                    .offsets
+                {
                     let Some(r) = r else { continue };
                     let r = r as u64;
                     let v = pa * Uint::from(r * r) + pb * Uint::from(2 * r);
                     let v = Int::from_bits(v) + pc;
-                    assert_eq!(v.abs().to_bits() % p.p, 0);
+                    assert_eq!(v.abs().to_bits() % (fb.p(pidx) as u64), 0);
                 }
             }
         }

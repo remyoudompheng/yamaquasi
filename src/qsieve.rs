@@ -11,7 +11,7 @@
 use std::sync::RwLock;
 
 use crate::arith::{isqrt, Num};
-use crate::fbase::{self, Prime};
+use crate::fbase::{self, FBase, Prime};
 use crate::params::{self, large_prime_factor, BLOCK_SIZE};
 use crate::relations::{Relation, RelationSet};
 use crate::sieve::{Sieve, SievePrime};
@@ -40,14 +40,9 @@ pub fn qsieve(
         .unwrap_or(params::factor_base_size(&(n << shift)));
     // When using double large primes, use a smaller factor base.
     let fb = if use_double { fb * 3 / 4 } else { fb };
-    let primes = fbase::primes(2 * fb);
-    eprintln!("Smoothness bound {}", primes.last().unwrap());
-    let primes: Vec<Prime> = fbase::prepare_factor_base(&n, &primes);
-    let primes = &primes[..];
-    eprintln!("All primes {}", primes.len());
-    // Prepare factor base
-    let smallprimes: Vec<u64> = primes.iter().map(|f| f.p).take(10).collect();
-    eprintln!("Factor base size {} ({:?})", primes.len(), smallprimes);
+    let fbase = FBase::new(n, fb);
+    eprintln!("Smoothness bound {}", fbase.bound());
+    eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls());
 
     // Naïve quadratic sieve with polynomial x²-n (x=-M..M)
     // Max value is X = sqrt(n) * M
@@ -64,15 +59,15 @@ pub fn qsieve(
     // Backward: polynomial (R-1-x)^2 - N where r = isqrt(N)
     // => roots are sqrt(N) + R-1
 
-    let mut target = primes.len() * 8 / 10;
+    let mut target = fbase.len() * 8 / 10;
 
     let mut maxlarge: u64 =
-        primes.last().unwrap().p * prefs.large_factor.unwrap_or(large_prime_factor(&n));
+        fbase.bound() as u64 * prefs.large_factor.unwrap_or(large_prime_factor(&n));
     if use_double {
         // When using double large primes, use smaller larges.
         maxlarge /= 2
     }
-    let qs = SieveQS::new(n, primes, maxlarge, use_double);
+    let qs = SieveQS::new(n, &fbase, maxlarge, use_double);
     eprintln!("Max large prime {}", qs.maxlarge);
     // Construct 2 initial states, forward and backwards.
     let (mut s_fwd, mut s_bck) = qs.init(None);
@@ -89,9 +84,9 @@ pub fn qsieve(
             sieve_block(&qs, &mut s_bck, true);
         }
         let mut rels = qs.rels.write().unwrap();
-        if rels.len() > primes.len() + 16 {
+        if rels.len() > fbase.len() + 16 {
             // Too many relations! May happen for very small inputs.
-            rels.complete.truncate(primes.len() + 16);
+            rels.complete.truncate(fbase.len() + 16);
             let gap = rels.gap();
             if gap == 0 {
                 eprintln!("Found enough relations");
@@ -151,7 +146,7 @@ pub struct SieveQS<'a> {
     nsqrt: Uint,
     // Precomputed nsqrt_mods modulo the factor base.
     nsqrt_mods: Vec<u32>,
-    primes: &'a [Prime],
+    fbase: &'a FBase,
 
     maxlarge: u64,
     use_double: bool,
@@ -159,17 +154,18 @@ pub struct SieveQS<'a> {
 }
 
 impl<'a> SieveQS<'a> {
-    pub fn new(n: Uint, primes: &'a [Prime], maxlarge: u64, use_double: bool) -> Self {
+    pub fn new(n: Uint, fbase: &'a FBase, maxlarge: u64, use_double: bool) -> Self {
         let nsqrt = isqrt(n);
-        let nsqrt_mods: Vec<u32> = primes
+        let nsqrt_mods: Vec<u32> = fbase
+            .divs
             .iter()
-            .map(|p| p.div.mod_uint(&nsqrt) as u32)
+            .map(|div| div.mod_uint(&nsqrt) as u32)
             .collect();
         // Prepare sieve
         SieveQS {
             n,
             nsqrt,
-            primes,
+            fbase,
             nsqrt_mods,
             maxlarge,
             use_double,
@@ -194,39 +190,39 @@ impl<'a> SieveQS<'a> {
         } else {
             0
         };
-        let f1 = |pidx, p| {
+        let f1 = |pidx| {
             // Return r such that nsqrt + r is a root of n.
-            let p: &'a Prime = p;
+            let Prime { p, r, div } = self.fbase.prime(pidx);
             let base = self.nsqrt_mods[pidx] as u64;
-            let off: u64 = p.div.modi64(offset);
-            let mut s1 = p.r + 2 * p.p - off - base;
-            let mut s2 = 3 * p.p - p.r - off - base;
-            while s1 >= p.p {
-                s1 -= p.p
+            let off: u64 = div.modi64(offset);
+            let mut s1 = r + 2 * p - off - base;
+            let mut s2 = 3 * p - r - off - base;
+            while s1 >= p {
+                s1 -= p
             }
-            while s2 >= p.p {
-                s2 -= p.p
+            while s2 >= p {
+                s2 -= p
             }
             SievePrime {
-                p: p.p as u32,
+                p: p as u32,
                 offsets: [Some(s1 as u32), Some(s2 as u32)],
             }
         };
-        let f2 = |pidx, p| {
+        let f2 = |pidx| {
+            let Prime { p, r, div } = self.fbase.prime(pidx);
             // Return r such that nsqrt - (r + 1) is a root of n.
-            let p: &'a Prime = p;
             let base = self.nsqrt_mods[pidx] as u64;
-            let off: u64 = p.div.modi64(offset);
-            let mut s1 = 2 * p.p + base - p.r - off - 1;
-            let mut s2 = p.p + base + p.r - off - 1;
-            while s1 >= p.p {
-                s1 -= p.p
+            let off: u64 = div.modi64(offset);
+            let mut s1 = 2 * p + base - r - off - 1;
+            let mut s2 = p + base + r - off - 1;
+            while s1 >= p {
+                s1 -= p
             }
-            while s2 >= p.p {
-                s2 -= p.p
+            while s2 >= p {
+                s2 -= p
             }
             SievePrime {
-                p: p.p as u32,
+                p: p as u32,
                 offsets: [Some(s1 as u32), Some(s2 as u32)],
             }
         };
@@ -236,8 +232,8 @@ impl<'a> SieveQS<'a> {
             s2.rehash(f2);
             (s1, s2)
         } else {
-            let s1 = Sieve::new(0, self.nblocks(), self.primes, f1);
-            let s2 = Sieve::new(0, self.nblocks(), self.primes, f2);
+            let s1 = Sieve::new(0, self.nblocks(), self.fbase, f1);
+            let s2 = Sieve::new(0, self.nblocks(), self.fbase, f2);
             (s1, s2)
         }
     }
@@ -273,10 +269,12 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
         }
         let cabs = candidate.abs().to_bits();
         let mut cofactor: Uint = cabs;
-        for p in facs {
+        for pidx in facs {
+            let p = s.fbase.p(pidx);
+            let div = s.fbase.div(pidx);
             let mut exp = 0;
             loop {
-                let (q, r) = p.div.divmod_uint(&cofactor);
+                let (q, r) = div.divmod_uint(&cofactor);
                 if r == 0 {
                     cofactor = q;
                     exp += 1;
@@ -284,7 +282,7 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
                     break;
                 }
             }
-            factors.push((p.p as i64, exp));
+            factors.push((p as i64, exp));
         }
         let Some(cofactor) = cofactor.to_u64() else { continue };
         if cofactor > max_cofactor {

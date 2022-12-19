@@ -14,8 +14,8 @@ use bnum::cast::CastFrom;
 use num_traits::One;
 use rayon::prelude::*;
 
-use crate::arith::{inv_mod, isqrt, pow_mod, Num, U256};
-use crate::fbase::{self, Prime};
+use crate::arith::{self, inv_mod, isqrt, pow_mod, Num, U256};
+use crate::fbase::{self, FBase};
 use crate::params::{self, BLOCK_SIZE};
 use crate::relations::{Relation, RelationSet};
 use crate::sieve;
@@ -29,17 +29,12 @@ pub fn mpqs(
     // Choose factor base. Sieve twice the number of primes
     // (n will be a quadratic residue for only half of them)
     let fb = prefs.fb_size.unwrap_or(params::factor_base_size(&n));
-    let primes = fbase::primes(2 * fb);
-    eprintln!("Smoothness bound {}", primes.last().unwrap());
-    let primes: Vec<Prime> = fbase::prepare_factor_base(&n, &primes);
-    let primes = &primes[..];
-    eprintln!("All primes {}", primes.len());
-    // Prepare factor base
-    let smallprimes: Vec<u64> = primes.iter().map(|f| f.p).take(10).collect();
-    eprintln!("Factor base size {} ({:?})", primes.len(), smallprimes);
+    let fbase = FBase::new(n, fb);
+    eprintln!("Smoothness bound {}", fbase.bound());
+    eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls());
 
-    let mut target = primes.len() * 8 / 10;
-    let fb = primes.len();
+    let mut target = fbase.len() * 8 / 10;
+    let fb = fbase.len();
     let mlog = mpqs_interval_logsize(&n);
     if mlog >= 20 {
         eprintln!("Sieving interval size {}M", 2 << (mlog - 20));
@@ -52,7 +47,7 @@ pub fn mpqs(
     // D is less than 64-bit for a 256-bit n
     let mut polybase: Uint = isqrt(n >> 1) >> mlog;
     polybase = isqrt(polybase);
-    let maxprime = primes.last().unwrap().p;
+    let maxprime = fbase.bound() as u64;
     if polybase < Uint::from(maxprime) {
         polybase = Uint::from(maxprime + 1000);
     }
@@ -103,7 +98,7 @@ pub fn mpqs(
             let v = pool.install(|| {
                 (&polys[polyidx..])
                     .par_iter()
-                    .map(|p| mpqs_poly(p, n, &primes, maxlarge, use_double, &rels))
+                    .map(|p| mpqs_poly(p, n, &fbase, maxlarge, use_double, &rels))
                     .collect()
             });
             polys_done += polys.len() - polyidx;
@@ -114,7 +109,7 @@ pub fn mpqs(
             let pol = &polys[polyidx];
             polyidx += 1;
             polys_done += 1;
-            mpqs_poly(pol, n, &primes, maxlarge, use_double, &rels);
+            mpqs_poly(pol, n, &fbase, maxlarge, use_double, &rels);
         }
         let rels = rels.read().unwrap();
         if rels.len() >= target {
@@ -153,34 +148,41 @@ pub struct Poly {
 }
 
 impl Poly {
-    pub fn prepare_prime(&self, p: &Prime, offset: i32) -> sieve::SievePrime {
-        let off: u32 = p.div.div31.modi32(offset);
+    pub fn prepare_prime(
+        &self,
+        p: u32,
+        r: u32,
+        div: &arith::Dividers,
+        offset: i32,
+    ) -> sieve::SievePrime {
+        let off: u32 = div.div31.modi32(offset);
         let shift = |r: u32| -> u32 {
             if r < off as u32 {
-                r + p.p as u32 - off
+                r + p - off
             } else {
                 r - off as u32
             }
         };
 
         // Determine roots r1, r2 such that P(offset+r)==0 mod p.
-        let offsets = if p.p == 2 {
+        let offsets = if p == 2 {
             // We don't really know what will happen.
             [Some(0), Some(1)]
         } else {
             // Transform roots as: r -> (r - B) / A
-            let a = p.div.divmod_uint(&self.a).1;
-            let b = p.div.divmod_uint(&self.b).1;
-            let ainv = p.div.inv(a).unwrap();
+            let a = div.divmod_uint(&self.a).1;
+            let b = div.divmod_uint(&self.b).1;
+            let ainv = div.inv(a).unwrap();
             [
-                Some(shift(p.div.divmod64((p.p + p.r - b) * ainv).1 as u32)),
-                Some(shift(p.div.divmod64((2 * p.p - p.r - b) * ainv).1 as u32)),
+                Some(shift(
+                    div.divmod64((p as u64 + r as u64 - b) * ainv).1 as u32,
+                )),
+                Some(shift(
+                    div.divmod64((2 * p as u64 - r as u64 - b) * ainv).1 as u32,
+                )),
             ]
         };
-        sieve::SievePrime {
-            p: p.p as u32,
-            offsets,
-        }
+        sieve::SievePrime { p: p, offsets }
     }
 }
 
@@ -189,21 +191,19 @@ fn test_poly_prime() {
     use crate::arith;
     use std::str::FromStr;
 
-    let p = Prime {
-        p: 10223,
-        r: 4526,
-        div: arith::Dividers::new(10223),
-    };
+    let p = 10223;
+    let r = 4526;
+    let div = arith::Dividers::new(10223);
     let poly = Poly {
         a: U256::from_str("13628964805482736048449433716121").unwrap(),
         b: U256::from_str("2255304218805619815720698662795").unwrap(),
         d: U256::from(3691742787015739u64),
     };
-    for r in poly.prepare_prime(&p, 0).offsets {
-        let Some(r) = r else { continue };
-        let x1: Uint = Uint::cast_from(poly.a) * Uint::from(r) + Uint::cast_from(poly.b);
-        let x1p: u64 = (x1 % Uint::from(p.p)).to_u64().unwrap();
-        assert_eq!(pow_mod(x1p, 2, p.p), pow_mod(p.r, 2, p.p));
+    for rt in poly.prepare_prime(p, r, &div, 0).offsets {
+        let Some(rt) = rt else { continue };
+        let x1: Uint = Uint::cast_from(poly.a) * Uint::from(rt) + Uint::cast_from(poly.b);
+        let x1p: u64 = (x1 % Uint::from(p)).to_u64().unwrap();
+        assert_eq!(pow_mod(x1p, 2, p as u64), pow_mod(r as u64, 2, p as u64));
     }
 }
 
@@ -390,7 +390,7 @@ fn test_select_poly() {
 fn mpqs_poly(
     pol: &Poly,
     n: Uint,
-    primes: &[Prime],
+    fbase: &FBase,
     maxlarge: u64,
     use_double: bool,
     rels: &RwLock<RelationSet>,
@@ -412,7 +412,7 @@ fn mpqs_poly(
     // Sieve from -M to M
     let sieve = SieveMPQS {
         n,
-        primes,
+        fbase,
         pol,
         dinv,
         d2inv,
@@ -423,8 +423,11 @@ fn mpqs_poly(
 
     let start_offset = -(1 << mlog);
     let end_offset = 1 << mlog;
-    let mut state = sieve::Sieve::new(start_offset, nblocks, primes, |_, p| {
-        pol.prepare_prime(p, start_offset as i32)
+    let mut state = sieve::Sieve::new(start_offset, nblocks, fbase, |pidx| {
+        let p = fbase.p(pidx);
+        let r = fbase.r(pidx);
+        let div = fbase.div(pidx);
+        pol.prepare_prime(p, r, div, start_offset as i32)
     });
     if nblocks == 0 {
         sieve_block_poly(&sieve, &mut state);
@@ -476,7 +479,7 @@ fn large_prime_factor(n: &Uint, doubles: bool) -> u64 {
 
 struct SieveMPQS<'a> {
     n: Uint,
-    primes: &'a [Prime],
+    fbase: &'a FBase,
     pol: &'a Poly,
     dinv: Uint,
     d2inv: Uint,
@@ -511,10 +514,11 @@ fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) {
             factors.push((-1, 1));
         }
         let mut cofactor: Uint = cabs;
-        for p in facs {
+        for pidx in facs {
             let mut exp = 0;
+            let div = s.fbase.div(pidx);
             loop {
-                let (q, r) = p.div.divmod_uint(&cofactor);
+                let (q, r) = div.divmod_uint(&cofactor);
                 if r == 0 {
                     cofactor = q;
                     exp += 1;
@@ -522,7 +526,7 @@ fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) {
                     break;
                 }
             }
-            factors.push((p.p as i64, exp));
+            factors.push((s.fbase.p(pidx) as i64, exp));
         }
         let Some(cofactor) = cofactor.to_u64() else { continue };
         if cofactor > max_cofactor {

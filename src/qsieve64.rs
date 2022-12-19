@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use bitvec_simd::BitVec;
 
 use crate::arith::{self, Num};
-use crate::fbase::{Prime, SMALL_PRIMES};
+use crate::fbase::SMALL_PRIMES;
 use crate::matrix;
 use crate::relations::{self, Relation};
 use crate::Uint;
@@ -21,7 +21,6 @@ const DEBUG: bool = false;
 
 pub fn qsieve(n: u64) -> Option<(u64, u64)> {
     // Prepare factor base
-    let mut primes = Vec::with_capacity(25);
     let (k, score) = select_multiplier(n);
     if DEBUG {
         eprintln!("Selected multiplier {} (score {:.2})", k, score);
@@ -32,23 +31,21 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
         return Some((nsqrt, nsqrt));
     }
     let nk = n * k as u64;
+    let mut primes: Vec<u32> = vec![];
+    let mut sqrts: Vec<u32> = vec![];
+    let mut divs = vec![];
     for &p in SMALL_PRIMES {
         if n % p == 0 {
             return Some((p, n / p));
         }
-        if let Some(r) = arith::sqrt_mod(nk, p as u64) {
-            primes.push(Prime {
-                p: p as u64,
-                r: r,
-                div: arith::Dividers::new(p as u32),
-            });
+        if let Some(r) = arith::sqrt_mod(nk, p) {
+            primes.push(p as u32);
+            sqrts.push(r as u32);
+            divs.push(arith::Dividers::new(p as u32));
         }
     }
     if DEBUG {
-        eprintln!(
-            "Selected factor base {:?}",
-            primes.iter().map(|p| p.p).collect::<Vec<_>>()
-        );
+        eprintln!("Selected factor base {:?}", primes,);
     }
 
     let nsqrt = arith::isqrt(nk);
@@ -79,19 +76,22 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
         // -1, 1, -3, 3, -5, 5, etc.
         let blk = if blk % 2 == 0 { -(blk + 1) as i64 } else { blk };
         let offset = blk * block_size as i64;
-        for p in &primes {
-            if p.p <= 3 {
+        for idx in 0..primes.len() {
+            let p = primes[idx];
+            let r = sqrts[idx];
+            let div = &divs[idx];
+            if p <= 3 {
                 continue;
             }
-            let logp = 32 - u32::leading_zeros(p.p as u32) as u8;
-            for rt in [p.r, p.p - p.r] {
+            let logp = 32 - u32::leading_zeros(p) as u8;
+            for rt in [r, p - r] {
                 // nsqrt + offset + x is a root?
-                let mut off = p.div.modi64(rt as i64 - offset - nsqrt as i64) as usize;
+                let mut off = div.modi64(rt as i64 - offset - nsqrt as i64) as usize;
                 while off < interval.len() {
                     unsafe {
                         *interval.get_unchecked_mut(off) += logp;
                     }
-                    off += p.p as usize;
+                    off += p as usize;
                 }
             }
         }
@@ -109,10 +109,11 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
                 }
                 let mut v = v as u64;
                 // Factor candidate
-                for p in &primes {
+                for (pidx, &p) in primes.iter().enumerate() {
                     let mut exp = 0;
+                    let div = &divs[pidx];
                     loop {
-                        let (q, r) = p.div.divmod64(v);
+                        let (q, r) = div.divmod64(v);
                         if r == 0 {
                             v = q;
                             exp += 1;
@@ -121,7 +122,7 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
                         }
                     }
                     if exp > 0 {
-                        factors.push((p.p as i64, exp));
+                        factors.push((p as i64, exp));
                     }
                 }
                 let cofactor = v;
@@ -165,8 +166,8 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
 
     // Make matrix
     let mut pindices = [0u8; 256];
-    for (idx, p) in primes.iter().enumerate() {
-        pindices[p.p as usize] = idx as u8 + 1;
+    for (idx, &p) in primes.iter().enumerate() {
+        pindices[p as usize] = idx as u8 + 1;
     }
     let size = primes.len() + 1;
     let mut cols = vec![];
