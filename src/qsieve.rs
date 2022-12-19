@@ -8,6 +8,7 @@
 //! J. Gerver, Factoring Large Numbers with a Quadratic Sieve
 //! https://www.jstor.org/stable/2007781
 
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::RwLock;
 
 use crate::arith::{isqrt, Num};
@@ -69,8 +70,14 @@ pub fn qsieve(
     }
     let qs = SieveQS::new(n, &fbase, maxlarge, use_double);
     eprintln!("Max large prime {}", qs.maxlarge);
+    // These counters are actually not accessed concurrently.
+    let fwd_offset = AtomicI64::new(0i64);
+    let bck_offset = AtomicI64::new(0i64);
     // Construct 2 initial states, forward and backwards.
-    let (mut s_fwd, mut s_bck) = qs.init(None);
+    let pfunc1 = |pidx| qs.prepare_prime_fwd(pidx, (&fwd_offset).load(Ordering::SeqCst));
+    let pfunc2 = |pidx| qs.prepare_prime_bck(pidx, (&bck_offset).load(Ordering::SeqCst));
+    let mut s_fwd = Sieve::new(0, qs.nblocks(), qs.fbase, &pfunc1);
+    let mut s_bck = Sieve::new(0, qs.nblocks(), qs.fbase, &pfunc2);
     loop {
         if let Some(pool) = tpool {
             pool.install(|| {
@@ -102,7 +109,10 @@ pub fn qsieve(
         s_bck.next_block();
         if s_fwd.blk_no == qs.nblocks() {
             assert_eq!(s_bck.blk_no, qs.nblocks());
-            (s_fwd, s_bck) = qs.init(Some((s_fwd, s_bck)));
+            fwd_offset.store(s_fwd.offset, Ordering::SeqCst);
+            bck_offset.store(s_bck.offset, Ordering::SeqCst);
+            s_fwd.rehash();
+            s_bck.rehash();
         }
 
         let sieved = s_fwd.offset + s_bck.offset;
@@ -184,58 +194,49 @@ impl<'a> SieveQS<'a> {
         }
     }
 
-    pub fn init(&self, sieves: Option<(Sieve<'a>, Sieve<'a>)>) -> (Sieve<'a>, Sieve<'a>) {
-        let offset = if let Some((s1, _)) = sieves.as_ref() {
-            s1.offset
-        } else {
-            0
-        };
-        let f1 = |pidx| {
-            // Return r such that nsqrt + r is a root of n.
-            let Prime { p, r, div } = self.fbase.prime(pidx);
-            let base = self.nsqrt_mods[pidx] as u64;
-            let off: u64 = div.modi64(offset);
-            let mut s1 = r + 2 * p - off - base;
-            let mut s2 = 3 * p - r - off - base;
-            while s1 >= p {
-                s1 -= p
-            }
-            while s2 >= p {
-                s2 -= p
-            }
-            SievePrime {
-                p: p as u32,
-                offsets: [Some(s1 as u32), Some(s2 as u32)],
-            }
-        };
-        let f2 = |pidx| {
-            let Prime { p, r, div } = self.fbase.prime(pidx);
-            // Return r such that nsqrt - (r + 1) is a root of n.
-            let base = self.nsqrt_mods[pidx] as u64;
-            let off: u64 = div.modi64(offset);
-            let mut s1 = 2 * p + base - r - off - 1;
-            let mut s2 = p + base + r - off - 1;
-            while s1 >= p {
-                s1 -= p
-            }
-            while s2 >= p {
-                s2 -= p
-            }
-            SievePrime {
-                p: p as u32,
-                offsets: [Some(s1 as u32), Some(s2 as u32)],
-            }
-        };
-
-        if let Some((mut s1, mut s2)) = sieves {
-            s1.rehash(f1);
-            s2.rehash(f2);
-            (s1, s2)
-        } else {
-            let s1 = Sieve::new(0, self.nblocks(), self.fbase, f1);
-            let s2 = Sieve::new(0, self.nblocks(), self.fbase, f2);
-            (s1, s2)
+    fn prepare_prime_fwd(&self, pidx: usize, offset: i64) -> SievePrime {
+        // Return r such that nsqrt + r is a root of n.
+        let Prime { p, r, div } = self.fbase.prime(pidx);
+        let base = self.nsqrt_mods[pidx] as u64;
+        let off: u64 = div.modi64(offset);
+        let mut s1 = r + 2 * p - off - base;
+        let mut s2 = 3 * p - r - off - base;
+        while s1 >= p {
+            s1 -= p
         }
+        while s2 >= p {
+            s2 -= p
+        }
+        SievePrime {
+            p: p as u32,
+            offsets: [Some(s1 as u32), Some(s2 as u32)],
+        }
+    }
+
+    fn prepare_prime_bck(&self, pidx: usize, offset: i64) -> SievePrime {
+        let Prime { p, r, div } = self.fbase.prime(pidx);
+        // Return r such that nsqrt - (r + 1) is a root of n.
+        let base = self.nsqrt_mods[pidx] as u64;
+        let off: u64 = div.modi64(offset);
+        let mut s1 = 2 * p + base - r - off - 1;
+        let mut s2 = p + base + r - off - 1;
+        while s1 >= p {
+            s1 -= p
+        }
+        while s2 >= p {
+            s2 -= p
+        }
+        SievePrime {
+            p: p as u32,
+            offsets: [Some(s1 as u32), Some(s2 as u32)],
+        }
+    }
+
+    /// An unsafe constructor for the sieve object, only for tests.
+    pub fn init_sieve_for_test(&'a self) -> Sieve<'a> {
+        let pfunc = |pidx| self.prepare_prime_fwd(pidx, 0);
+        let unsafe_pfunc = Box::leak(Box::new(pfunc));
+        Sieve::new(0, self.nblocks(), self.fbase, unsafe_pfunc)
     }
 }
 

@@ -630,10 +630,11 @@ fn siqs_sieve_poly(s: &SieveSIQS, n: &Uint, a: &A, pol: &Poly) -> () {
     // Construct initial state.
     let start_offset: i64 = -(1 << mlog);
     let end_offset: i64 = 1 << mlog;
-    let mut state = sieve::Sieve::new(start_offset, nblocks, s.fbase, move |pidx| {
+    let pfunc = move |pidx| {
         let (off, div31) = SieveSIQS::unpack_pdata(s.pdata[pidx]);
         pol.prepare_prime(pidx, s.fbase, &div31, off as u32, a)
-    });
+    };
+    let mut state = sieve::Sieve::new(start_offset, nblocks, s.fbase, &pfunc);
     if nblocks == 0 {
         sieve_block_poly(s, &pol, a, &mut state);
     }

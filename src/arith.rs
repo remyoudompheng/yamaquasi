@@ -211,8 +211,6 @@ impl Dividers {
         // For 16 bits we can use the exact 17-bit multiplier
         let m16 = (m128 >> (sz - 17)).low_u64() as u32 + 1; // 17 bits
         let s16 = 128 + 17 - sz as usize; // m16 >> s16 = m128 >> 128
-        let m31 = (m128 >> (sz - 32)).low_u64() as u32 + 1; // 32 bits
-        let s31 = 128 + 32 - sz as u32; // m32 >> s32 = m128 >> 128
         let m64 = (m128 >> (sz - 64)).low_u64() + 1; // 64 bits
         let r64 = (U256::one() << 64) % (p as u64);
         let s64 = 128 + 64 - sz as usize; // m64 >> s64 = m128 >> 128
@@ -224,7 +222,7 @@ impl Dividers {
             p,
             m16,
             s16,
-            div31: Divider31 { p, m31, s31 },
+            div31: Divider31::new(p),
             m64,
             r64,
             s64,
@@ -387,6 +385,8 @@ impl Dividers {
     }
 }
 
+// A divider for 31-bit integers.
+// It uses a 32-bit mantissa.
 #[derive(Clone, Debug)]
 pub struct Divider31 {
     pub p: u32,
@@ -395,6 +395,14 @@ pub struct Divider31 {
 }
 
 impl Divider31 {
+     pub const fn new(p: u32) -> Self {
+        let m64 = (1u64 << 63) / p as u64;
+        let sz = 64 - u64::leading_zeros(m64);
+        let m31 = (m64 >> (sz - 32)) as u32 + 1; // 32 bits
+        let s31 = 63 + 32 - sz as u32; // m31 >> s31 = m63 >> 63
+        Divider31 { p , m31, s31 }
+    }
+
     #[inline]
     pub fn modi32(&self, n: i32) -> u32 {
         if n < 0 {
@@ -406,6 +414,12 @@ impl Divider31 {
         } else {
             self.modu31(n as u32)
         }
+    }
+
+    #[inline]
+    pub fn divu31(&self, n: u32) -> u32 {
+        let nm = (n as u64) * (self.m31 as u64);
+        (nm >> self.s31) as u32
     }
 
     #[inline]

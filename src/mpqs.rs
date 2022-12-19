@@ -423,12 +423,13 @@ fn mpqs_poly(
 
     let start_offset = -(1 << mlog);
     let end_offset = 1 << mlog;
-    let mut state = sieve::Sieve::new(start_offset, nblocks, fbase, |pidx| {
+    let pfunc = |pidx| {
         let p = fbase.p(pidx);
         let r = fbase.r(pidx);
         let div = fbase.div(pidx);
         pol.prepare_prime(p, r, div, start_offset as i32)
-    });
+    };
+    let mut state = sieve::Sieve::new(start_offset, nblocks, fbase, &pfunc);
     if nblocks == 0 {
         sieve_block_poly(&sieve, &mut state);
     }
