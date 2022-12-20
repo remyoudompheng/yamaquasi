@@ -248,7 +248,6 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
 
     let len: usize = BLOCK_SIZE;
     let offset = st.offset;
-    let maxprime = st.primes.last().unwrap().p;
     let maxlarge = s.maxlarge;
     let max_cofactor = if s.use_double {
         maxlarge * maxlarge

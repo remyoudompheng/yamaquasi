@@ -73,7 +73,10 @@ pub fn mpqs(
     let mut polys_done = 0;
     let use_double = n.bits() > 256;
     eprintln!("Generated {} polynomials", polys.len());
-    let maxlarge: u64 = maxprime * large_prime_factor(&n, use_double);
+    let maxlarge: u64 = maxprime
+        * prefs
+            .large_factor
+            .unwrap_or(large_prime_factor(&n, use_double));
     let rels = RwLock::new(RelationSet::new(n, maxlarge));
     eprintln!("Max cofactor {}", maxlarge);
     loop {
@@ -100,7 +103,7 @@ pub fn mpqs(
             let v = pool.install(|| {
                 (&polys[polyidx..])
                     .par_iter()
-                    .map(|p| mpqs_poly(p, n, &primes, use_double, &rels))
+                    .map(|p| mpqs_poly(p, n, &primes, maxlarge, use_double, &rels))
                     .collect()
             });
             polys_done += polys.len() - polyidx;
@@ -111,7 +114,7 @@ pub fn mpqs(
             let pol = &polys[polyidx];
             polyidx += 1;
             polys_done += 1;
-            mpqs_poly(pol, n, &primes, use_double, &rels);
+            mpqs_poly(pol, n, &primes, maxlarge, use_double, &rels);
         }
         let rels = rels.read().unwrap();
         if rels.len() >= target {
@@ -384,7 +387,14 @@ fn test_select_poly() {
 }
 
 // One MPQS unit of work, identified by an integer 'idx'.
-fn mpqs_poly(pol: &Poly, n: Uint, primes: &[Prime], use_double: bool, rels: &RwLock<RelationSet>) {
+fn mpqs_poly(
+    pol: &Poly,
+    n: Uint,
+    primes: &[Prime],
+    maxlarge: u64,
+    use_double: bool,
+    rels: &RwLock<RelationSet>,
+) {
     let mlog = mpqs_interval_logsize(&n);
     let nblocks = (2 << mlog) / BLOCK_SIZE;
     if DEBUG {
@@ -406,6 +416,7 @@ fn mpqs_poly(pol: &Poly, n: Uint, primes: &[Prime], use_double: bool, rels: &RwL
         pol,
         dinv,
         d2inv,
+        maxlarge,
         use_double,
         rels: rels,
     };
@@ -469,6 +480,7 @@ struct SieveMPQS<'a> {
     pol: &'a Poly,
     dinv: Uint,
     d2inv: Uint,
+    maxlarge: u64,
     use_double: bool,
     rels: &'a RwLock<RelationSet>,
 }
@@ -478,8 +490,7 @@ fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) {
     st.sieve_block();
 
     let offset = st.offset;
-    let maxprime = s.primes.last().unwrap().p;
-    let maxlarge = maxprime * large_prime_factor(&s.n, s.use_double);
+    let maxlarge = s.maxlarge;
     assert!(maxlarge == (maxlarge as u32) as u64);
     let max_cofactor: u64 = if s.use_double {
         maxlarge * maxlarge

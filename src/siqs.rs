@@ -75,7 +75,10 @@ pub fn siqs(
 
     let maxprime = primes.last().unwrap().p;
     let use_double = prefs.use_double.unwrap_or(n.bits() > 256);
-    let maxlarge: u64 = maxprime * large_prime_factor(&n, use_double);
+    let maxlarge: u64 = maxprime
+        * prefs
+            .large_factor
+            .unwrap_or(large_prime_factor(&n, use_double));
     eprintln!("Max large prime {}", maxlarge);
 
     // Prepare packed auxiliary numbers (the Prime structure is > 64 bytes large)
