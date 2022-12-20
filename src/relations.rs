@@ -55,6 +55,10 @@ impl Relation {
 /// to produce a complete relation.
 /// This is equivalent to finding cycles only in the connected component
 /// of single prime relations.
+///
+/// Empirical studies show that non-trivial cycles never appear: all cycles
+/// intersect the (huge) connected component of p-relations.
+///
 #[derive(Default)]
 pub struct RelationSet {
     pub n: Uint,
@@ -198,13 +202,13 @@ impl RelationSet {
         }
         eprintln!("[RelationSet] Combined {} double-large relations", deleted);
         // FIXME: don't even attempt to find any relation cycle.
-        self.find_cycles();
+        //self.find_cycles();
     }
 
+    /// Debugging method to count cycles in a set of pp-relations.
+    /// It uses the union find algorithm to determine connected components.
+    #[allow(dead_code)]
     fn find_cycles(&self) {
-        // Analyze remaining cycles
-        // Create a union find structure.
-
         // prime => (parent, depth)
         let mut forest = HashMap::<i32, (i32, u32)>::new();
         fn root(forest: &HashMap<i32, (i32, u32)>, n: i32) -> Option<(i32, u32)> {
