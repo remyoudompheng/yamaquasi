@@ -11,14 +11,15 @@ use std::collections::HashMap;
 use std::default::Default;
 
 use bitvec_simd::BitVec;
+use bnum::cast::CastFrom;
 use num_integer::Integer;
 use num_traits::One;
 
-use crate::arith::pow_mod;
+use crate::arith::{pow_mod, U512};
 use crate::matrix;
 use crate::{Int, Uint};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Relation {
     pub x: Uint,
     pub cofactor: u64,
@@ -42,8 +43,11 @@ impl Relation {
         }
         (self.x * self.x) % n == prod
     }
-}
 
+    fn pack(self) -> PackedRelation {
+        PackedRelation::pack(self)
+    }
+}
 /// A RelationSet collects all relations x^2 = product(small primes) * cofactor
 /// encountered during sieve.
 ///
@@ -65,10 +69,10 @@ pub struct RelationSet {
     pub maxlarge: u64,
     pub complete: Vec<Relation>,
     // p => relation with cofactor p
-    pub partial: HashMap<u64, Relation>,
+    partial: HashMap<u64, PackedRelation>,
     // p => relation with cofactor pq (p < q)
     // No key is common with partial map
-    pub doubles: HashMap<(u64, u64), Relation>,
+    doubles: HashMap<(u64, u64), PackedRelation>,
     pub n_smooths: usize,
     pub n_partials: usize,
     pub n_doubles: usize,
@@ -163,7 +167,7 @@ impl RelationSet {
             // Factor base elements have at most 24 bits
             self.n_partials += 1;
             if !self.combine_single(&r) {
-                self.partial.insert(r.cofactor, r);
+                self.partial.insert(r.cofactor, r.pack());
             }
         } else {
             // Cofactor is above 32 bits: is it a double prime?
@@ -175,7 +179,7 @@ impl RelationSet {
             } else {
                 // No combination available.
                 let key = if p < q { (p, q) } else { (q, p) };
-                self.doubles.insert(key, r);
+                self.doubles.insert(key, PackedRelation::pack(r));
             }
             // Every 5000 double relations, scan the array.
             if self.n_doubles % 5000 == 0 {
@@ -197,7 +201,7 @@ impl RelationSet {
         }
         for (p, q) in delete {
             let r = self.doubles.remove(&(p, q)).unwrap();
-            let ok = self.combine_double(&r, p, q);
+            let ok = self.combine_double(&r.unpack(), p, q);
             assert!(ok);
         }
         eprintln!("[RelationSet] Combined {} double-large relations", deleted);
@@ -273,7 +277,7 @@ impl RelationSet {
     // Tries to combine a relation with an existing one.
     fn combine_single(&mut self, r: &Relation) -> bool {
         if let Some(r0) = self.partial.get(&r.cofactor) {
-            let rr = self.combine(&r, r0);
+            let rr = self.combine(&r, &r0.unpack());
             if rr.factors.iter().all(|(_, exp)| exp % 2 == 0) {
                 // FIXME: Poor choice of A's can lead to duplicate relations.
                 eprintln!("FIXME: ignoring trivial relation");
@@ -283,7 +287,7 @@ impl RelationSet {
                 rr.verify(&self.n),
                 "INTERNAL ERROR: invalid combined relation\nr1={:?}\nr2={:?}\nr1*r2={:?}",
                 r,
-                r0,
+                r0.unpack(),
                 rr
             );
             self.complete.push(rr);
@@ -313,28 +317,28 @@ impl RelationSet {
             true
         } else if self.partial.contains_key(&p) && self.partial.contains_key(&q) {
             // Ideal case, both primes already available.
-            let rp = self.partial.get(&p).unwrap();
-            let rq = self.partial.get(&q).unwrap();
-            let r2 = self.combine(&self.combine(&r, rp), rq);
+            let rp = self.partial.get(&p).unwrap().unpack();
+            let rq = self.partial.get(&q).unwrap().unpack();
+            let r2 = self.combine(&self.combine(&r, &rp), &rq);
             assert_eq!(r2.cofactor, 1);
             self.complete.push(r2);
             self.n_combined2 += 1;
             true
         } else if self.partial.contains_key(&p) {
             let rp = self.partial.get(&p).unwrap();
-            let mut rq = self.combine(&r, rp);
+            let mut rq = self.combine(&r, &rp.unpack());
             rq.pp = true;
             assert_eq!(rq.cofactor, q);
             self.n_combined12 += 1;
-            self.partial.insert(q, rq);
+            self.partial.insert(q, rq.pack());
             true
         } else if self.partial.contains_key(&q) {
             let rq = self.partial.get(&q).unwrap();
-            let mut rp = self.combine(&r, rq);
+            let mut rp = self.combine(&r, &rq.unpack());
             rp.pp = true;
             assert_eq!(rp.cofactor, p);
             self.n_combined12 += 1;
-            self.partial.insert(p, rp);
+            self.partial.insert(p, rp.pack());
             true
         } else {
             false
@@ -517,4 +521,130 @@ pub fn try_factor(n: &Uint, a: Uint, b: Uint) -> Option<(Uint, Uint)> {
         return Some((p, q));
     }
     None
+}
+
+// A packed version of Relation.
+// Factors are encoded as ULEB128 with optional 1-byte exponent.
+// Typical memory usage is about 2-3 bytes per factor instead of 16.
+
+struct PackedRelation {
+    x: U512,
+    cofactor: u64,
+    pp: bool,
+    // Usually less than 64 bytes (200 bytes for combined relations).
+    factors_blob: Vec<u8>,
+}
+
+impl PackedRelation {
+    fn pack(r: Relation) -> PackedRelation {
+        let mut ints = vec![];
+        for &(p, k) in &r.factors {
+            // encode each factor as a sequence of integers
+            // -1 encodes to 0
+            // 2 encodes to 1
+            // p encodes to p
+            // (p, k > 1) encodes to (2p, k)
+            match (p, k) {
+                (-1, k) if k % 2 == 0 => continue,
+                (-1, k) if k % 2 == 1 => ints.push(0),
+                (p, k) => {
+                    assert!(p > 0 && p < (1 << 31));
+                    let p = if p == 2 { 1 } else { p };
+                    assert!(p % 2 == 1);
+                    if k > 1 {
+                        ints.push(2 * p as u32);
+                        ints.push(k as u32);
+                    } else {
+                        ints.push(p as u32);
+                    }
+                }
+            }
+        }
+        let mut factors_blob = vec![];
+        for n in ints {
+            // encode as leb128
+            let length = std::cmp::max(1, (32 - u32::leading_zeros(n) + 6) / 7);
+            for j in 0..length {
+                let mut byte = (n >> (7 * (length - 1 - j))) & 0x7f;
+                if j > 0 {
+                    byte |= 0x80;
+                }
+                factors_blob.push(byte as u8);
+            }
+        }
+        PackedRelation {
+            x: U512::cast_from(r.x),
+            cofactor: r.cofactor,
+            pp: r.pp,
+            factors_blob,
+        }
+    }
+
+    fn unpack(&self) -> Relation {
+        // Decode ULEB128
+        let mut ints = vec![];
+        let mut n = 0;
+        for (i, &byte) in self.factors_blob.iter().enumerate() {
+            if byte < 0x80 {
+                if i > 0 {
+                    ints.push(n)
+                }
+                n = byte as u32;
+            } else {
+                n = (n << 7) | (byte as u32 & 0x7f);
+            }
+        }
+        ints.push(n);
+        let mut factors = vec![];
+        let mut idx = 0;
+        while idx < ints.len() {
+            let n = ints[idx];
+            if n == 0 {
+                factors.push((-1i64, 1u64));
+                idx += 1;
+            } else if n % 2 == 1 {
+                // factor without exponent
+                let p = if n == 1 { 2 } else { n } as i64;
+                factors.push((p, 1));
+                idx += 1;
+            } else {
+                let p = if n == 2 { 2 } else { n >> 1 };
+                let k = ints[idx + 1] as u64;
+                factors.push((p as i64, k));
+                idx += 2;
+            }
+        }
+        Relation {
+            x: Uint::cast_from(self.x),
+            cofactor: self.cofactor,
+            pp: self.pp,
+            factors,
+        }
+    }
+}
+
+#[test]
+fn test_pack_relation() {
+    use std::str::FromStr;
+
+    let r = Relation {
+        x: Uint::from_str("135487168713871387841578923567").unwrap(),
+        cofactor: 7915738421,
+        pp: true,
+        factors: vec![
+            (-1, 1),
+            (2, 17),
+            (3, 5),
+            (5, 1),
+            (9109, 1),
+            (9173, 2),
+            (9241, 3),
+            (9349, 1),
+            (19349, 1),
+            (39349, 1),
+            (289349, 1),
+            (3879645, 1),
+        ],
+    };
+    assert_eq!(PackedRelation::pack(r.clone()).unpack(), r);
 }

@@ -103,12 +103,11 @@ interval `[0,M]` and the backward sieve interval `[-M,0]` simultaneously.
 It is used in the MPQS and the SIQS/HMPQS implementation to process a batch
 of polynomials over a thread pool.
 
-# Memory usage
+## Memory usage
 
-Implementation choices do not attempt to aggressively reduce memory usage
-and targets home devices with fewer than 16 cores and more than 4GB of memory.
-In particular it does not write relations to disk, but keeps them entirely
-in memory. Data structures are optimized only for cache-sensitive parts of the code.
+Yamaquasi does not write any relations to disk and keeps everything in memory
+in a compact format. Memory usage will be less than 2GB even when factoring
+100 digits.
 
 ## Linear algebra
 
