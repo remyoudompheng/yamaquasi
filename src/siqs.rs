@@ -206,9 +206,9 @@ pub fn siqs(
 fn nfactors(n: &Uint) -> u32 {
     match n.bits() {
         0..=69 => 2,
-        70..=99 => 3,
-        100..=129 => 4,
-        130..=149 => 5,
+        70..=79 => 3,
+        80..=89 => 4,
+        90..=149 => 5,
         150..=169 => 6,
         170..=189 => 7,
         190..=209 => 8,
@@ -309,7 +309,12 @@ pub fn select_siqs_factors<'a>(fb: &'a FBase, n: &'a Uint, nfacs: usize) -> Fact
         .primes
         .partition_point(|&p| Uint::from(p as u64).pow(nfacs as u32) < target);
     // This may fail for very small n.
-    assert!(idx > nfacs && idx + nfacs < fb.len());
+    assert!(
+        idx > nfacs && idx + nfacs < fb.len(),
+        "failed to find enough factor elements around fb[{}] (want {})",
+        idx,
+        nfacs
+    );
     let selected_idx = if idx > 4 * nfacs && idx + 4 * nfacs < fb.len() {
         idx - 2 * nfacs as usize..idx + 2 * nfacs as usize
     } else {
