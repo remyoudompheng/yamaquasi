@@ -86,7 +86,7 @@
 //!
 //! TODO: Bibliography
 
-use std::cmp::max;
+use std::cmp::{max, min};
 use wide;
 
 use crate::arith::{self, Num};
@@ -112,7 +112,7 @@ const PRIME_BUCKET_DIVIDERS: &[arith::Divider31] = &[
 
 // Map prime indices to 0..256
 fn prime_bucket(pidx: u32, logp: usize) -> u32 {
-    PRIME_BUCKET_DIVIDERS[logp-16].divu31(pidx)
+    PRIME_BUCKET_DIVIDERS[logp - 16].divu31(pidx)
 }
 
 // The sieve makes an array of offsets progress through the
@@ -237,7 +237,7 @@ impl<'a> Sieve<'a> {
                 table_pidx += 1;
             }
         }
-        let overflows: usize = tables.iter().map(|t| t.overflows).sum();
+        let overflows: usize = tables.iter().map(|t| t.n_overflows).sum();
         if overflows > 0 {
             // FIXME
             //eprintln!("bucket overflows {}", overflows);
@@ -438,12 +438,13 @@ impl<'a> Sieve<'a> {
 
     fn prime_bucket_bounds(&self, pbucket: usize, logp: usize) -> (usize, usize) {
         let base = self.idx_by_log[logp] as usize;
-        let next = self.idx_by_log[logp + 1] as usize;
+        let next = if logp + 1 == self.idx_by_log.len() {
+            self.fbase.len()
+        } else {
+            self.idx_by_log[logp + 1] as usize
+        };
         let bsz = PRIME_BUCKET_SIZES[logp - LARGE_PRIME_LOG];
-        (
-            base + pbucket * bsz,
-            std::cmp::min(next, base + (pbucket + 1) * bsz),
-        )
+        (base + pbucket * bsz, min(next, base + (pbucket + 1) * bsz))
     }
 
     // Slow method to determine whether a prime divides the sieve element
@@ -464,7 +465,7 @@ impl<'a> Sieve<'a> {
         // are smaller than they should be: subtract an upper bound for
         // the missing part from the threshold.
         let skipbits = self.skipbits();
-        let threshold2 = threshold - std::cmp::min(skipbits, threshold as usize / 2) as u8;
+        let threshold2 = threshold - min(skipbits, threshold as usize / 2) as u8;
 
         let mut res: Vec<u16> = vec![];
         let thr16x = wide::u8x16::splat(threshold2 - 1);
@@ -550,7 +551,18 @@ impl<'a> Sieve<'a> {
                     &t.entries[self.blk_no][b * BUCKET_SIZE..b * BUCKET_SIZE + blen]
                 {
                     if boff as u8 == off {
-                        // Walk candidate primes ???
+                        // Walk candidate primes
+                        let (pmin, pmax) = self.prime_bucket_bounds(pbucket as usize, logp);
+                        for pidx in pmin..pmax {
+                            if self.is_factor(r as usize, pidx) {
+                                facs[j].push(pidx)
+                            }
+                        }
+                    }
+                }
+                // Look for offset in overflows (extremely uncommon)
+                for &(ooff, pbucket) in &t.overflows[..min(t.overflows.len(), t.n_overflows)] {
+                    if ooff == r {
                         let (pmin, pmax) = self.prime_bucket_bounds(pbucket as usize, logp);
                         for pidx in pmin..pmax {
                             if self.is_factor(r as usize, pidx) {
@@ -596,6 +608,9 @@ impl<'a> Sieve<'a> {
 
 const BUCKET_WIDTH: usize = 256;
 const BUCKET_SIZE: usize = 32;
+// Overflows happen in less than 1/10000th of buckets
+// but MPQS params use huge intervals.
+const MAX_OVERFLOWS: usize = 32;
 
 // A SieveTable holds sieve offsets for a size class of primes
 // from the factor base.
@@ -604,7 +619,8 @@ const BUCKET_SIZE: usize = 32;
 pub struct SieveTable {
     entries: Vec<[(u8, u8); Self::N_ENTRIES]>,
     blens: Vec<[u8; Self::N_BUCKETS]>,
-    overflows: usize,
+    overflows: [(u16, u8); 16],
+    n_overflows: usize,
 }
 
 impl SieveTable {
@@ -615,7 +631,8 @@ impl SieveTable {
         SieveTable {
             entries: vec![[(0u8, 0u8); Self::N_ENTRIES]; nblocks],
             blens: vec![[0u8; Self::N_BUCKETS]; nblocks],
-            overflows: 0,
+            overflows: [(0u16, 0u8); 16],
+            n_overflows: 0,
         }
     }
 
@@ -626,7 +643,7 @@ impl SieveTable {
         for t in &mut self.blens {
             t.fill(0u8);
         }
-        self.overflows = 0;
+        self.overflows.fill((0u16, 0u8));
     }
 
     fn bucket(off: usize) -> (usize, usize) {
@@ -649,8 +666,14 @@ impl SieveTable {
                     (bucket_off as u8, pidx as u8);
                 blen += 1;
                 *blen_p = blen;
-                if blen as usize == BUCKET_SIZE {
-                    self.overflows += 1;
+            } else {
+                if self.n_overflows < self.overflows.len() {
+                    self.overflows[self.n_overflows] = (blk_off as u16, pidx as u8);
+                }
+                self.n_overflows += 1;
+                if self.n_overflows >= MAX_OVERFLOWS {
+                    // Extremely unlikely to ever happen.
+                    eprintln!("WARNING: max overflows reached {}", self.n_overflows);
                 }
             }
         }
