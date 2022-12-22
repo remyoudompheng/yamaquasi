@@ -69,11 +69,11 @@ pub fn siqs(
 
     let maxprime = fbase.bound() as u64;
     let use_double = prefs.use_double.unwrap_or(n.bits() > 256);
-    let maxlarge: u64 = maxprime
-        * prefs
-            .large_factor
-            .unwrap_or(large_prime_factor(&n, use_double));
+    let maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(&n));
     eprintln!("Max large prime {}", maxlarge);
+    if use_double {
+        eprintln!("Max double large prime {}", maxlarge * maxprime * 2);
+    }
 
     // Prepare packed auxiliary numbers (the Prime structure is > 64 bytes large)
     // They are constant over the whole process.
@@ -209,9 +209,10 @@ fn nfactors(n: &Uint) -> u32 {
         150..=169 => 6,
         170..=189 => 7,
         190..=209 => 8,
-        210..=269 => 9,
-        270..=309 => 10,
-        _ => 11,
+        210..=239 => 9,
+        240..=269 => 10,
+        270..=299 => 11,
+        _ => 12,
     }
 }
 
@@ -257,7 +258,7 @@ fn interval_logsize(n: &Uint) -> u32 {
     }
 }
 
-fn large_prime_factor(n: &Uint, doubles: bool) -> u64 {
+fn large_prime_factor(n: &Uint) -> u64 {
     let sz = n.bits();
     match sz {
         0..=49 => {
@@ -270,13 +271,13 @@ fn large_prime_factor(n: &Uint, doubles: bool) -> u64 {
         {
             300 - 2 * n.bits() as u64 // 200..100
         }
-        _ => {
-            // Less large primes if we use double large primes.
-            if doubles {
-                n.bits() as u64 / 16
-            } else {
-                n.bits() as u64
-            }
+        101..=250 => {
+            // More large primes to compensate fewer relations
+            n.bits() as u64
+        }
+        251.. => {
+            // Bound large primes to avoid exceeding 32 bits.
+            128 + n.bits() as u64 / 2
         }
     }
 }
@@ -684,11 +685,18 @@ impl<'a> SieveSIQS<'a> {
 fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
     st.sieve_block();
 
-    let maxprime = s.fbase.bound();
+    let maxprime = s.fbase.bound() as u64;
     let maxlarge = s.maxlarge;
     assert!(maxlarge == (maxlarge as u32) as u64);
     let max_cofactor: u64 = if s.use_double {
-        maxlarge * maxlarge
+        // We don't want double large prime to reach maxlarge^2
+        // because p-relations are much less dense in the large prime area
+        // and this creates extra factoring pressure.
+        // We require that at least one prime is "small" so multiply
+        // the lower and upper end of the large prime range is a good
+        // midpoint.
+        // See [Lentra-Manasse]
+        maxlarge * maxprime * 2
     } else {
         maxlarge
     };
@@ -731,8 +739,10 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
             continue;
         }
         let pq = fbase::try_factor64(cofactor);
-        if pq.is_none() && cofactor > maxlarge {
-            continue;
+        match pq {
+            Some((p, q)) if p > maxlarge || q > maxlarge => continue,
+            None if cofactor > maxlarge => continue,
+            _ => {}
         }
         // Complete with factors of A
         for f in &a.factors {
