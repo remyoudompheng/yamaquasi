@@ -298,8 +298,9 @@ pub struct Factors<'a> {
 // combinations is large enough to generate values close to the target.
 pub fn select_siqs_factors<'a>(fb: &'a FBase, n: &'a Uint, nfacs: usize) -> Factors<'a> {
     let mlog = interval_logsize(n);
-    // The target is sqrt(2N) / 2M. Don't go below 2000 for extremely small numbers.
-    let target = max(Uint::from(2000u64), arith::isqrt(n >> 1) >> mlog);
+    // For interval [-M,M] the target is sqrt(2N) / M, see [Pomerance].
+    // Don't go below 2000 for extremely small numbers.
+    let target = max(Uint::from(2000u64), arith::isqrt(n << 1) >> mlog);
     let idx = fb
         .primes
         .partition_point(|&p| Uint::from(p as u64).pow(nfacs as u32) < target);
@@ -683,6 +684,7 @@ impl<'a> SieveSIQS<'a> {
 fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
     st.sieve_block();
 
+    let maxprime = s.fbase.bound();
     let maxlarge = s.maxlarge;
     assert!(maxlarge == (maxlarge as u32) as u64);
     let max_cofactor: u64 = if s.use_double {
@@ -745,6 +747,7 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
         if DEBUG {
             eprintln!("x={} smooth {} cofactor {}", x, v, cofactor);
         }
+        assert!(cofactor == 1 || cofactor > maxprime as u64);
         let rel = Relation {
             x: xrel,
             cofactor,
