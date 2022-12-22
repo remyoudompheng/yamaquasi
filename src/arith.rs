@@ -72,8 +72,11 @@ impl<const N: usize> Num for BUint<N> {
 }
 
 /// Square root modulo a prime number p
-pub fn sqrt_mod<T: Num>(n: T, p: T) -> Option<T> {
-    let n = n % p;
+pub fn sqrt_mod<N, T: Num>(n: N, p: T) -> Option<T>
+where
+    N: std::ops::Rem<T, Output = T>,
+{
+    let n: T = n % p;
     if n == T::zero() {
         return Some(T::zero());
     }
@@ -95,7 +98,7 @@ pub fn sqrt_mod<T: Num>(n: T, p: T) -> Option<T> {
             None
         } else {
             let exp2 = (p.low_u64() - 1).trailing_zeros();
-            assert!(exp2 < 20);
+            assert!(exp2 < 24);
             // Simplified Tonelli-Shanks
             // O(2^k log(p)) where p-1 = q*2^k
             let mut q = p >> 1;
@@ -103,8 +106,9 @@ pub fn sqrt_mod<T: Num>(n: T, p: T) -> Option<T> {
                 q = q >> 1
             }
             let q1 = (q >> 1) + one; // (q+1)/2
-            for k in 1..(4 << exp2) {
+            for k in 1..(1 << 24) {
                 // n*k*k has order q with probability q/(p-1)
+                // Some k must satisfy that property.
                 let k = T::from(k);
                 let nk = mulmod(mulmod(n, k, p), k, p);
                 let root = pow_mod(nk, q1, p);
@@ -112,7 +116,7 @@ pub fn sqrt_mod<T: Num>(n: T, p: T) -> Option<T> {
                     return Some(mulmod(root, pow_mod(k, p - T::from(2), p), p));
                 }
             }
-            None
+            unreachable!("sqrt_mod fail")
         }
     }
 }
@@ -395,12 +399,12 @@ pub struct Divider31 {
 }
 
 impl Divider31 {
-     pub const fn new(p: u32) -> Self {
+    pub const fn new(p: u32) -> Self {
         let m64 = (1u64 << 63) / p as u64;
         let sz = 64 - u64::leading_zeros(m64);
         let m31 = (m64 >> (sz - 32)) as u32 + 1; // 32 bits
         let s31 = 63 + 32 - sz as u32; // m31 >> s31 = m63 >> 63
-        Divider31 { p , m31, s31 }
+        Divider31 { p, m31, s31 }
     }
 
     #[inline]
@@ -446,12 +450,24 @@ mod tests {
 
     #[test]
     fn test_sqrt_mod() {
-        const PRIMES: &[u32] = &[2503, 2521, 2531, 2539, 2500213, 2500363, 300 * 1024 + 1];
+        const PRIMES: &[u32] = &[
+            2473,
+            2503,
+            2521,
+            2531,
+            2539,
+            63977,
+            2500213,
+            2500363,
+            300 * 1024 + 1,
+            (7 << 20) + 1,
+            (13 << 20) + 1,
+        ];
         for &p in PRIMES {
             let p = p as u64;
             for k in 1..p / 2 {
                 let k = k as u64;
-                if k > 5000 {
+                if k > 50000 || k * p > 1 << 28 {
                     break;
                 }
                 if let Some(r) = sqrt_mod(k, p) {
@@ -460,9 +476,10 @@ mod tests {
                 let r = sqrt_mod(k * k, p);
                 assert!(
                     r == Some(k) || r == Some(p - k),
-                    "failed sqrt({}) mod {}",
+                    "failed sqrt({}) mod {} got {:?}",
                     (k * k) % p,
-                    p
+                    p,
+                    r
                 )
             }
         }
