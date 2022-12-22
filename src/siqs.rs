@@ -39,6 +39,10 @@ pub fn siqs(
     // Choose factor base. Sieve twice the number of primes
     // (n will be a quadratic residue for only half of them)
     let fb = prefs.fb_size.unwrap_or(params::factor_base_size(&n));
+    // Reduce factor base size when using large double primes
+    // since they will cover the large prime space.
+    let use_double = prefs.use_double.unwrap_or(n.bits() > 256);
+    let fb = if use_double { fb / 2 } else { fb };
     let fbase = FBase::new(*n, fb);
     eprintln!("Smoothness bound {}", fbase.bound());
     eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls(),);
@@ -68,7 +72,6 @@ pub fn siqs(
     let done = AtomicBool::new(false);
 
     let maxprime = fbase.bound() as u64;
-    let use_double = prefs.use_double.unwrap_or(n.bits() > 256);
     let maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(&n));
     eprintln!("Max large prime {}", maxlarge);
     if use_double {
