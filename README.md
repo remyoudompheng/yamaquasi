@@ -70,6 +70,9 @@ The implementation is a "textbook" implementation following the papers:
 [W. R. Alford, Carl Pomerance, Implementing the self-initializing quadratic sieve
 ](https://math.dartmouth.edu/~carlp/implementing.pdf)
 
+[A. K. Lenstra, M. S. Manasse, Factoring with two large primes
+](https://doi.org/10.1090/S0025-5718-1994-1250773-9)
+
 [Brian Carrier, Samuel G. Wagstaff, Implementing the Hypercube Quadratic Sieve
 with Two Large Primes](https://homes.cerias.purdue.edu/~ssw/qs4.pdf)
 
