@@ -359,8 +359,11 @@ pub fn relation_gap(rels: &[Relation]) -> usize {
             }
         }
     }
-    if occs.len() > rels.len() {
-        occs.len() - rels.len()
+    // We require additional relations compared to the number of factors.
+    // This is because relations may accidentally be trivial
+    // (x^2=y^2 where n divides x-y or x+y).
+    if occs.len() + 16 > rels.len() {
+        occs.len() + 16 - rels.len()
     } else {
         0
     }

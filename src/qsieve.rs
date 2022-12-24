@@ -91,9 +91,9 @@ pub fn qsieve(
             sieve_block(&qs, &mut s_bck, true);
         }
         let mut rels = qs.rels.write().unwrap();
-        if rels.len() > fbase.len() + 16 {
+        if rels.len() > fbase.len() + 32 {
             // Too many relations! May happen for very small inputs.
-            rels.complete.truncate(fbase.len() + 16);
+            rels.complete.truncate(fbase.len() + 32);
             let gap = rels.gap();
             if gap == 0 {
                 eprintln!("Found enough relations");
