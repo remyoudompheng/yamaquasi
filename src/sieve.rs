@@ -65,7 +65,7 @@
 //!
 //! For each size class (bit length), the sum(1/p) is:
 //!
-//!         sum(1/p) #primes  #fbase/256
+//! class   sum(1/p) #primes  #fbase/256
 //! size 16  0.0644    3030     5
 //! size 17  0.0606    5709    11
 //! size 18  0.0570   10749    20
