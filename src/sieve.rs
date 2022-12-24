@@ -644,6 +644,7 @@ impl SieveTable {
             t.fill(0u8);
         }
         self.overflows.fill((0u16, 0u8));
+        self.n_overflows = 0;
     }
 
     fn bucket(off: usize) -> (usize, usize) {
