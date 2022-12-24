@@ -207,15 +207,8 @@ fn test_poly_prime() {
     }
 }
 
-/// Returns a polynomial suitable for sieving across ±2^sievebits
-/// The offset is a seed for prime generation.
-pub fn select_poly(base: Uint, offset: u64, n: Uint) -> Poly {
-    // Select an appropriate pseudoprime. It is enough to be able
-    // to compute a modular square root of n.
-    let (d, r) = sieve_poly(base, offset, n);
-    make_poly(d, r, &n)
-}
-
+/// Returns a set of polynomials suitable for sieving across ±2^sievebits
+/// The base offset is a seed for prime generation.
 pub fn select_polys(base: Uint, width: usize, n: &Uint) -> Vec<Poly> {
     sieve_for_polys(base, width, &n)
         .into_iter()
@@ -291,59 +284,6 @@ fn make_poly(d: Uint, r: Uint, n: &Uint) -> Poly {
     }
 }
 
-pub const POLY_STRIDE: usize = 32768;
-
-fn sieve_at(base: Uint, offset: u64) -> [u64; 128] {
-    if base.bits() > 1024 {
-        panic!("not expecting to sieve {}-bit primes", base.bits())
-    }
-    let mut composites = [0u8; POLY_STRIDE];
-    for &p in fbase::SMALL_PRIMES {
-        let off = (base + Uint::from(offset)) % p;
-        let mut idx = -(off as isize);
-        while idx < composites.len() as isize {
-            if idx >= 0 {
-                composites[idx as usize] = 1
-            }
-            idx += p as isize
-        }
-    }
-    let mut res = [0u64; 128];
-    let mut idx = 0;
-    let base4 = base.low_u64() % 4;
-    for i in 0..POLY_STRIDE {
-        if composites[i] == 0 && (base4 + i as u64) % 4 == 3 {
-            res[idx] = offset + i as u64;
-            idx += 1;
-        }
-        if idx == 128 {
-            break;
-        }
-    }
-    res
-}
-
-fn sieve_poly(base: Uint, offset: u64, n: Uint) -> (Uint, Uint) {
-    let offs = sieve_at(base, offset);
-    for o in offs {
-        if o == 0 {
-            continue;
-        }
-        let base = base + Uint::from(o);
-        if base.low_u64() % 4 == 3 {
-            // Compute pow(n, (d+1)/4, d)
-            let r = pow_mod(n, (base >> 2) + Uint::one(), base);
-            if (r * r) % base == n % base {
-                return (base, r);
-            }
-        }
-    }
-    panic!(
-        "impossible! failed to find a pseudoprime {} {}=>{:?}",
-        base, offset, offs
-    )
-}
-
 #[test]
 fn test_select_poly() {
     use crate::arith::{isqrt, sqrt_mod};
@@ -356,7 +296,7 @@ fn test_select_poly() {
     .unwrap();
     let mut polybase: Uint = isqrt(n >> 1) >> 24;
     polybase = isqrt(polybase);
-    let Poly { a, b, d } = select_poly(polybase, 0, n);
+    let Poly { a, b, d } = select_polys(polybase, 512, &n)[0];
     let (a, b, d) = (Uint::cast_from(a), Uint::cast_from(b), Uint::cast_from(d));
     // D = 3 mod 4, 2D = 6 mod 8
     assert_eq!(d.low_u64() % 8, 6);
