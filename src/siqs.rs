@@ -580,8 +580,6 @@ impl Poly {
 /// Given coefficients A and B, compute all roots (Ax+B)^2=N
 /// modulo the factor base, computing (r - B)/A mod p
 pub fn make_polynomial(n: &Uint, a: &A, idx: usize) -> Poly {
-    use wide::u32x8;
-
     let idx = idx << 1;
     // Combine roots: don't reduce modulo n.
     // This allows combining the roots modulo the factor base,
@@ -602,9 +600,11 @@ pub fn make_polynomial(n: &Uint, a: &A, idx: usize) -> Poly {
         while idx < v.len() {
             unsafe {
                 // (possibly) unaligned pointers
-                let v8 = (v.get_unchecked(idx) as *const u32) as *const u32x8;
-                let r8 = (bmodp.get_unchecked_mut(idx) as *const u32) as *mut u32x8;
-                *r8 += *v8;
+                let v8 = (v.get_unchecked(idx) as *const u32) as *const [u32; 8];
+                let r8 = (bmodp.get_unchecked_mut(idx) as *const u32) as *mut [u32; 8];
+                let v8w = wide::u32x8::new(*v8);
+                let r8w = wide::u32x8::new(*r8);
+                *r8 = (r8w + v8w).to_array();
             }
             idx += 8;
         }
