@@ -63,7 +63,7 @@ impl Num for u128 {
 
 impl<const N: usize> Num for BInt<N> {
     fn bits(&self) -> u32 {
-        Self::bits(&self)
+        Self::bits(self)
     }
 
     fn to_u64(&self) -> Option<u64> {
@@ -77,7 +77,7 @@ impl<const N: usize> Num for BInt<N> {
 
 impl<const N: usize> Num for BUint<N> {
     fn bits(&self) -> u32 {
-        Self::bits(&self)
+        Self::bits(self)
     }
 
     fn to_u64(&self) -> Option<u64> {
@@ -421,7 +421,7 @@ impl Divider31 {
         let m64 = (1u64 << 63) / p as u64;
         let sz = 64 - u64::leading_zeros(m64);
         let m31 = (m64 >> (sz - 32)) as u32 + 1; // 32 bits
-        let s31 = 63 + 32 - sz as u32; // m31 >> s31 = m63 >> 63
+        let s31 = 63 + 32 - sz; // m31 >> s31 = m63 >> 63
         Divider31 { p, m31, s31 }
     }
 
@@ -432,7 +432,7 @@ impl Divider31 {
             if m == 0 {
                 return 0;
             }
-            self.p as u32 - m
+            self.p - m
         } else {
             self.modu31(n as u32)
         }

@@ -160,7 +160,7 @@ impl Poly {
             if r < off as u32 {
                 r + p - off
             } else {
-                r - off as u32
+                r - off
             }
         };
 
@@ -210,9 +210,9 @@ fn test_poly_prime() {
 /// Returns a set of polynomials suitable for sieving across ±2^sievebits
 /// The base offset is a seed for prime generation.
 pub fn select_polys(base: Uint, width: usize, n: &Uint) -> Vec<Poly> {
-    sieve_for_polys(base, width, &n)
+    sieve_for_polys(base, width, n)
         .into_iter()
-        .map(|(d, r)| make_poly(d, r, &n))
+        .map(|(d, r)| make_poly(d, r, n))
         .collect()
 }
 
@@ -493,7 +493,7 @@ fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) {
             factors,
             cyclelen: 1,
         };
-        debug_assert!(rel.verify(&n));
+        debug_assert!(rel.verify(n));
         s.rels.write().unwrap().add(rel, pq);
     }
 }

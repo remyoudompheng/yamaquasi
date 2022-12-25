@@ -132,9 +132,9 @@ pub fn expected_smooth_magnitude(n: &Uint) -> f64 {
                 _ => 0.0,
             }
         } else if np == 0 {
-            1 as f64 / (p - 1) as f64
+            1.0 / (p - 1) as f64
         } else if let Some(_) = arith::sqrt_mod(np, p) {
-            2 as f64 / (p - 1) as f64
+            2.0 / (p - 1) as f64
         } else {
             0.0
         };
@@ -166,7 +166,7 @@ pub fn primes(n: u32) -> Vec<u32> {
 
 fn prepare_factor_base(nk: &Uint, primes: &[u32]) -> Vec<(u64, u64, arith::Dividers)> {
     primes
-        .into_iter()
+        .iter()
         .filter_map(|&p| {
             let nk: u64 = *nk % (p as u64);
             let r = arith::sqrt_mod(nk, p as u64)?;

@@ -72,9 +72,9 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
     };
     // Run sieve
     let mut interval = vec![0u8; 2 * block_size];
-    for blk in 0..64 {
+    for blk in 0..64 as i64 {
         // -1, 1, -3, 3, -5, 5, etc.
-        let blk = if blk % 2 == 0 { -(blk + 1) as i64 } else { blk };
+        let blk = if blk % 2 == 0 { -(blk + 1) } else { blk };
         let offset = blk * block_size as i64;
         for idx in 0..primes.len() {
             let p = primes[idx];
@@ -240,9 +240,9 @@ fn expected_smooth_magnitude(n: u64) -> f64 {
                 _ => 0.0,
             }
         } else if np == 0 {
-            1 as f64 / (p - 1) as f64
+            1.0 / (p - 1) as f64
         } else if let Some(_) = arith::sqrt_mod(np, p) {
-            2 as f64 / (p - 1) as f64
+            2.0 / (p - 1) as f64
         } else {
             0.0
         };

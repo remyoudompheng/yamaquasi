@@ -125,11 +125,11 @@ impl RelationSet {
         // Combine factors
         let mut exps = HashMap::<i64, u64>::new();
         for (p, k) in &r1.factors {
-            let e = exps.get(&p).unwrap_or(&0);
+            let e = exps.get(p).unwrap_or(&0);
             exps.insert(*p, e + k);
         }
         for (p, k) in &r2.factors {
-            let e = exps.get(&p).unwrap_or(&0);
+            let e = exps.get(p).unwrap_or(&0);
             exps.insert(*p, e + k);
         }
         let mut factors: Vec<_> = exps.into_iter().collect();
@@ -278,7 +278,7 @@ impl RelationSet {
     fn combine_single(&mut self, r: &Relation) -> bool {
         if let Some(r0) = self.partial.get(&r.cofactor) {
             let r0 = r0.unpack();
-            let rr = self.combine(&r, &r0);
+            let rr = self.combine(r, &r0);
             if rr.factors.iter().all(|(_, exp)| exp % 2 == 0) {
                 // FIXME: Poor choice of A's can lead to duplicate relations.
                 eprintln!("FIXME: ignoring trivial relation");
@@ -314,19 +314,19 @@ impl RelationSet {
             // Ideal case, both primes already available.
             let rp = self.partial.get(&p).unwrap().unpack();
             let rq = self.partial.get(&q).unwrap().unpack();
-            let r2 = self.combine(&self.combine(&r, &rp), &rq);
+            let r2 = self.combine(&self.combine(r, &rp), &rq);
             self.add_cycle(r2);
             true
         } else if self.partial.contains_key(&p) {
             let rp = self.partial.get(&p).unwrap();
-            let rq = self.combine(&r, &rp.unpack());
+            let rq = self.combine(r, &rp.unpack());
             assert_eq!(rq.cofactor, q);
             self.n_combined12 += 1;
             self.partial.insert(q, rq.pack());
             true
         } else if self.partial.contains_key(&q) {
             let rq = self.partial.get(&q).unwrap();
-            let rp = self.combine(&r, &rq.unpack());
+            let rp = self.combine(r, &rq.unpack());
             assert_eq!(rp.cofactor, p);
             self.n_combined12 += 1;
             self.partial.insert(p, rp.pack());
@@ -345,7 +345,7 @@ pub fn relation_gap(rels: &[Relation]) -> usize {
     for r in rels {
         for (f, k) in r.factors.iter() {
             if k % 2 == 1 {
-                let c = occs.get(&f).unwrap_or(&0);
+                let c = occs.get(f).unwrap_or(&0);
                 occs.insert(*f, c + 1);
             }
         }
@@ -369,7 +369,7 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Option<(Uint, U
     for r in rels {
         for (f, k) in r.factors.iter() {
             if k % 2 == 1 {
-                let c = occs.get(&f).unwrap_or(&0);
+                let c = occs.get(f).unwrap_or(&0);
                 occs.insert(*f, c + 1);
             }
         }
@@ -400,7 +400,7 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Option<(Uint, U
             if k % 2 == 0 {
                 continue;
             }
-            if let Some(&idx) = idxs.get(&f) {
+            if let Some(&idx) = idxs.get(f) {
                 v.push(idx);
                 coeffs += 1;
             } else {
@@ -485,7 +485,7 @@ pub fn combine(n: &Uint, rels: &[Relation]) -> (Uint, Uint) {
     let mut exps = HashMap::<i64, u64>::new();
     for r in rels {
         for (p, k) in &r.factors {
-            let e = exps.get(&p).unwrap_or(&0);
+            let e = exps.get(p).unwrap_or(&0);
             exps.insert(*p, e + k);
         }
     }

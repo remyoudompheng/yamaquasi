@@ -74,8 +74,8 @@ pub fn qsieve(
     let fwd_offset = AtomicI64::new(0i64);
     let bck_offset = AtomicI64::new(0i64);
     // Construct 2 initial states, forward and backwards.
-    let pfunc1 = |pidx| qs.prepare_prime_fwd(pidx, (&fwd_offset).load(Ordering::SeqCst));
-    let pfunc2 = |pidx| qs.prepare_prime_bck(pidx, (&bck_offset).load(Ordering::SeqCst));
+    let pfunc1 = |pidx| qs.prepare_prime_fwd(pidx, fwd_offset.load(Ordering::SeqCst));
+    let pfunc2 = |pidx| qs.prepare_prime_bck(pidx, bck_offset.load(Ordering::SeqCst));
     let mut s_fwd = Sieve::new(0, qs.nblocks(), qs.fbase, &pfunc1);
     let mut s_bck = Sieve::new(0, qs.nblocks(), qs.fbase, &pfunc2);
     loop {

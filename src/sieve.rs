@@ -188,7 +188,7 @@ impl<'a> Sieve<'a> {
                 p,
                 offsets: [o1, o2],
             } = f(idx);
-            let l = 32 - u32::leading_zeros(p as u32) as usize;
+            let l = 32 - u32::leading_zeros(p) as usize;
             if l >= log {
                 // Register new prime size
                 if log > 16 {
@@ -346,7 +346,6 @@ impl<'a> Sieve<'a> {
                     lo.len()
                 };
                 for i in i_start..i_end {
-                    let i = i as usize;
                     let pidx = i / 2;
                     let p = *primes.get_unchecked(pidx);
                     let mut off: usize = *lo_prev.get_unchecked(i) as usize;
@@ -430,8 +429,8 @@ impl<'a> Sieve<'a> {
         let mut skipped = 0usize;
         for i in 0..self.idxskip / 2 {
             let p = self.fbase.primes[i];
-            let log = 32 - u32::leading_zeros(p as u32) as usize;
-            skipped += log as usize;
+            let log = 32 - u32::leading_zeros(p) as usize;
+            skipped += log;
         }
         skipped
     }
@@ -494,7 +493,7 @@ impl<'a> Sieve<'a> {
                             }
                         }
                         if t >= threshold {
-                            res.push(ij as u16)
+                            res.push(ij)
                         }
                     }
                 }

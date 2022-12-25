@@ -47,7 +47,7 @@ pub fn siqs(
     eprintln!("Smoothness bound {}", fbase.bound());
     eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls(),);
 
-    let mlog = interval_logsize(&n);
+    let mlog = interval_logsize(n);
     if mlog >= 20 {
         eprintln!("Sieving interval size {}M", 2 << (mlog - 20));
     } else {
@@ -72,7 +72,7 @@ pub fn siqs(
     let done = AtomicBool::new(false);
 
     let maxprime = fbase.bound() as u64;
-    let maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(&n));
+    let maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(n));
     eprintln!("Max large prime {}", maxlarge);
     if use_double {
         eprintln!("Max double large prime {}", maxlarge * maxprime * 2);
@@ -312,9 +312,9 @@ pub fn select_siqs_factors<'a>(fb: &'a FBase, n: &'a Uint, nfacs: usize) -> Fact
         eprintln!("WARNING: suboptimal choice of A factors");
         fb.len() - 2 * nfacs..fb.len()
     } else if idx > 4 * nfacs && idx + 4 * nfacs < fb.len() {
-        idx - 2 * nfacs as usize..idx + 2 * nfacs as usize
+        idx - 2 * nfacs..idx + 2 * nfacs
     } else {
-        idx - nfacs as usize..idx + max(nfacs, 6) as usize
+        idx - nfacs..idx + max(nfacs, 6)
     };
     // Make sure that selected factors don't divide n.
     let selection: Vec<Prime> = selected_idx
@@ -460,7 +460,7 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase) -> A<'a> {
         let mut c = Uint::one();
         for &(jdx, q) in afactors.iter() {
             if jdx != idx {
-                c *= Uint::from((q.p as u64) * (f.inverses[jdx][idx] as u64));
+                c *= Uint::from(q.p * (f.inverses[jdx][idx] as u64));
                 debug_assert!(c % q.p == 0);
                 debug_assert!(c % p.p == 1);
             }
@@ -582,7 +582,7 @@ impl Poly {
             if !self.c.is_negative() {
                 cp = p32 as u64 - cp;
             }
-            let r = div.divmod64(cp * div.inv(2 * bmodp as u64).unwrap()).1 as u32;
+            let r = div.divmod64(cp * div.inv(2 * bmodp).unwrap()).1 as u32;
             [Some(shift(r)), None]
         };
         sieve::SievePrime { p: p32, offsets }
@@ -639,8 +639,8 @@ pub fn make_polynomial(n: &Uint, a: &A, idx: usize) -> Poly {
 
 // Sieving process
 
-fn siqs_sieve_poly(s: &SieveSIQS, n: &Uint, a: &A, pol: &Poly) -> () {
-    let mlog = interval_logsize(&n);
+fn siqs_sieve_poly(s: &SieveSIQS, n: &Uint, a: &A, pol: &Poly) {
+    let mlog = interval_logsize(n);
     let nblocks: usize = (2 << mlog) / BLOCK_SIZE;
     if DEBUG {
         eprintln!(
@@ -658,10 +658,10 @@ fn siqs_sieve_poly(s: &SieveSIQS, n: &Uint, a: &A, pol: &Poly) -> () {
     };
     let mut state = sieve::Sieve::new(start_offset, nblocks, s.fbase, &pfunc);
     if nblocks == 0 {
-        sieve_block_poly(s, &pol, a, &mut state);
+        sieve_block_poly(s, pol, a, &mut state);
     }
     while state.offset < end_offset {
-        sieve_block_poly(s, &pol, a, &mut state);
+        sieve_block_poly(s, pol, a, &mut state);
         state.next_block();
     }
 }
@@ -678,10 +678,7 @@ struct SieveSIQS<'a> {
 impl<'a> SieveSIQS<'a> {
     #[inline]
     fn pack_pdata(off: u64, p: u32, s31: u32, m31: u32) -> (u64, u32) {
-        (
-            (off as u64) << 32 | (p as u64) << 8 | s31 as u64,
-            m31 as u32,
-        )
+        (off << 32 | (p as u64) << 8 | s31 as u64, m31)
     }
 
     #[inline]
@@ -721,7 +718,7 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
         maxlarge
     };
 
-    let target = s.n.bits() / 2 + interval_logsize(&s.n) - max_cofactor.bits();
+    let target = s.n.bits() / 2 + interval_logsize(s.n) - max_cofactor.bits();
     let n = s.n;
     let (idx, facss) = st.smooths(target as u8);
     for (i, facs) in idx.into_iter().zip(facss) {
@@ -784,7 +781,7 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
             factors,
             cyclelen: 1,
         };
-        debug_assert!(rel.verify(&s.n));
+        debug_assert!(rel.verify(s.n));
         s.rels.write().unwrap().add(rel, pq);
     }
 }
