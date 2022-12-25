@@ -386,9 +386,12 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Option<(Uint, U
     if verbose {
         eprintln!("Input {} relations {} factors", rels.len(), occs.len());
     }
-    // Sort factors by increasing occurrences
+    // Sort factors by decreasing occurrences
+    // Gauss elimination is much more efficient if it starts by eliminating
+    // the (few) densest rows: the remaining rows will remain relatively sparse
+    // during the rest of the elimination.
     let mut occs: Vec<(i64, u64)> = occs.into_iter().filter(|&(_, k)| k > 1).collect();
-    occs.sort_by_key(|&(_, k)| k);
+    occs.sort_by_key(|&(_, k)| -(k as i64));
     let nfactors = occs.len();
     let mut idxs = HashMap::<i64, usize>::new();
     for (idx, (f, _)) in occs.into_iter().enumerate() {
