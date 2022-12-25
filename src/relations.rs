@@ -432,6 +432,7 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Option<(Uint, U
             coeffs as f64 / size as f64
         );
     }
+    let start = std::time::Instant::now();
     let k = if size > 5000 {
         // Block Lanczos
         let mat = matrix::SparseMat {
@@ -451,7 +452,12 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Option<(Uint, U
         matrix::kernel_gauss(dense)
     };
     if verbose {
-        eprintln!("Found kernel of dimension {}", k.len());
+        let dt = start.elapsed();
+        eprintln!(
+            "Found kernel of dimension {} in {:.3}s",
+            k.len(),
+            dt.as_secs_f64()
+        );
     }
     for eq in k {
         let mut rs = vec![];

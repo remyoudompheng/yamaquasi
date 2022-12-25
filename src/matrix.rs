@@ -123,7 +123,7 @@ pub fn kernel_lanczos(b: &SparseMat, verbose: bool) -> Vec<BitVec> {
         vs.push(ay.clone());
         ws.push(ay.clone());
         invgs.push(ginv);
-        masks.push(!Lane::ZERO);
+        masks.push(!0);
     }
     if verbose {
         eprintln!("[Lanczos] Selected block 1 with rank {}", LSIZE);
@@ -149,11 +149,11 @@ pub fn kernel_lanczos(b: &SparseMat, verbose: bool) -> Vec<BitVec> {
             if ws[j].0.is_empty() {
                 continue;
             }
-            let mut mask = !Lane::ZERO;
+            let mut mask = !0;
             for k in j + 2..vs.len() {
                 mask &= masks[k - 1];
             }
-            if mask == Lane::ZERO {
+            if mask == 0 {
                 // AWj has been consumed in V[j+1..i-1] no need to compute.
                 // Free memory: the block will no longer be used.
                 debug_assert!(&ws[j] * &av == SmallMat::default());
@@ -191,7 +191,7 @@ pub fn kernel_lanczos(b: &SparseMat, verbose: bool) -> Vec<BitVec> {
             break;
         } else {
             vs.push(next.clone());
-            if verbose {
+            if verbose && vs.len() % 16 == 0 {
                 eprintln!(
                     "[Lanczos] Found block {} rank {} ({} projections)",
                     vs.len(),
@@ -216,7 +216,10 @@ pub fn kernel_lanczos(b: &SparseMat, verbose: bool) -> Vec<BitVec> {
     }
     // Check that Y is orthogonal to all blocks
     for w in &ws {
-        debug_assert!(w * &mul_aab(b, &y) == SmallMat::default());
+        // Only if block has not been purged
+        if w.0.len() > 0 {
+            debug_assert!(w * &mul_aab(b, &y) == SmallMat::default());
+        }
     }
     // Y is orthogonal to all blocks, its image is contained
     // in the (small, possibly null) final block.
@@ -228,9 +231,8 @@ pub fn kernel_lanczos(b: &SparseMat, verbose: bool) -> Vec<BitVec> {
         by_bits.push(BitVec::zeros(by.0.len()));
     }
     for (i, l) in by.0.iter().enumerate() {
-        let l = l.as_array_ref();
         for j in 0..LSIZE {
-            if l[j / 64] & (1 << (j % 64)) != 0 {
+            if (l >> j) & 1 != 0 {
                 by_bits[j].set(i, true);
             }
         }
@@ -253,11 +255,7 @@ pub fn kernel_lanczos(b: &SparseMat, verbose: bool) -> Vec<BitVec> {
             debug_assert!(k.len() == LSIZE);
             let k: *const wide::u64x4 = k.as_ptr();
             let lk: Lane = l & unsafe { *(k as *const Lane) };
-            let mut sum: u64 = 0;
-            for &word in lk.as_array_ref() {
-                sum ^= word;
-            }
-            basis[j].set(i, sum.count_ones() % 2 == 1);
+            basis[j].set(i, lk.count_ones() % 2 == 1);
         }
     }
     // Pop any resulting null vector.
@@ -306,7 +304,7 @@ pub fn genblock(b: &SparseMat) -> Block {
     }
 }
 
-type Lane = wide::u64x4;
+type Lane = u64;
 const LSIZE: usize = Lane::BITS as usize;
 
 // A square symmetric matrix of size BxB (B=256)
@@ -337,9 +335,9 @@ impl Block {
 
 #[inline]
 fn randlane<R: rand::Rng + ?Sized>(rng: &mut R) -> Result<Lane, rand::Error> {
-    let mut w = [0u64; LSIZE / 64];
-    w.try_fill(rng)?;
-    Ok(w.into())
+    let mut w = [0 as Lane; 1];
+    rng.try_fill(&mut w)?;
+    Ok(w[0])
 }
 
 impl rand::Fill for SmallMat {
@@ -366,14 +364,7 @@ impl Mul<&SmallMat> for &Block {
     fn mul(self, rhs: &SmallMat) -> Block {
         // output[i,k] = sum self[i,j] * rhs[j,k]
         let mut output = Block::new(self.0.len());
-        for (i, v) in self.0.iter().enumerate() {
-            let words = v.to_array();
-            for j in 0..LSIZE {
-                if words[j / 64] & (1 << (j % 64)) != 0 {
-                    output.0[i] ^= rhs.0[j]
-                }
-            }
-        }
+        muladd(&mut output.0, &self.0, rhs);
         output
     }
 }
@@ -384,14 +375,7 @@ impl Mul<&SmallMat> for &SmallMat {
     fn mul(self, rhs: &SmallMat) -> SmallMat {
         // output[i,k] = sum self[i,j] * rhs[j,k]
         let mut output = SmallMat::default();
-        for (i, v) in self.0.iter().enumerate() {
-            let words = v.to_array();
-            for j in 0..LSIZE {
-                if words[j / 64] & (1 << (j % 64)) != 0 {
-                    output.0[i] ^= rhs.0[j]
-                }
-            }
-        }
+        muladd(&mut output.0, &self.0, rhs);
         output
     }
 }
@@ -401,42 +385,72 @@ impl Mul<&Block> for &Block {
     type Output = SmallMat;
 
     fn mul(self, rhs: &Block) -> SmallMat {
+        assert_eq!(self.0.len(), rhs.0.len());
         // output[i,j] = sum self[i,k] * rhs[j,k]
-        let mut m = SmallMat::default();
-        for (k, x) in self.0.iter().enumerate() {
-            // Each coordinate contributes x ⊗ x
-            for (i, w) in x.as_array_ref().iter().enumerate() {
-                let mut w = *w;
-                let mut ii = i * 64;
-                while w != 0 {
-                    if w & 1 == 1 {
-                        m.0[ii] ^= rhs.0[k];
-                    }
-                    w >>= 1;
-                    ii += 1;
+        // Use the rotate trick [Montgomery, section 9]:
+        // output[i, r(i)] = sum lhs[i,*] * rhs[r(i), *]
+        let mut mat = SmallMat::default();
+        let m = &mut mat.0;
+        for r in 0..LSIZE as u32 {
+            // NOTE: this loop can be auto-vectorized by LLVM when AVX2 is on.
+            for i in 0..self.0.len() {
+                unsafe {
+                    let x = *self.0.get_unchecked(i);
+                    let y = *rhs.0.get_unchecked(i);
+                    let yrot = y.rotate_right(r);
+                    m[r as usize] ^= x & yrot;
                 }
             }
         }
-        m
+        // Now m[64*r1+r2, i] = output[i, rot(r1, r2, i)]
+        let mut mat = mat.transpose();
+        // Now m[i, 64*r1+r2] = output[i, rot(r1, r2, i)]
+        let m = &mut mat.0;
+        for r in 0..LSIZE as u32 {
+            // Blocks 0
+            let v = m[r as usize];
+            m[r as usize] = v.rotate_left(r);
+        }
+        mat
     }
 }
 
 impl Block {
     // Computes self -= m*b.
     fn muladd(&mut self, m: &SmallMat, b: &Block) {
-        // self[i,*] -= sum m[i,j] b[j,*]
-        for k in 0..self.0.len() {
-            for (j, w) in b.0[k].as_array_ref().iter().enumerate() {
-                let mut w = *w;
-                let mut jj = j * 64;
-                while w != 0 {
-                    if w & 1 == 1 {
-                        self.0[k] ^= m.0[jj];
-                    }
-                    w >>= 1;
-                    jj += 1;
-                }
-            }
+        assert_eq!(self.0.len(), b.0.len());
+        muladd(&mut self.0, &b.0, m);
+    }
+}
+
+fn muladd(output: &mut [Lane], b: &[Lane], m: &SmallMat) {
+    assert_eq!(output.len(), b.len());
+    // Compute output[k,i] += sum b[k,j] * m[j,i]
+    //
+    // Use the rotate method again: [Montgomery, section 9]:
+    // output[k,i] += sum b[k,j+(r1,r2)] * m[j+(r1,r2),i]
+    // (we are using SIMD vectors so it's a "2-level" rotation)
+    //
+    // We need to multiply rotated b with "diagonals" of m.
+    let mut diags = m.transpose();
+    let p = &mut diags.0;
+    for r in 0..LSIZE as u32 {
+        let v = p[r as usize];
+        p[r as usize] = v.rotate_right(r);
+    }
+    // Now diags[i,j] = m[j+i,i]
+    // For a fixed j, diags[*,j] * b[k,j+*] gives a contribution to output[k,i]
+    let diags = diags.transpose();
+    let p = &diags.0;
+    let dim = output.len();
+    for j in 0..LSIZE {
+        let m0 = p[j];
+        // NOTE: this loop can be auto-vectorized by LLVM when AVX2 is on.
+        for k in 0..dim {
+            let xk = unsafe { output.get_unchecked_mut(k) };
+            let bk = unsafe { *b.get_unchecked(k) };
+            let bk_rot = bk.rotate_right(j as u32);
+            *xk ^= m0 & bk_rot;
         }
     }
 }
@@ -458,23 +472,11 @@ impl Mul<&Block> for &SparseMat {
 }
 
 fn lz(w: Lane) -> usize {
-    for (i, &v) in w.as_array_ref().iter().enumerate() {
-        if v != 0 {
-            return i * 64 + v.trailing_zeros() as usize;
-        }
-    }
-    LSIZE
+    w.trailing_zeros() as usize
 }
 
 fn reverse_lane(l: Lane) -> Lane {
-    let [a, b, c, d] = l.to_array();
-    [
-        d.reverse_bits(),
-        c.reverse_bits(),
-        b.reverse_bits(),
-        a.reverse_bits(),
-    ]
-    .into()
+    l.reverse_bits()
 }
 
 /// Pseudo inverse of a small symmetric matrix.
@@ -486,9 +488,7 @@ impl SmallMat {
     fn identity() -> Self {
         let mut m = SmallMat::default();
         for i in 0..LSIZE {
-            let mut r = [0u64; LSIZE / 64];
-            r[i / 64] = 1 << (i % 64);
-            m.0[i] = r.into();
+            m.0[i] = 1 << i;
         }
         m
     }
@@ -496,8 +496,8 @@ impl SmallMat {
     fn symmetric(&self) -> bool {
         for i in 0..LSIZE {
             for j in 0..i {
-                let mij = (self.0[i].as_array_ref()[j / 64] >> (j % 64)) & 1;
-                let mji = (self.0[j].as_array_ref()[i / 64] >> (i % 64)) & 1;
+                let mij = (self.0[i] >> j) as usize & 1;
+                let mji = (self.0[j] >> i) as usize & 1;
                 if mij != mji {
                     return false;
                 }
@@ -506,12 +506,26 @@ impl SmallMat {
         true
     }
 
+    fn transpose(&self) -> Self {
+        let mut m = SmallMat::default();
+        for i in 0..LSIZE {
+            let mut row = Lane::default();
+            for j in 0..LSIZE {
+                let mji = (self.0[j] >> i) & 1;
+                if mji == 1 {
+                    row |= 1 << j;
+                }
+            }
+            m.0[i] = Lane::from(row);
+        }
+        m
+    }
+
     fn mask(&self, mask: Lane) -> SmallMat {
-        let mask_a = mask.clone().to_array();
         let mut m = self.clone();
         for i in 0..LSIZE {
-            if mask_a[i / 64] >> (i % 64) & 1 == 0 {
-                m.0[i] = Lane::ZERO;
+            if (mask >> i) & 1 == 0 {
+                m.0[i] = 0;
             } else {
                 m.0[i] &= mask;
             }
@@ -535,18 +549,18 @@ impl SmallMat {
     // independent rows.
     pub fn rank(&self) -> (usize, Lane) {
         let mut m: SmallMat = self.clone();
-        let mut mask = [0u64; LSIZE / 64];
+        let mut mask = 0 as Lane;
         // Run Gauss elimination
         let mut rank = 0;
         let mut orig_idx = [0u8; LSIZE];
         for i in 0..LSIZE {
-            orig_idx[i] = i as u8
+            orig_idx[i] = i as u8;
         }
         for i in 0..LSIZE {
             let Some(j) = m.0.iter().position(|&v| lz(v) == i)
                 else { continue };
             let idx = orig_idx[j] as usize;
-            mask[idx / 64] |= 1 << (idx % 64);
+            mask |= 1 << idx;
             m.0.swap(rank, j);
             orig_idx.swap(rank, j);
             for j in (rank + 1)..LSIZE {
@@ -556,8 +570,8 @@ impl SmallMat {
             }
             rank += 1;
         }
-        debug_assert!(rank == mask.iter().map(|&n| n.count_ones() as usize).sum());
-        (rank, mask.into())
+        debug_assert!(rank == mask.count_ones() as usize);
+        (rank, mask)
     }
 
     // Pseudoinverse for a submatrix restricted to #I=rank
@@ -573,9 +587,8 @@ impl SmallMat {
         debug_assert!(minv.rank() == self.rank());
         let mut idx = [0u8; 256];
         let mut i = 0;
-        let mask = mask.to_array();
         for j in 0..LSIZE {
-            if mask[j / 64] >> (j % 64) & 1 == 1 {
+            if (mask >> j) & 1 == 1 {
                 idx[i] = j as u8;
                 i += 1;
             }
@@ -598,18 +611,18 @@ impl SmallMat {
         // Solve triangular inverse
         for idx1 in 0..rk {
             let i = idx[rk - 1 - idx1] as usize;
-            let r = m.0[i].to_array();
+            let r = m.0[i];
             debug_assert!(lz(m.0[i]) == i);
             for idx2 in 0..idx1 {
                 let j = idx[rk - 1 - idx2] as usize;
                 debug_assert!(i < j);
-                if r[j / 64] & (1 << (j % 64)) != 0 {
+                if (r >> j) & 1 != 0 {
                     m.0[i] ^= m.0[j];
                     minv.0[i] ^= minv.0[j];
                 }
             }
-            let r = m.0[i].to_array();
-            debug_assert!(r[i / 64] == 1 << (i % 64));
+            let r = m.0[i];
+            debug_assert!(r == 1 << i);
         }
         debug_assert!(minv.rank() == self.rank());
         minv
@@ -651,15 +664,14 @@ impl SmallMat {
         // Solve triangular inverse
         for i in 0..LSIZE {
             let i = LSIZE - 1 - i;
-            let r = m.0[i].to_array();
+            let r = m.0[i];
             for j in (i + 1)..LSIZE {
-                if r[j / 64] & (1 << (j % 64)) != 0 {
+                if (r >> j) & 1 == 1 {
                     m.0[i] ^= m.0[j];
                     minv.0[i] ^= minv.0[j];
                 }
             }
-            let r = m.0[i].to_array();
-            debug_assert!(r[i / 64] == 1 << (i % 64));
+            debug_assert!(m.0[i] == 1 << i);
         }
         Some(minv)
     }
@@ -790,6 +802,18 @@ fn test_kernel_gauss() {
 #[test]
 fn test_smallmat() {
     let mut rng = rand::thread_rng();
+    // Basic ops
+    let mut mat = SmallMat::default();
+    mat.try_fill(&mut rng).unwrap();
+    assert_eq!(mat, mat.transpose().transpose());
+    // M + M^T
+    let mut sym = mat.clone();
+    let mat_t = mat.transpose();
+    for i in 0..LSIZE {
+        sym.0[i] ^= mat_t.0[i];
+    }
+    assert!(sym.symmetric());
+    // Inverse
     let mut inverts = 0;
     for _ in 0..30 {
         let mut x = Block::new(300);

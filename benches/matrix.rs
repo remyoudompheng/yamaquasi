@@ -22,11 +22,11 @@ fn main() {
         inline:
         // Block Lanczos subroutines
         {
-            Bench::new("(block 256x8000) x (block 8000x256)")
+            Bench::new("(block 64x8000) x (block 8000x64)")
             .run_seeded((&b1, &b2), |(b1, b2)| (b1 * b2) as matrix::SmallMat)
         },
         {
-            Bench::new("(block 8000x256) x (matrix 256x256)")
+            Bench::new("(block 8000x64) x (matrix 64x64)")
             .run_seeded((&b1, &mat), |(b, m)| (b * m) as matrix::Block)
         },
         {
@@ -44,15 +44,15 @@ fn main() {
             .run_seeded((&mat, &b), |(m, b)| matrix::mul_aab(m, b) as matrix::Block)
         },
         {
-            Bench::new("rank (256x256)")
+            Bench::new("rank (64x64)")
             .run_seeded(&mat, |m| m.rank())
         },
         {
-            Bench::new("inverse (256x256)")
+            Bench::new("inverse (64x64)")
             .run_seeded(&mat, |m| m.inverse().unwrap() as matrix::SmallMat)
         },
         {
-            Bench::new("(256x256) x (256x256)")
+            Bench::new("(64x64) x (64x64)")
             .run_seeded((&mat, &mat2), |(m1, m2)| (m1 * m2) as matrix::SmallMat)
         },
         {
