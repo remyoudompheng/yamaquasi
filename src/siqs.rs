@@ -16,7 +16,7 @@
 //! which can be computed from the factor base data through the Chinese remainder
 //! theorem.
 
-use std::cmp::{max, min};
+use std::cmp::max;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::RwLock;
 
@@ -308,19 +308,19 @@ pub fn select_siqs_factors<'a>(fb: &'a FBase, n: &'a Uint, nfacs: usize) -> Fact
     let idx = fb
         .primes
         .partition_point(|&p| Uint::from(p as u64).pow(nfacs as u32) < target);
-    // This may fail for very small n.
-    assert!(
-        idx > nfacs && idx + nfacs < fb.len(),
-        "failed to find enough factor elements around fb[{}] (want {})",
-        idx,
-        nfacs
-    );
-    let selected_idx = if idx > 4 * nfacs && idx + 4 * nfacs < fb.len() {
+    let selected_idx = if idx + nfacs >= fb.len() {
+        eprintln!("WARNING: suboptimal choice of A factors");
+        fb.len() - 2 * nfacs..fb.len()
+    } else if idx > 4 * nfacs && idx + 4 * nfacs < fb.len() {
         idx - 2 * nfacs as usize..idx + 2 * nfacs as usize
     } else {
         idx - nfacs as usize..idx + max(nfacs, 6) as usize
     };
-    let selection: Vec<Prime> = selected_idx.map(|i| fb.prime(i)).collect();
+    // Make sure that selected factors don't divide n.
+    let selection: Vec<Prime> = selected_idx
+        .filter(|&i| i < fb.len() && fb.div(i).mod_uint(n) != 0)
+        .map(|i| fb.prime(i))
+        .collect();
     // Precompute inverses
     let mut inverses = vec![];
     for p in &selection {
@@ -387,9 +387,9 @@ pub fn select_a(f: &Factors, want: usize) -> Vec<Uint> {
     //
     // We are going to select ~2^W best products of W primes among 2W
 
-    let div = a_tolerance_divisor(f.n);
-    let amin = f.target - f.target / div as u64;
-    let amax = f.target + f.target / div as u64;
+    let mut div = a_tolerance_divisor(f.n);
+    let mut amin = f.target - f.target / div as u64;
+    let mut amax = f.target + f.target / div as u64;
 
     let mut rng: u64 = 0xcafebeefcafebeef;
     let fb = f.factors.len();
@@ -400,7 +400,20 @@ pub fn select_a(f: &Factors, want: usize) -> Vec<Uint> {
         rng % fb as u64
     };
     let mut candidates = vec![];
-    for i in 0..100 * want {
+    let mut iters = 0;
+    while iters < 1000 * want || candidates.len() < want {
+        iters += 1;
+        if iters % (100 * want) == 0 && candidates.len() < want {
+            eprintln!("WARNING: unable to find suitable A, increasing tolerance");
+            div = max(div, 1) - 1;
+            if div == 0 {
+                amin = f.target >> 2;
+                amax = f.target << 2;
+            } else {
+                amin = f.target - f.target / div as u64;
+                amax = f.target + f.target / div as u64;
+            }
+        }
         let mut product = Uint::one();
         let mut mask = 0u64;
         while mask.count_ones() < f.nfacs as u32 - 1 {
@@ -419,7 +432,7 @@ pub fn select_a(f: &Factors, want: usize) -> Vec<Uint> {
         if amin < product && product < amax {
             candidates.push(product);
         }
-        if candidates.len() > want && i % 10 == 0 {
+        if candidates.len() > want && iters % 10 == 0 {
             candidates.sort();
             candidates.dedup();
             let idx = candidates.partition_point(|c| c < &f.target);
@@ -428,11 +441,10 @@ pub fn select_a(f: &Factors, want: usize) -> Vec<Uint> {
             }
         }
     }
-    // Should not happen?
+    // Should not happen? return what we found so far
     candidates.sort();
     candidates.dedup();
-    let idx = candidates.partition_point(|c| c < &f.target);
-    candidates[idx - min(idx, want / 2)..min(candidates.len(), idx + want / 2)].to_vec()
+    candidates
 }
 
 pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase) -> A<'a> {
