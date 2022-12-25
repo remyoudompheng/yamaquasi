@@ -277,7 +277,8 @@ impl RelationSet {
     // Tries to combine a relation with an existing one.
     fn combine_single(&mut self, r: &Relation) -> bool {
         if let Some(r0) = self.partial.get(&r.cofactor) {
-            let rr = self.combine(&r, &r0.unpack());
+            let r0 = r0.unpack();
+            let rr = self.combine(&r, &r0);
             if rr.factors.iter().all(|(_, exp)| exp % 2 == 0) {
                 // FIXME: Poor choice of A's can lead to duplicate relations.
                 eprintln!("FIXME: ignoring trivial relation");
@@ -287,7 +288,7 @@ impl RelationSet {
                 rr.verify(&self.n),
                 "INTERNAL ERROR: invalid combined relation\nr1={:?}\nr2={:?}\nr1*r2={:?}",
                 r,
-                r0.unpack(),
+                r0,
                 rr
             );
             self.complete.push(rr);
@@ -536,20 +537,19 @@ pub fn try_factor(n: &Uint, a: Uint, b: Uint) -> Option<(Uint, Uint)> {
 }
 
 // A packed version of Relation.
-// Factors are encoded as ULEB128 with optional 1-byte exponent.
+// Integers are encoded as ULEB128 with optional 1-byte exponent.
 // Typical memory usage is about 2-3 bytes per factor instead of 16.
 
 struct PackedRelation {
-    x: U512,
-    cofactor: u64,
-    pp: bool,
-    // Usually less than 64 bytes (200 bytes for combined relations).
-    factors_blob: Vec<u8>,
+    // Usually less than 128 bytes (200 bytes for combined relations).
+    blob: Box<[u8]>,
 }
 
 impl PackedRelation {
     fn pack(r: Relation) -> PackedRelation {
-        let mut ints = vec![];
+        let &[x0, x1, x2, x3, x4, x5, x6, x7] = U512::cast_from(r.x).digits();
+        let l = if r.pp { 1 } else { 0 };
+        let mut ints = vec![x0, x1, x2, x3, x4, x5, x6, x7, r.cofactor, l];
         for &(p, k) in &r.factors {
             // encode each factor as a sequence of integers
             // -1 encodes to 0
@@ -564,31 +564,28 @@ impl PackedRelation {
                     let p = if p == 2 { 1 } else { p };
                     assert!(p % 2 == 1);
                     if k > 1 {
-                        ints.push(2 * p as u32);
-                        ints.push(k as u32);
+                        ints.push(2 * p as u64);
+                        ints.push(k as u64);
                     } else {
-                        ints.push(p as u32);
+                        ints.push(p as u64);
                     }
                 }
             }
         }
-        let mut factors_blob = vec![];
+        let mut blob = vec![];
         for n in ints {
             // encode as leb128
-            let length = std::cmp::max(1, (32 - u32::leading_zeros(n) + 6) / 7);
+            let length = std::cmp::max(1, (64 - u64::leading_zeros(n) + 6) / 7);
             for j in 0..length {
                 let mut byte = (n >> (7 * (length - 1 - j))) & 0x7f;
                 if j > 0 {
                     byte |= 0x80;
                 }
-                factors_blob.push(byte as u8);
+                blob.push(byte as u8);
             }
         }
         PackedRelation {
-            x: U512::cast_from(r.x),
-            cofactor: r.cofactor,
-            pp: r.pp,
-            factors_blob,
+            blob: blob.into_boxed_slice(),
         }
     }
 
@@ -596,19 +593,22 @@ impl PackedRelation {
         // Decode ULEB128
         let mut ints = vec![];
         let mut n = 0;
-        for (i, &byte) in self.factors_blob.iter().enumerate() {
+        for (i, &byte) in self.blob.iter().enumerate() {
             if byte < 0x80 {
                 if i > 0 {
                     ints.push(n)
                 }
-                n = byte as u32;
+                n = byte as u64;
             } else {
-                n = (n << 7) | (byte as u32 & 0x7f);
+                n = (n << 7) | (byte as u64 & 0x7f);
             }
         }
         ints.push(n);
+        let [x0,x1,x2,x3,x4,x5,x6,x7,cofactor,l] = ints[..10]
+            else { unreachable!("corrupted relation data") };
+        let x = U512::from_digits([x0, x1, x2, x3, x4, x5, x6, x7]);
         let mut factors = vec![];
-        let mut idx = 0;
+        let mut idx = 10;
         while idx < ints.len() {
             let n = ints[idx];
             if n == 0 {
@@ -627,9 +627,9 @@ impl PackedRelation {
             }
         }
         Relation {
-            x: Uint::cast_from(self.x),
-            cofactor: self.cofactor,
-            pp: self.pp,
+            x: Uint::cast_from(x),
+            cofactor: cofactor,
+            pp: l > 0,
             factors,
         }
     }
