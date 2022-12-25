@@ -17,11 +17,8 @@ fn main() {
     ] {
         // Density is 10 + log N
         let density = 42 - u32::leading_zeros(size as u32);
-        // Avoid creating a matrices where all columns have an even count of 1s.
-        // They tend to have huge fully isotropic subspaces.
-        let density = density + (1 - density % 2);
         let mat = qs_like_matrix(size, 30, density as usize);
-        if size > 256 {
+        if size > 250 {
             let start = Instant::now();
             let ker = matrix::kernel_lanczos(&mat, true);
             eprintln!(
@@ -31,7 +28,7 @@ fn main() {
             );
             assert!(ker.len() > 0);
         }
-        if size < 15_000 {
+        if size < 25_000 {
             let mat = to_bitvec(&mat);
             let start = Instant::now();
             let ker = matrix::kernel_gauss(mat);
@@ -81,6 +78,24 @@ fn qs_like_matrix(size: usize, extra: usize, density: usize) -> matrix::SparseMa
         }
         cols.push(col);
     }
+    // Each row must have at least 2 coefficients (as QS filtered matrices).
+    // This also avoids small rank for transposed matrix, which is harmful
+    // to Block Lanczos.
+    let mut extra_fill = 0;
+    for i in 0..size {
+        if stats[i] < 2 {
+            for j in i..i + extra {
+                if !cols[j].contains(&i) {
+                    cols[j].push(i);
+                    stats[i] += 1;
+                    extra_fill += 1;
+                }
+                if stats[i] >= 2 {
+                    break;
+                }
+            }
+        }
+    }
     let (mut p50, mut p80, mut p90, mut p95, mut p99) = (0, 0, 0, 0, 0);
     let total: u32 = stats.iter().sum();
     let mut sum = 0u32;
@@ -103,8 +118,8 @@ fn qs_like_matrix(size: usize, extra: usize, density: usize) -> matrix::SparseMa
         }
     }
     eprintln!(
-        "Generated matrix of size {} (p50={} p80={} p90={} p95={} p99={})",
-        size, p50, p80, p90, p95, p99
+        "Generated matrix of size {} (p50={} p80={} p90={} p95={} p99={}) filled={}",
+        size, p50, p80, p90, p95, p99, extra_fill
     );
     matrix::SparseMat { k: size, cols }
 }
