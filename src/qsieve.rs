@@ -206,7 +206,11 @@ impl<'a> SieveQS<'a> {
         }
         SievePrime {
             p: p as u32,
-            offsets: [Some(s1 as u32), Some(s2 as u32)],
+            offsets: if s1 != s2 {
+                [Some(s1 as u32), Some(s2 as u32)]
+            } else {
+                [Some(s1 as u32), None]
+            },
         }
     }
 
@@ -225,7 +229,11 @@ impl<'a> SieveQS<'a> {
         }
         SievePrime {
             p: p as u32,
-            offsets: [Some(s1 as u32), Some(s2 as u32)],
+            offsets: if s1 != s2 {
+                [Some(s1 as u32), Some(s2 as u32)]
+            } else {
+                [Some(s1 as u32), None]
+            },
         }
     }
 
@@ -280,7 +288,10 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
                     break;
                 }
             }
-            factors.push((p as i64, exp));
+            if exp > 0 {
+                // FIXME: can we have exp==0 ?
+                factors.push((p as i64, exp));
+            }
         }
         let Some(cofactor) = cofactor.to_u64() else { continue };
         if cofactor > max_cofactor {

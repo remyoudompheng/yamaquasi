@@ -172,14 +172,20 @@ impl Poly {
             // Transform roots as: r -> (r - B) / A
             let a = div.divmod_uint(&self.a).1;
             let b = div.divmod_uint(&self.b).1;
-            let ainv = div.inv(a).unwrap();
+            let Some(ainv) = div.inv(a) else {
+                unreachable!("MPQS D={} is not a large prime???", isqrt(a));
+            };
             [
                 Some(shift(
                     div.divmod64((p as u64 + r as u64 - b) * ainv).1 as u32,
                 )),
-                Some(shift(
-                    div.divmod64((2 * p as u64 - r as u64 - b) * ainv).1 as u32,
-                )),
+                if r == 0 {
+                    None
+                } else {
+                    Some(shift(
+                        div.divmod64((2 * p as u64 - r as u64 - b) * ainv).1 as u32,
+                    ))
+                },
             ]
         };
         sieve::SievePrime { p: p, offsets }
@@ -467,7 +473,10 @@ fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) {
                     break;
                 }
             }
-            factors.push((s.fbase.p(pidx) as i64, exp));
+            if exp > 0 {
+                // FIXME: can we have exp == 0 ?
+                factors.push((s.fbase.p(pidx) as i64, exp));
+            }
         }
         let Some(cofactor) = cofactor.to_u64() else { continue };
         if cofactor > max_cofactor {

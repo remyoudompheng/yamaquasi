@@ -549,7 +549,7 @@ impl PackedRelation {
                 (-1, k) if k % 2 == 0 => continue,
                 (-1, k) if k % 2 == 1 => ints.push(0),
                 (p, k) => {
-                    assert!(p > 0 && p < (1 << 31));
+                    assert!(p > 0 && p < (1 << 31) && k > 0);
                     let p = if p == 2 { 1 } else { p };
                     assert!(p % 2 == 1);
                     if k > 1 {
