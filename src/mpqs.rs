@@ -68,12 +68,16 @@ pub fn mpqs(
     let mut polys_done = 0;
     let use_double = n.bits() > 256;
     eprintln!("Generated {} polynomials", polys.len());
-    let maxlarge: u64 = maxprime
-        * prefs
-            .large_factor
-            .unwrap_or(large_prime_factor(&n, use_double));
+    let maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(&n));
+    eprintln!("Max large prime {}", maxlarge);
+    if use_double {
+        eprintln!(
+            "Max double large prime {}",
+            maxlarge * fbase.bound() as u64 * 2
+        );
+    }
     let rels = RwLock::new(RelationSet::new(n, maxlarge));
-    eprintln!("Max cofactor {}", maxlarge);
+
     loop {
         // Pop next polynomial.
         if polyidx == polys.len() {
@@ -399,7 +403,7 @@ fn mpqs_interval_logsize(n: &Uint) -> u32 {
     }
 }
 
-fn large_prime_factor(n: &Uint, doubles: bool) -> u64 {
+fn large_prime_factor(n: &Uint) -> u64 {
     // Allow large cofactors up to FACTOR * largest prime
     let sz = n.bits();
     match sz {
@@ -413,13 +417,10 @@ fn large_prime_factor(n: &Uint, doubles: bool) -> u64 {
         {
             300 - 2 * n.bits() as u64 // 200..100
         }
-        _ => {
-            // Less large primes if we use double large primes.
-            if doubles {
-                n.bits() as u64 / 16
-            } else {
-                n.bits() as u64
-            }
+        101..=250 => n.bits() as u64,
+        251.. => {
+            // Bound large primes to avoid exceeding 32 bits.
+            128 + n.bits() as u64 / 2
         }
     }
 }
@@ -440,10 +441,13 @@ fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) {
     st.sieve_block();
 
     let offset = st.offset;
+    let maxprime = s.fbase.bound() as u64;
     let maxlarge = s.maxlarge;
     assert!(maxlarge == (maxlarge as u32) as u64);
     let max_cofactor: u64 = if s.use_double {
-        maxlarge * maxlarge
+        // We don't want double large prime to reach maxlarge^2
+        // See siqs.rs
+        maxlarge * maxprime * 2
     } else {
         maxlarge
     };

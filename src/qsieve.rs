@@ -29,10 +29,13 @@ pub fn qsieve(
     // (n will be a quadratic residue for only half of them)
     //
     // Compared to MPQS, classical quadratic sieve uses a single huge interval
-    // so resulting numbers can be larger by 15-30 bits. Choose factor base size
-    // as if n was larger than it really is.
+    // so resulting numbers (2M sqrt(n)) can be larger by 10-20 bits.
+    // Choose factor base size as if n was larger (by a factor O(M^2)).
     let shift = if n.bits() > 100 {
-        (n.bits() - 100) / 10
+        // 160-bit input => 20 bit penalty (interval size 300M-500M)
+        // 180-bit input => 22 bit penalty (interval size 1G-3G)
+        // 200-bit input => 25 bit penalty (interval size 3G-10G)
+        n.bits() / 8
     } else {
         0
     };
@@ -40,7 +43,7 @@ pub fn qsieve(
         .fb_size
         .unwrap_or(params::factor_base_size(&(n << shift)));
     // When using double large primes, use a smaller factor base.
-    let fb = if use_double { fb * 3 / 4 } else { fb };
+    let fb = if use_double { fb / 2 } else { fb };
     let fbase = FBase::new(n, fb);
     eprintln!("Smoothness bound {}", fbase.bound());
     eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls());
@@ -62,14 +65,16 @@ pub fn qsieve(
 
     let mut target = fbase.len() * 8 / 10;
 
-    let mut maxlarge: u64 =
-        fbase.bound() as u64 * prefs.large_factor.unwrap_or(large_prime_factor(&n));
-    if use_double {
-        // When using double large primes, use smaller larges.
-        maxlarge /= 2
-    }
+    let maxlarge: u64 = fbase.bound() as u64 * prefs.large_factor.unwrap_or(large_prime_factor(&n));
     let qs = SieveQS::new(n, &fbase, maxlarge, use_double);
     eprintln!("Max large prime {}", qs.maxlarge);
+    if use_double {
+        eprintln!(
+            "Max double large prime {}",
+            maxlarge * fbase.bound() as u64 * 2
+        );
+    }
+
     // These counters are actually not accessed concurrently.
     let fwd_offset = AtomicI64::new(0i64);
     let bck_offset = AtomicI64::new(0i64);
@@ -250,9 +255,12 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
 
     let len: usize = BLOCK_SIZE;
     let offset = st.offset;
+    let maxprime = s.fbase.bound() as u64;
     let maxlarge = s.maxlarge;
     let max_cofactor = if s.use_double {
-        maxlarge * maxlarge
+        // We don't want double large prime to reach maxlarge^2
+        // See siqs.rs
+        maxlarge * maxprime * 2
     } else {
         maxlarge
     };
