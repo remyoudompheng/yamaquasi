@@ -770,7 +770,7 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
             x: xrel,
             cofactor,
             factors,
-            pp: false,
+            cyclelen: 1,
         };
         debug_assert!(rel.verify(&s.n));
         s.rels.write().unwrap().add(rel, pq);

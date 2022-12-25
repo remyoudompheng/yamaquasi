@@ -93,7 +93,7 @@ pub fn qsieve(
         let mut rels = qs.rels.write().unwrap();
         if rels.len() > fbase.len() + 32 {
             // Too many relations! May happen for very small inputs.
-            rels.complete.truncate(fbase.len() + 32);
+            rels.truncate(fbase.len() + 32);
             let gap = rels.gap();
             if gap == 0 {
                 eprintln!("Found enough relations");
@@ -141,13 +141,10 @@ pub fn qsieve(
     }
     let sieved = s_fwd.offset + s_bck.offset;
     let rels = qs.rels.into_inner().unwrap();
-    eprintln!(
-        "Sieved {:.1}M found {} smooths (cofactors: {} combined, {} pending)",
-        (sieved as f64) / ((1 << 20) as f64),
-        rels.len(),
-        rels.n_combined,
-        rels.n_partials,
-    );
+    rels.log_progress(format!(
+        "Sieved {:.1}M",
+        (sieved as f64) / ((1 << 20) as f64)
+    ));
     rels.into_inner()
 }
 
@@ -298,7 +295,7 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
         let rel = Relation {
             x: x.abs().to_bits(),
             cofactor,
-            pp: false,
+            cyclelen: 1,
             factors,
         };
         debug_assert!(

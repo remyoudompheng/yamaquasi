@@ -7,6 +7,7 @@
 //!
 //! where pi = -1 or a prime in the factor base
 
+use std::cmp::min;
 use std::collections::HashMap;
 use std::default::Default;
 
@@ -23,8 +24,7 @@ use crate::{Int, Uint};
 pub struct Relation {
     pub x: Uint,
     pub cofactor: u64,
-    // Is this relation from a double-large prime relation?
-    pub pp: bool,
+    pub cyclelen: u64,
     pub factors: Vec<(i64, u64)>, // -1 for the sign
 }
 
@@ -63,22 +63,23 @@ impl Relation {
 /// Empirical studies show that non-trivial cycles never appear: all cycles
 /// intersect the (huge) connected component of p-relations.
 ///
+/// A cycle of length 1 is a complete relation.
+/// A cycle of length 2 is a combination of 2 p-relations.
+/// A cycle of length >= 3 involves at least a pp-relation.
 #[derive(Default)]
 pub struct RelationSet {
     pub n: Uint,
     pub maxlarge: u64,
-    pub complete: Vec<Relation>,
+    pub cycles: Vec<Relation>,
     // p => relation with cofactor p
     partial: HashMap<u64, PackedRelation>,
     // p => relation with cofactor pq (p < q)
     // No key is common with partial map
     doubles: HashMap<(u64, u64), PackedRelation>,
-    pub n_smooths: usize,
     pub n_partials: usize,
     pub n_doubles: usize,
-    pub n_combined: usize,
-    pub n_combined2: usize,
     pub n_combined12: usize,
+    pub n_cycles: [usize; 8],
 }
 
 impl RelationSet {
@@ -92,36 +93,30 @@ impl RelationSet {
 
     // Consumes the set and returns the inner vector.
     pub fn into_inner(self) -> Vec<Relation> {
-        self.complete
-    }
-
-    pub fn n_complete(&self) -> usize {
-        self.complete.len()
+        self.cycles
     }
 
     pub fn truncate(&mut self, l: usize) {
-        self.complete.truncate(l)
+        self.cycles.truncate(l)
     }
 
     pub fn len(&self) -> usize {
-        self.complete.len()
+        self.cycles.len()
     }
 
     pub fn gap(&self) -> usize {
-        relation_gap(&self.complete)
+        relation_gap(&self.cycles)
     }
 
     pub fn log_progress<S: AsRef<str>>(&self, prefix: S) {
         eprintln!(
-            "{} found {} smooths (c0={} c1={} c2={} p={} p12={} pp={})",
+            "{} found {} smooths (p={} p12={} pp={} cycles={:?})",
             prefix.as_ref(),
             self.len(),
-            self.n_smooths,
-            self.n_combined,
-            self.n_combined2,
             self.n_partials,
             self.n_combined12,
             self.n_doubles,
+            self.n_cycles,
         )
     }
 
@@ -144,7 +139,7 @@ impl RelationSet {
             Relation {
                 x: (r1.x * r2.x) % self.n,
                 cofactor: r1.cofactor / r2.cofactor,
-                pp: r1.pp || r2.pp,
+                cyclelen: r1.cyclelen + r2.cyclelen,
                 factors,
             }
         } else {
@@ -153,7 +148,7 @@ impl RelationSet {
             Relation {
                 x: (r1.x * r2.x) % self.n,
                 cofactor: r2.cofactor / r1.cofactor,
-                pp: r1.pp || r2.pp,
+                cyclelen: r1.cyclelen + r2.cyclelen,
                 factors,
             }
         }
@@ -161,8 +156,7 @@ impl RelationSet {
 
     pub fn add(&mut self, r: Relation, pq: Option<(u64, u64)>) {
         if r.cofactor == 1 {
-            self.n_smooths += 1;
-            self.complete.push(r);
+            self.add_cycle(r);
         } else if r.cofactor < self.maxlarge {
             // Factor base elements have at most 24 bits
             self.n_partials += 1;
@@ -186,6 +180,12 @@ impl RelationSet {
                 self.gc_doubles()
             }
         }
+    }
+
+    pub fn add_cycle(&mut self, r: Relation) {
+        assert_eq!(r.cofactor, 1);
+        self.n_cycles[min(self.n_cycles.len(), r.cyclelen as usize) - 1] += 1;
+        self.cycles.push(r);
     }
 
     fn gc_doubles(&mut self) {
@@ -291,12 +291,7 @@ impl RelationSet {
                 r0,
                 rr
             );
-            self.complete.push(rr);
-            if r.pp || r0.pp {
-                self.n_combined2 += 1;
-            } else {
-                self.n_combined += 1;
-            }
+            self.add_cycle(rr);
             true
         } else {
             false
@@ -313,30 +308,25 @@ impl RelationSet {
                 factors: f,
                 ..r.clone()
             };
-            self.complete.push(rr);
-            self.n_combined2 += 1;
+            self.add_cycle(rr);
             true
         } else if self.partial.contains_key(&p) && self.partial.contains_key(&q) {
             // Ideal case, both primes already available.
             let rp = self.partial.get(&p).unwrap().unpack();
             let rq = self.partial.get(&q).unwrap().unpack();
             let r2 = self.combine(&self.combine(&r, &rp), &rq);
-            assert_eq!(r2.cofactor, 1);
-            self.complete.push(r2);
-            self.n_combined2 += 1;
+            self.add_cycle(r2);
             true
         } else if self.partial.contains_key(&p) {
             let rp = self.partial.get(&p).unwrap();
-            let mut rq = self.combine(&r, &rp.unpack());
-            rq.pp = true;
+            let rq = self.combine(&r, &rp.unpack());
             assert_eq!(rq.cofactor, q);
             self.n_combined12 += 1;
             self.partial.insert(q, rq.pack());
             true
         } else if self.partial.contains_key(&q) {
             let rq = self.partial.get(&q).unwrap();
-            let mut rp = self.combine(&r, &rq.unpack());
-            rp.pp = true;
+            let rp = self.combine(&r, &rq.unpack());
             assert_eq!(rp.cofactor, p);
             self.n_combined12 += 1;
             self.partial.insert(p, rp.pack());
@@ -548,8 +538,7 @@ struct PackedRelation {
 impl PackedRelation {
     fn pack(r: Relation) -> PackedRelation {
         let &[x0, x1, x2, x3, x4, x5, x6, x7] = U512::cast_from(r.x).digits();
-        let l = if r.pp { 1 } else { 0 };
-        let mut ints = vec![x0, x1, x2, x3, x4, x5, x6, x7, r.cofactor, l];
+        let mut ints = vec![x0, x1, x2, x3, x4, x5, x6, x7, r.cofactor, r.cyclelen];
         for &(p, k) in &r.factors {
             // encode each factor as a sequence of integers
             // -1 encodes to 0
@@ -604,7 +593,7 @@ impl PackedRelation {
             }
         }
         ints.push(n);
-        let [x0,x1,x2,x3,x4,x5,x6,x7,cofactor,l] = ints[..10]
+        let [x0,x1,x2,x3,x4,x5,x6,x7,cofactor,clen] = ints[..10]
             else { unreachable!("corrupted relation data") };
         let x = U512::from_digits([x0, x1, x2, x3, x4, x5, x6, x7]);
         let mut factors = vec![];
@@ -629,7 +618,7 @@ impl PackedRelation {
         Relation {
             x: Uint::cast_from(x),
             cofactor: cofactor,
-            pp: l > 0,
+            cyclelen: clen,
             factors,
         }
     }
@@ -642,7 +631,7 @@ fn test_pack_relation() {
     let r = Relation {
         x: Uint::from_str("135487168713871387841578923567").unwrap(),
         cofactor: 7915738421,
-        pp: true,
+        cyclelen: 4,
         factors: vec![
             (-1, 1),
             (2, 17),

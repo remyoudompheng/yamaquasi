@@ -135,7 +135,7 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
                     x: Uint::from(u as u64),
                     cofactor,
                     factors,
-                    pp: false,
+                    cyclelen: 1,
                 };
                 if cofactor == 1 {
                     rels.push(rel)
