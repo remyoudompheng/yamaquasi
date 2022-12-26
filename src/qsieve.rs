@@ -14,7 +14,7 @@ use std::sync::RwLock;
 use crate::arith::{isqrt, Num};
 use crate::fbase::{self, FBase, Prime};
 use crate::params::{self, large_prime_factor, BLOCK_SIZE};
-use crate::relations::{Relation, RelationSet};
+use crate::relations::{self, Relation, RelationSet};
 use crate::sieve::{Sieve, SievePrime};
 use crate::{Int, Uint};
 
@@ -95,19 +95,6 @@ pub fn qsieve(
             sieve_block(&qs, &mut s_fwd, false);
             sieve_block(&qs, &mut s_bck, true);
         }
-        let mut rels = qs.rels.write().unwrap();
-        if rels.len() > fbase.len() + 32 {
-            // Too many relations! May happen for very small inputs.
-            rels.truncate(fbase.len() + 32);
-            let gap = rels.gap();
-            if gap == 0 {
-                eprintln!("Found enough relations");
-                break;
-            } else {
-                eprintln!("Need {} additional relations", gap);
-                target = rels.len() + gap + 16;
-            }
-        }
 
         // Next block
         s_fwd.next_block();
@@ -128,28 +115,33 @@ pub fn qsieve(
         } else {
             sieved % (10 << 20) == 0
         };
+        let rels = qs.rels.read().unwrap();
         if do_print {
             rels.log_progress(format!("Sieved {}M", sieved >> 20,));
         }
         // For small n the sieve must stop quickly:
         // test whether we already have enough relations.
         if n.bits() < 64 || rels.len() >= target {
+            let rels = qs.rels.read().unwrap();
             let gap = rels.gap();
             if gap == 0 {
                 eprintln!("Found enough relations");
                 break;
             } else {
                 eprintln!("Need {} additional relations", gap);
-                target = rels.len() + gap + 10;
+                target = rels.len() + gap;
             }
         }
     }
     let sieved = s_fwd.offset + s_bck.offset;
-    let rels = qs.rels.into_inner().unwrap();
+    let mut rels = qs.rels.into_inner().unwrap();
     rels.log_progress(format!(
         "Sieved {:.1}M",
         (sieved as f64) / ((1 << 20) as f64)
     ));
+    if rels.len() > fbase.len() + relations::MIN_KERNEL_SIZE {
+        rels.truncate(fbase.len() + relations::MIN_KERNEL_SIZE)
+    }
     rels.into_inner()
 }
 

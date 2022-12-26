@@ -202,6 +202,10 @@ pub fn pseudoprime(p: Uint) -> bool {
         if p.to_u64() == Some(b) {
             return true;
         }
+        if p.bits() <= 64 && b > 37 {
+            // Bases up to 37 are enough for 64-bit integers.
+            break;
+        }
         let mut pow = arith::pow_mod(Uint::from(b), Uint::cast_from(p) >> s, Uint::cast_from(p));
         let p = Uint::cast_from(p);
         let pm1 = p - Uint::from(1u64);

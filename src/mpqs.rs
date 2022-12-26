@@ -17,7 +17,7 @@ use rayon::prelude::*;
 use crate::arith::{self, inv_mod, isqrt, pow_mod, Num, U256};
 use crate::fbase::{self, FBase};
 use crate::params::{self, BLOCK_SIZE};
-use crate::relations::{Relation, RelationSet};
+use crate::relations::{self, Relation, RelationSet};
 use crate::sieve;
 use crate::{Int, Uint, DEBUG};
 
@@ -139,7 +139,11 @@ pub fn mpqs(
             polys_done,
         ));
     }
-    rels.into_inner().unwrap().into_inner()
+    let mut rels = rels.into_inner().unwrap();
+    if rels.len() > fbase.len() + relations::MIN_KERNEL_SIZE {
+        rels.truncate(fbase.len() + relations::MIN_KERNEL_SIZE)
+    }
+    rels.into_inner()
 }
 
 /// A polynomial is an omitted quadratic Ax^2 + Bx + C

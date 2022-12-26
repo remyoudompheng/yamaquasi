@@ -2,18 +2,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! A specialized version of ordinary quadratic sieve for 64-bit integers.
+//! A specialized version of ordinary quadratic sieve
+//! for smaller than 64-bit integers.
 //!
 //! Most parameters are hardcoded.
 //! Factor base is ~20 primes, block size is 16k
 
 use std::collections::HashMap;
 
-use bitvec_simd::BitVec;
-
 use crate::arith::{self, Num};
 use crate::fbase::SMALL_PRIMES;
-use crate::matrix;
 use crate::relations::{self, Relation};
 use crate::Uint;
 
@@ -67,7 +65,7 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
     let maxlarge = 5000;
 
     let block_size = match n.bits() {
-        1..=50 => 4096,
+        0..=50 => 4096,
         _ => 16384,
     };
     // Run sieve
@@ -150,7 +148,8 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
                 }
             }
         }
-        if rels.len() > primes.len() + 10 {
+        // We cannot require too many relations for such small integers.
+        if rels.len() > primes.len() + 8 {
             break;
         }
         if DEBUG {
@@ -164,44 +163,14 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
         interval.fill(0u8);
     }
 
-    // Make matrix
-    let mut pindices = [0u8; 256];
-    for (idx, &p) in primes.iter().enumerate() {
-        pindices[p as usize] = idx as u8 + 1;
+    let divs = relations::final_step(&Uint::from(n), &rels, false);
+    if let Some(p) = divs.first() {
+        let p = p.low_u64();
+        assert_eq!(n % p, 0);
+        Some((p, n / p))
+    } else {
+        None
     }
-    let size = primes.len() + 1;
-    let mut cols = vec![];
-    for r in &rels {
-        let mut v = BitVec::zeros(size);
-        for &(p, exp) in &r.factors {
-            if exp % 2 == 0 {
-                continue;
-            }
-            if p == -1 {
-                v.set(0, true)
-            } else {
-                v.set(pindices[p as usize] as usize, true)
-            }
-        }
-        cols.push(v)
-    }
-    // Solve and factor
-    if cols.len() == 0 {
-        // no matrix ??
-        return None;
-    }
-    let k = matrix::kernel_gauss(cols);
-    for eq in k {
-        let mut rs = vec![];
-        for i in eq.into_usizes().into_iter() {
-            rs.push(rels[i].clone());
-        }
-        let (a, b) = relations::combine(&Uint::from(n), &rs);
-        if let Some((p, q)) = relations::try_factor(&Uint::from(n), a, b) {
-            return Some((p.low_u64(), q.low_u64()));
-        }
-    }
-    None
 }
 
 pub fn select_multiplier(n: u64) -> (u32, f64) {

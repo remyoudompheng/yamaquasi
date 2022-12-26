@@ -24,10 +24,10 @@ use bnum::cast::CastFrom;
 use num_traits::One;
 use rayon::prelude::*;
 
-use crate::arith::{self, Num};
+use crate::arith::{self, Num, U256};
 use crate::fbase::{self, FBase, Prime};
 use crate::params::{self, BLOCK_SIZE};
-use crate::relations::{Relation, RelationSet};
+use crate::relations::{self, Relation, RelationSet};
 use crate::sieve;
 use crate::{Int, Uint, DEBUG};
 
@@ -189,7 +189,11 @@ pub fn siqs(
     if gap.load(Ordering::Relaxed) != 0 {
         panic!("Internal error: not enough smooth numbers with selected parameters");
     }
-    s.rels.into_inner().unwrap().into_inner()
+    let mut rels = s.rels.into_inner().unwrap();
+    if rels.len() > fbase.len() + relations::MIN_KERNEL_SIZE {
+        rels.truncate(fbase.len() + relations::MIN_KERNEL_SIZE)
+    }
+    rels.into_inner()
 }
 
 // Parameters:
@@ -289,7 +293,7 @@ fn large_prime_factor(n: &Uint) -> u64 {
 
 pub struct Factors<'a> {
     pub n: &'a Uint,
-    pub target: Uint,
+    pub target: U256,
     pub nfacs: usize,
     // A sorted list of factors
     pub factors: Vec<Prime<'a>>,
@@ -335,9 +339,10 @@ pub fn select_siqs_factors<'a>(fb: &'a FBase, n: &'a Uint, nfacs: usize) -> Fact
         }
         inverses.push(row);
     }
+    assert!(target.bits() < 256);
     Factors {
         n,
-        target,
+        target: U256::cast_from(target),
         nfacs,
         factors: selection.into_iter().collect(),
         inverses,
@@ -414,13 +419,14 @@ pub fn select_a(f: &Factors, want: usize) -> Vec<Uint> {
                 amax = f.target + f.target / div as u64;
             }
         }
-        let mut product = Uint::one();
+        // A is smaller than sqrt(n) so 256-bit arithmetic is enough.
+        let mut product = U256::one();
         let mut mask = 0u64;
         while mask.count_ones() < f.nfacs as u32 - 1 {
             let g = gen();
             if mask & (1 << g) == 0 {
                 mask |= 1 << g;
-                product *= Uint::from(f.factors[g as usize].p);
+                product *= U256::from(f.factors[g as usize].p);
             }
         }
         let t = (f.target / product).to_u64().unwrap();
@@ -428,14 +434,14 @@ pub fn select_a(f: &Factors, want: usize) -> Vec<Uint> {
             .filter(|g| mask & (1 << g) == 0)
             .min_by_key(|&idx| (f.factors[idx].p as i64 - t as i64).abs())
             .unwrap();
-        product *= Uint::from(f.factors[idx].p);
+        product *= U256::from(f.factors[idx].p);
         if amin < product && product < amax {
-            candidates.push(product);
+            candidates.push(Uint::cast_from(product));
         }
         if candidates.len() > want && iters % 10 == 0 {
             candidates.sort();
             candidates.dedup();
-            let idx = candidates.partition_point(|c| c < &f.target);
+            let idx = candidates.partition_point(|&c| U256::cast_from(c) < f.target);
             if idx > want && idx + want < candidates.len() {
                 return candidates[idx - want / 2..idx + want / 2].to_vec();
             }

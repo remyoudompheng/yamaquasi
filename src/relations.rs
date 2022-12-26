@@ -20,6 +20,13 @@ use crate::arith::{pow_mod, U512};
 use crate::matrix;
 use crate::{Int, Uint};
 
+/// Number of extra relations that must be collected for factoring.
+/// Block Lanczos cannot find more kernel vectors than its block size.
+///
+/// We will find random elements of the order 2 subgroup of Z/nZ
+/// hoping that they will generate a large rank subgroup.
+pub const MIN_KERNEL_SIZE: usize = 20;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Relation {
     pub x: Uint,
@@ -353,8 +360,8 @@ pub fn relation_gap(rels: &[Relation]) -> usize {
     // We require additional relations compared to the number of factors.
     // This is because relations may accidentally be trivial
     // (x^2=y^2 where n divides x-y or x+y).
-    if occs.len() + 16 > rels.len() {
-        occs.len() + 16 - rels.len()
+    if occs.len() + MIN_KERNEL_SIZE > rels.len() {
+        occs.len() + MIN_KERNEL_SIZE - rels.len()
     } else {
         0
     }
@@ -370,9 +377,13 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Vec<Uint> {
     let mut occs = HashMap::<i64, u64>::new();
     for r in rels {
         for (f, k) in r.factors.iter() {
+            let c = occs.get(f);
             if k % 2 == 1 {
-                let c = occs.get(f).unwrap_or(&0);
-                occs.insert(*f, c + 1);
+                occs.insert(*f, c.unwrap_or(&0) + 1);
+            } else if c.is_none() {
+                // Make sure to register all factors.
+                // They will be required when computing products below.
+                occs.insert(*f, 0);
             }
         }
     }
@@ -383,18 +394,20 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Vec<Uint> {
     // Gauss elimination is much more efficient if it starts by eliminating
     // the (few) densest rows: the remaining rows will remain relatively sparse
     // during the rest of the elimination.
-    let mut occs: Vec<(i64, u64)> = occs.into_iter().filter(|&(_, k)| k > 1).collect();
+    let mut occs: Vec<(i64, u64)> = occs.into_iter().collect();
     occs.sort_by_key(|&(_, k)| -(k as i64));
-    let nfactors = occs.len();
+    // We keep only factors with > 1 occurrences for the matrix.
+    let nfactors = occs.iter().position(|&(_, k)| k <= 1).unwrap_or(occs.len());
+    // Map primes to their index (even filtered ones).
     let mut idxs = HashMap::<i64, usize>::new();
-    for (idx, (f, _)) in occs.into_iter().enumerate() {
+    for (idx, &(f, _)) in occs.iter().enumerate() {
         idxs.insert(f, idx);
     }
     // Build vectors
     // ridx[i] = j if rels[j] is the i-th vector in the matrix
     let mut filt_rels: Vec<&Relation> = vec![];
     let mut matrix = vec![];
-    let size = idxs.len();
+    let size = nfactors;
     let mut coeffs = 0;
     'skiprel: for r in rels.iter() {
         let mut v = vec![];
@@ -402,7 +415,8 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Vec<Uint> {
             if k % 2 == 0 {
                 continue;
             }
-            if let Some(&idx) = idxs.get(f) {
+            let &idx = idxs.get(f).unwrap();
+            if idx < nfactors {
                 v.push(idx);
                 coeffs += 1;
             } else {
@@ -455,14 +469,26 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Vec<Uint> {
     let mut divisors = vec![];
     let mut nontrivial = 0;
     for eq in k {
-        let mut rs = vec![];
+        // Collect relations for this vector.
+        let mut xs = vec![];
+        let mut exps = vec![0u64; occs.len()];
         for i in eq.into_usizes().into_iter() {
-            rs.push(filt_rels[i].clone());
+            xs.push(filt_rels[i].x);
+            for (f, k) in &filt_rels[i].factors {
+                let idx = idxs.get(&f).unwrap();
+                exps[*idx] += k;
+            }
         }
+        let factors: Vec<(i64, u64)> = exps
+            .into_iter()
+            .enumerate()
+            .filter(|&(_, exp)| exp > 0)
+            .map(|(idx, exp)| (occs[idx].0, exp))
+            .collect();
         if crate::DEBUG {
-            eprintln!("Combine {} relations...", rs.len());
+            eprintln!("Combine {} relations...", xs.len());
         }
-        let (a, b) = combine(n, &rs);
+        let (a, b) = combine(n, &xs, &factors);
         if crate::DEBUG {
             eprintln!("Same square mod N: {} {}", a, b);
         }
@@ -484,27 +510,47 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Vec<Uint> {
 }
 
 /// Combine relations into an identity a^2 = b^2
-pub fn combine(n: &Uint, rels: &[Relation]) -> (Uint, Uint) {
-    // Check that the product is a square
+/// Instead of handling an array of relations,
+/// we provide xs such that a = product(xs)
+/// and [(p, k)] such that b^2 = product(p^k)
+pub fn combine(n: &Uint, xs: &[Uint], factors: &[(i64, u64)]) -> (Uint, Uint) {
+    // Avoid too many (x % n) operations especially when factors are small.
+    // All factors are less than 32 bits.
+
+    // Product of x (they are less than 512 bits wide).
     let mut a = Uint::one();
-    for r in rels {
-        a = (a * r.x) % n;
-    }
-    // Collect exponents
-    let mut exps = HashMap::<i64, u64>::new();
-    for r in rels {
-        for (p, k) in &r.factors {
-            let e = exps.get(p).unwrap_or(&0);
-            exps.insert(*p, e + k);
+    for x in xs {
+        a *= x;
+        if a.bits() > Uint::BITS / 2 {
+            a = a % n;
         }
     }
+    if a > *n {
+        a = a % n;
+    }
+    // Product of factors: they are smaller than 32 bits.
+    // Accumulate product in a u64 before performing long multiplications.
     let mut b = Uint::one();
-    for (p, k) in exps.into_iter() {
-        assert_eq!(k % 2, 0);
+    let mut chunk = 1_u64;
+    for &(p, k) in factors {
         if p == -1 {
             continue;
         }
-        b = (b * pow_mod(Uint::from(p as u64), Uint::from(k / 2), *n)) % n;
+        assert_eq!(k % 2, 0);
+        for _ in 0..k / 2 {
+            chunk *= p as u64;
+            if chunk >> 32 != 0 {
+                b *= Uint::from(chunk);
+                chunk = 1;
+                if b.bits() > Uint::BITS / 2 {
+                    b = b % n;
+                }
+            }
+        }
+    }
+    b *= Uint::from(chunk);
+    if b > *n {
+        b = b % n;
     }
     assert_eq!((a * a) % n, (b * b) % n);
     (a, b)
@@ -516,17 +562,17 @@ pub fn try_factor(n: &Uint, a: Uint, b: Uint) -> Option<(Uint, Uint)> {
         // Trivial square relation
         return None;
     }
-    let e = Integer::extended_gcd(&Int::from_bits(*n), &Int::from_bits(a + b));
-    if e.gcd > Int::one() {
-        let p = e.gcd.to_bits();
+    let gcd = Integer::gcd(&Int::from_bits(*n), &Int::from_bits(a + b));
+    if gcd > Int::one() {
+        let p = gcd.to_bits();
         let q = n / p;
         assert!(p * q == *n);
         assert!(p.bits() > 1 && q.bits() > 1);
         return Some((p, q));
     }
-    let e = Integer::extended_gcd(&Int::from_bits(*n), &Int::from_bits(n + a - b));
-    if e.gcd > Int::one() {
-        let p = e.gcd.to_bits();
+    let gcd = Integer::gcd(&Int::from_bits(*n), &Int::from_bits(n + a - b));
+    if gcd > Int::one() {
+        let p = gcd.to_bits();
         let q = n / p;
         assert!(p * q == *n);
         assert!(p.bits() > 1 && q.bits() > 1);
