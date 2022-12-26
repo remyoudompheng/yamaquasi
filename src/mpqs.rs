@@ -49,7 +49,7 @@ pub fn mpqs(
     polybase = isqrt(polybase);
     let maxprime = fbase.bound() as u64;
     if polybase < Uint::from(maxprime) {
-        polybase = Uint::from(maxprime + 1000);
+        polybase = Uint::from(maxprime);
     }
     // Generate multiple polynomials at a time.
     // For small numbers (90-140 bits) usually less than
@@ -63,7 +63,7 @@ pub fn mpqs(
     } else {
         100 * 20 / 7 * polybase.bits()
     };
-    let mut polys = select_polys(polybase, polystride as usize, &n);
+    let mut polys = select_polys(&fbase, &n, polybase, polystride as usize);
     let mut polyidx = 0;
     let mut polys_done = 0;
     let use_double = n.bits() > 256;
@@ -93,7 +93,7 @@ pub fn mpqs(
                 polys_done,
             ));
             polybase += Uint::from(polystride);
-            polys = select_polys(polybase, polystride as usize, &n);
+            polys = select_polys(&fbase, &n, polybase, polystride as usize);
             polyidx = 0;
             eprintln!("Generated {} polynomials", polys.len());
         }
@@ -177,7 +177,7 @@ impl Poly {
             let a = div.divmod_uint(&self.a).1;
             let b = div.divmod_uint(&self.b).1;
             let Some(ainv) = div.inv(a) else {
-                unreachable!("MPQS D={} is not a large prime???", isqrt(a));
+                unreachable!("MPQS D={} is not a large prime???", isqrt(self.a));
             };
             [
                 Some(shift(
@@ -192,7 +192,7 @@ impl Poly {
                 },
             ]
         };
-        sieve::SievePrime { p: p, offsets }
+        sieve::SievePrime { p, offsets }
     }
 }
 
@@ -219,14 +219,14 @@ fn test_poly_prime() {
 
 /// Returns a set of polynomials suitable for sieving across ±2^sievebits
 /// The base offset is a seed for prime generation.
-pub fn select_polys(base: Uint, width: usize, n: &Uint) -> Vec<Poly> {
-    sieve_for_polys(base, width, n)
+pub fn select_polys(fb: &FBase, n: &Uint, base: Uint, width: usize) -> Vec<Poly> {
+    sieve_for_polys(fb, n, base, width)
         .into_iter()
         .map(|(d, r)| make_poly(d, r, n))
         .collect()
 }
 
-pub fn sieve_for_polys(bmin: Uint, width: usize, n: &Uint) -> Vec<(Uint, Uint)> {
+pub fn sieve_for_polys(fb: &FBase, n: &Uint, bmin: Uint, width: usize) -> Vec<(Uint, Uint)> {
     let mut composites = vec![false; width as usize];
     for &p in fbase::SMALL_PRIMES {
         let off = bmin % (p as u64);
@@ -240,12 +240,27 @@ pub fn sieve_for_polys(bmin: Uint, width: usize, n: &Uint) -> Vec<(Uint, Uint)> 
     }
     let base4 = bmin.low_u64() % 4;
     let mut result = vec![];
+'nextsieve:
     for i in 0..width {
         if !composites[i] && (base4 + i as u64) % 4 == 3 {
             // No small factor, 3 mod 4
             let p = bmin + Uint::from(i);
             let r = pow_mod(*n, (p >> 2) + Uint::one(), p);
             if (r * r) % p == n % p {
+                // Beware, D may (exceptionally) not be prime.
+                // Perform trial division by the factor base.
+                let d = U256::cast_from(p);
+                for idx in 0..fb.len() {
+                    if fb.div(idx).mod_uint(&d) == 0 {
+                        continue 'nextsieve
+                    }
+                }
+                if r.is_zero() {
+                    // FIXME: use this factor to answer.
+                    eprintln!("WARNING: unexpectedly found a factor of N!");
+                    println!("{}", p);
+                    continue 'nextsieve
+                }
                 result.push((p, r));
             }
         }
@@ -304,9 +319,10 @@ fn test_select_poly() {
         "104567211693678450173299212092863908236097914668062065364632502155864426186497",
     )
     .unwrap();
+    let fb = fbase::FBase::new(n, 1000);
     let mut polybase: Uint = isqrt(n >> 1) >> 24;
     polybase = isqrt(polybase);
-    let Poly { a, b, d } = select_polys(polybase, 512, &n)[0];
+    let Poly { a, b, d } = select_polys(&fb, &n, polybase, 512)[0];
     let (a, b, d) = (Uint::cast_from(a), Uint::cast_from(b), Uint::cast_from(d));
     // D = 3 mod 4, 2D = 6 mod 8
     assert_eq!(d.low_u64() % 8, 6);
@@ -334,6 +350,14 @@ fn test_select_poly() {
     let px = Int::from_bits(a * x * x + b * x) - Int::from_bits(c);
     println!("Ax²+Bx+C = {}", px);
     assert!(px.abs().bits() <= 128 + 24);
+
+    // Sample failures in polynomial selection:
+    // n=5*545739830203115604058837931639003
+    // D=1064363 composite
+    // n=3*936196470328602335308479219639141053
+    // D=4255903 composite (n^(D+1)/4 is a valid square root)
+    // n=6*1026830418586472562456155798159521
+    // D=1302451 base 2 pseudoprime
 }
 
 // One MPQS unit of work, identified by an integer 'idx'.

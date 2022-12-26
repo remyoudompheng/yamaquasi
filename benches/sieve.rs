@@ -19,34 +19,37 @@ brunch::benches! {
     // Polynomial selection
     {
         let n = Uint::from_str(PQ256).unwrap();
+        let fb = fbase::FBase::new(n, 5000);
         let mut polybase: Uint = isqrt(n >> 1) >> 24;
         polybase = isqrt(polybase);
         let width = 20 / 7 * polybase.bits() as usize;
         Bench::new("select_polys(256-bit n) = Some(...)")
-        .run_seeded(n, |n| { _ = mpqs::select_polys(polybase, width, &n).first().unwrap() })
+        .run_seeded(n, |n| { _ = mpqs::select_polys(&fb, &n, polybase, width).first().unwrap() })
     },
     // Mass polynomial selection
     // Generate 1000 polys, density is 1 / 2(log polybase)
     // = log 2 / 2 log2 n ~ 7/ 20 log2(n)
     {
         let n = Uint::from_str(PQ128).unwrap();
+        let fb = fbase::FBase::new(n, 5000);
         let mut polybase: Uint = isqrt(n >> 1) >> 24;
         polybase = isqrt(polybase);
         let width = 100 * 20 / 7 * polybase.bits() as usize;
         Bench::new("select 100 polys 128-bit n")
         .run_seeded(n, |n| {
-            let v = mpqs::select_polys(polybase, width, &n);
+            let v = mpqs::select_polys(&fb, &n, polybase, width);
             assert!(90 < v.len() && v.len() < 110);
         })
     },
     {
         let n = Uint::from_str(PQ256).unwrap();
+        let fb = fbase::FBase::new(n, 5000);
         let mut polybase: Uint = isqrt(n >> 1) >> 24;
         polybase = isqrt(polybase);
         let width = 100 * 20 / 7 * polybase.bits() as usize;
         Bench::new("select 100 polys 256-bit n")
         .run_seeded(n, |n| {
-            let v = mpqs::select_polys(polybase, width, &n);
+            let v = mpqs::select_polys(&fb, &n, polybase, width);
             assert!(90 < v.len() && v.len() < 110);
         })
     },
@@ -55,7 +58,7 @@ brunch::benches! {
         let n = Uint::from_str(PQ256).unwrap();
         let fb = fbase::FBase::new(n, 5000);
         let polybase: Uint = isqrt(isqrt(n));
-        let pol = &mpqs::select_polys(polybase, 1000, &n)[0];
+        let pol = &mpqs::select_polys(&fb, &n, polybase, 1000)[0];
         Bench::new("prepare 5000 primes for MPQS poly (n: 256 bit)")
         .run_seeded((pol, &fb), |(pol, fb)| {
             (0..fb.len()).map(|pidx| {
