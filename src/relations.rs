@@ -8,7 +8,7 @@
 //! where pi = -1 or a prime in the factor base
 
 use std::cmp::min;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::default::Default;
 
 use bitvec_simd::BitVec;
@@ -44,7 +44,7 @@ impl Relation {
                     prod = n - prod;
                 }
             } else {
-                assert!(p > 0);
+                assert!(p > 0 || p == 0 && self.factors.len() == 1);
                 prod = (prod * pow_mod(Uint::from(p as u64), Uint::from(k), *n)) % n;
             }
         }
@@ -68,7 +68,9 @@ impl Relation {
 /// of single prime relations.
 ///
 /// Empirical studies show that non-trivial cycles never appear: all cycles
-/// intersect the (huge) connected component of p-relations.
+/// intersect the (huge) connected component of p-relations. Similarly, there
+/// is negligible benefit (usually less than 1%) in trying to build minimal
+/// cycles: using a greedy approach to build cycles is acceptable.
 ///
 /// A cycle of length 1 is a complete relation.
 /// A cycle of length 2 is a combination of 2 p-relations.
@@ -82,7 +84,9 @@ pub struct RelationSet {
     partial: HashMap<u64, PackedRelation>,
     // p => relation with cofactor pq (p < q)
     // No key is common with partial map
-    doubles: HashMap<(u64, u64), PackedRelation>,
+    doubles: BTreeMap<(u32, u32), PackedRelation>,
+    // Set of keys (q > p) for pp-relations for easy reverse lookup
+    doubles_rev: BTreeSet<(u32, u32)>,
     pub n_partials: usize,
     pub n_doubles: usize,
     pub n_combined12: usize,
@@ -167,24 +171,29 @@ impl RelationSet {
         } else if r.cofactor < self.maxlarge {
             // Factor base elements have at most 24 bits
             self.n_partials += 1;
-            if !self.combine_single(&r) {
-                self.partial.insert(r.cofactor, r.pack());
+            if self.combine_single(&r) {
+                return
             }
+            let p = r.cofactor;
+            self.partial.insert(r.cofactor, r.pack());
+            // Combine with existing pp-relations
+            assert!(p >> 32 == 0);
+            self.walk_doubles(p as u32);
         } else {
             // Cofactor is above 32 bits: is it a double prime?
             let Some((p, q)) = pq
                 else { return; };
+            assert!(p >> 32 == 0 && q >> 32 == 0);
             self.n_doubles += 1;
+            // Hold pp-relations for a while
             if self.combine_double(&r, p, q) {
                 // nothing to do
             } else {
                 // No combination available.
-                let key = if p < q { (p, q) } else { (q, p) };
+                let (p, q) = (p as u32, q as u32);
+                let key = if p < q { (p , q ) } else { (q , p ) };
                 self.doubles.insert(key, PackedRelation::pack(r));
-            }
-            // Every 5000 double relations, scan the array.
-            if self.n_doubles % 5000 == 0 {
-                self.gc_doubles()
+                self.doubles_rev.insert((key.1, key.0));
             }
         }
     }
@@ -195,10 +204,36 @@ impl RelationSet {
         self.cycles.push(r);
     }
 
+    fn walk_doubles(&mut self, root: u32) {
+        let pqs: Vec<(u32, u32)> = self.doubles.range((root, 0)..(root+1, 0)).map(|(&k, _)| k).collect();
+        let qps: Vec<(u32, u32)> = self.doubles_rev.range((root, 0)..(root+1, 0)).map(|&k| k).collect();
+        for key @ &(p, q) in &pqs {
+            let Some(r) = self.doubles.remove(key) else { continue };
+            self.doubles_rev.remove(&(q, p));
+            let ok = self.combine_double(&r.unpack(), p as u64, q as u64);
+            assert!(ok);
+        }
+        for key @ &(q, p) in &qps {
+            let Some(r) = self.doubles.remove(&(p, q)) else { continue };
+            self.doubles_rev.remove(key);
+            let ok = self.combine_double(&r.unpack(), p as u64, q as u64);
+            assert!(ok);
+        }
+        for (p, q) in pqs {
+            assert_eq!(p, root);
+            self.walk_doubles(q);
+        }
+        for (q, p) in qps {
+            assert_eq!(q, root);
+            self.walk_doubles(p);
+        }
+    }
+
+    #[allow(dead_code)]
     fn gc_doubles(&mut self) {
         let mut delete = vec![];
         for &(p, q) in self.doubles.keys() {
-            if self.partial.contains_key(&p) || self.partial.contains_key(&q) {
+            if self.partial.contains_key(&(p as u64)) || self.partial.contains_key(&(q as u64)) {
                 delete.push((p, q));
             }
         }
@@ -207,8 +242,9 @@ impl RelationSet {
             return;
         }
         for (p, q) in delete {
-            let r = self.doubles.remove(&(p, q)).unwrap();
-            let ok = self.combine_double(&r.unpack(), p, q);
+            let Some(r) = self.doubles.remove(&(p, q)) else { continue };
+            self.doubles_rev.remove(&(q, p));
+            let ok = self.combine_double(&r.unpack(), p as u64, q as u64);
             assert!(ok);
         }
         eprintln!("[RelationSet] Combined {} double-large relations", deleted);
@@ -283,8 +319,8 @@ impl RelationSet {
 
     // Tries to combine a relation with an existing one.
     fn combine_single(&mut self, r: &Relation) -> bool {
-        if let Some(r0) = self.partial.get(&r.cofactor) {
-            let r0 = r0.unpack();
+        if let Some(r0_h) = self.partial.get(&r.cofactor) {
+            let r0 = r0_h.unpack();
             let rr = self.combine(r, &r0);
             if rr.factors.iter().all(|(_, exp)| exp % 2 == 0) {
                 // FIXME: Poor choice of A's can lead to duplicate relations.
@@ -299,6 +335,9 @@ impl RelationSet {
                 rr
             );
             self.add_cycle(rr);
+            if r.cyclelen < r0.cyclelen {
+                self.partial.insert(r.cofactor, r.clone().pack());
+            }
             true
         } else {
             false
@@ -319,10 +358,23 @@ impl RelationSet {
             true
         } else if self.partial.contains_key(&p) && self.partial.contains_key(&q) {
             // Ideal case, both primes already available.
+            //   1    3 relations are involved.
+            //  / \  
+            // p---q
             let rp = self.partial.get(&p).unwrap().unpack();
             let rq = self.partial.get(&q).unwrap().unpack();
             let r2 = self.combine(&self.combine(r, &rp), &rq);
             self.add_cycle(r2);
+            // Minimize spanning tree size by replacing paths.
+            if rp.cyclelen + r.cyclelen < rq.cyclelen {
+                let rpq = self.combine(r, &rp);
+                assert_eq!(rpq.cofactor, q);
+                self.partial.insert(q, rpq.pack());
+            } else if rq.cyclelen + r.cyclelen < rp.cyclelen {
+                let rqp = self.combine(r, &rq);
+                assert_eq!(rqp.cofactor, p);
+                self.partial.insert(p, rqp.pack());
+            }
             true
         } else if self.partial.contains_key(&p) {
             let rp = self.partial.get(&p).unwrap();
@@ -330,6 +382,7 @@ impl RelationSet {
             assert_eq!(rq.cofactor, q);
             self.n_combined12 += 1;
             self.partial.insert(q, rq.pack());
+            self.walk_doubles(q as u32);
             true
         } else if self.partial.contains_key(&q) {
             let rq = self.partial.get(&q).unwrap();
@@ -337,6 +390,7 @@ impl RelationSet {
             assert_eq!(rp.cofactor, p);
             self.n_combined12 += 1;
             self.partial.insert(p, rp.pack());
+            self.walk_doubles(p as u32);
             true
         } else {
             false
