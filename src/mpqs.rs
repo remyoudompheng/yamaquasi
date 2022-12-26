@@ -23,7 +23,7 @@ use crate::{Int, Uint, DEBUG};
 
 pub fn mpqs(
     n: Uint,
-    prefs: &params::Preferences,
+    prefs: &crate::Preferences,
     tpool: Option<&rayon::ThreadPool>,
 ) -> Vec<Relation> {
     // Choose factor base. Sieve twice the number of primes
@@ -261,7 +261,7 @@ pub fn sieve_for_polys(fb: &FBase, n: &Uint, bmin: Uint, width: usize) -> Vec<(U
                 if r.is_zero() {
                     // FIXME: use this factor to answer.
                     eprintln!("WARNING: unexpectedly found a factor of N!");
-                    println!("{}", p);
+                    eprintln!("{}", p);
                     continue 'nextsieve;
                 }
                 result.push((p, r));
@@ -336,7 +336,7 @@ fn test_select_poly() {
     assert_eq!(a << 1, d * d);
     // B^2 = N mod 4D^2
     assert_eq!(pow_mod(b, Uint::from(2u64), d * d), n % (d * d));
-    println!("D={} A={} B={}", d, a, b);
+    eprintln!("D={} A={} B={}", d, a, b);
     // C = (N - B^2)/4D^2
     let c: Uint = (n - (b * b)) / (a << 1);
     eprintln!("n = {}", n);

@@ -20,7 +20,7 @@ use crate::{Int, Uint};
 
 pub fn qsieve(
     n: Uint,
-    prefs: &params::Preferences,
+    prefs: &crate::Preferences,
     tpool: Option<&rayon::ThreadPool>,
 ) -> Vec<Relation> {
     let use_double = prefs.use_double.unwrap_or(n.bits() > 200);

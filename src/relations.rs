@@ -360,7 +360,9 @@ pub fn relation_gap(rels: &[Relation]) -> usize {
     }
 }
 
-pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Option<(Uint, Uint)> {
+/// Finds non trivial square roots of 1 modulo n and returns
+/// a list of non-trivial divisors of n.
+pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Vec<Uint> {
     for r in rels {
         debug_assert!(r.verify(n));
     }
@@ -450,28 +452,35 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Option<(Uint, U
             dt.as_secs_f64()
         );
     }
+    let mut divisors = vec![];
+    let mut nontrivial = 0;
     for eq in k {
         let mut rs = vec![];
         for i in eq.into_usizes().into_iter() {
             rs.push(filt_rels[i].clone());
         }
-        if verbose {
+        if crate::DEBUG {
             eprintln!("Combine {} relations...", rs.len());
         }
         let (a, b) = combine(n, &rs);
-        if verbose {
+        if crate::DEBUG {
             eprintln!("Same square mod N: {} {}", a, b);
         }
-        if let Some((p, q)) = try_factor(n, a, b) {
-            if verbose {
-                eprintln!("Found factors!");
-                println!("{}", p);
-                println!("{}", q);
-            }
-            return Some((p, q));
-        }
+        let Some((p, q)) = try_factor(n, a, b) else { continue };
+        divisors.push(p);
+        divisors.push(q);
+        nontrivial += 1;
     }
-    None
+    divisors.sort_unstable();
+    divisors.dedup();
+    if verbose {
+        eprintln!(
+            "{} divisors from {} successful factorizations",
+            divisors.len(),
+            nontrivial
+        );
+    }
+    divisors
 }
 
 /// Combine relations into an identity a^2 = b^2

@@ -33,7 +33,7 @@ use crate::{Int, Uint, DEBUG};
 
 pub fn siqs(
     n: &Uint,
-    prefs: &params::Preferences,
+    prefs: &crate::Preferences,
     tpool: Option<&rayon::ThreadPool>,
 ) -> Vec<Relation> {
     // Choose factor base. Sieve twice the number of primes

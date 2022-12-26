@@ -14,11 +14,9 @@
 
 use std::str::FromStr;
 
-use yamaquasi::arith::{Num, U1024};
-use yamaquasi::fbase;
-use yamaquasi::relations::final_step;
+use yamaquasi::arith::U1024;
 use yamaquasi::Uint;
-use yamaquasi::{mpqs, params, qsieve, qsieve64, siqs};
+use yamaquasi::{factor, pseudoprime, Algo, Preferences};
 
 fn main() {
     let arg = arguments::parse(std::env::args()).unwrap();
@@ -34,7 +32,7 @@ fn main() {
         eprintln!("  --use-double true|false:  use double large prime");
         return;
     }
-    let mode = arg.get::<String>("mode").unwrap_or("mpqs".into());
+    let mode = arg.get::<String>("mode").unwrap_or("auto".into());
     let threads = arg.get::<usize>("threads");
     let fb_user = arg.get::<u32>("fb");
     let large = arg.get::<u64>("large");
@@ -51,53 +49,20 @@ fn main() {
     }
     let n = Uint::from_str(number).unwrap();
     eprintln!("Input number {}", n);
-    if mode == "qs64" {
-        assert!(n.bits() <= 64);
-        if let Some((a, b)) = qsieve64::qsieve(n.low_u64()) {
-            println!("{}", a);
-            println!("{}", b);
-        }
-        return;
-    }
-    let (k, score) = fbase::select_multiplier(n);
-    eprintln!("Selected multiplier {} (score {:.2}/8)", k, score);
-    eprintln!("Testing small prime divisors");
-    let mut n = n;
-    for &p in fbase::SMALL_PRIMES {
-        while n % (p as u64) == 0 {
-            n /= Uint::from(p);
-            eprintln!("Found small factor");
-            println!("{}", p);
-        }
-    }
-    if n.is_one() {
-        return;
-    }
-    // Prepare factor base
-    let nk = n * Uint::from(k);
 
-    let tpool: Option<rayon::ThreadPool> = threads.map(|t| {
-        eprintln!("Using a pool of {} threads", t);
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(t)
-            .build()
-            .expect("cannot create thread pool")
-    });
-    let tpool = tpool.as_ref();
-
-    let prefs = params::Preferences {
+    let prefs = Preferences {
         fb_size: fb_user,
         large_factor: large,
         use_double: double,
+        threads,
+        verbose: true,
     };
-    let rels = match &mode[..] {
-        "qs" => qsieve::qsieve(nk, &prefs, tpool),
-        "mpqs" => mpqs::mpqs(nk, &prefs, tpool),
-        "siqs" => siqs::siqs(&nk, &prefs, tpool),
-        _ => {
-            eprintln!("Invalid operation mode {:?}", mode);
-            return;
+    let alg = Algo::from_str(&mode).unwrap();
+    let factors = factor(n, alg, &prefs);
+    for f in factors {
+        if !pseudoprime(f) {
+            eprintln!("composite factor: {} ({} bits)", f, f.bits());
         }
-    };
-    final_step(&n, &rels, true);
+        println!("{}", f);
+    }
 }

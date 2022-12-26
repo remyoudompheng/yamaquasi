@@ -4,15 +4,16 @@
 
 //! Random YMQS testing
 
+use std::str::FromStr;
 use std::time::Instant;
 
 use bnum::cast::CastFrom;
 use rand::{self, Rng};
 
-use yamaquasi::arith::{self, Num, U256};
+use yamaquasi::arith::{Num, U256};
+use yamaquasi::fbase;
 use yamaquasi::Uint;
-use yamaquasi::{fbase, params};
-use yamaquasi::{mpqs, qsieve, relations, siqs};
+use yamaquasi::{factor, pseudoprime, Algo, Preferences};
 
 fn main() {
     let arg = arguments::parse(std::env::args()).unwrap();
@@ -25,7 +26,7 @@ fn main() {
         eprintln!("  --bits B:                 input length");
         return;
     }
-    let mode = arg.get::<String>("mode").unwrap_or("siqs".into());
+    let mode = arg.get::<String>("mode").unwrap_or("auto".into());
     let bits = arg.get::<u32>("bits").unwrap_or(64);
     // Prepare a factor base for trial division
     let fbase = fbase::FBase::new(Uint::from(0u64), 1000);
@@ -43,29 +44,20 @@ fn main() {
         eprintln!("p={} q={} => n={}", p, q, p * q);
         // Factor
         let n = p * q;
-        let (k, _) = fbase::select_multiplier(n);
-        eprintln!("multiplier k={}", k);
-        let nk = n * Uint::from(k);
-        let prefs = params::Preferences {
+        let prefs = Preferences {
             fb_size: None,
             large_factor: None,
             use_double: None,
+            threads: None,
+            verbose: false,
         };
-        let rels = match &mode[..] {
-            "qs" => qsieve::qsieve(nk, &prefs, None),
-            "mpqs" => mpqs::mpqs(nk, &prefs, None),
-            "siqs" => siqs::siqs(&nk, &prefs, None),
-            _ => {
-                eprintln!("Invalid operation mode {:?}", mode);
-                return;
-            }
-        };
-        let pq = relations::final_step(&n, &rels, true);
-        if pq.is_none() {
+        let alg = Algo::from_str(&mode).unwrap();
+        let pq = factor(n, alg, &prefs);
+        if pq.len() != 2 {
             eprintln!("ERROR failed to factor {}={}*{}", n, p, q);
             std::process::exit(1);
         }
-        assert!(pq == Some((p, q)) || pq == Some((q, p)));
+        assert!(&pq == &[p, q] || &pq == &[q, p]);
         i += 1;
         let elapsed = t0.elapsed().as_secs_f64();
         eprintln!(
@@ -89,25 +81,8 @@ fn nextprime(fb: &fbase::FBase, base: U256) -> U256 {
             }
         }
         // Naive Miller test
-        let s = (p.low_u64() - 1).trailing_zeros();
-        for &b in fbase::SMALL_PRIMES {
-            let mut pow =
-                arith::pow_mod(Uint::from(b), Uint::cast_from(p) >> s, Uint::cast_from(p));
-            let p = Uint::cast_from(p);
-            let pm1 = p - Uint::from(1u64);
-            let mut ok = pow.to_u64() == Some(1) || pow == pm1;
-            for _ in 0..s {
-                pow = (pow * pow) % p;
-                if pow == pm1 {
-                    ok = true;
-                    break;
-                } else if pow.to_u64() == Some(1) {
-                    break;
-                }
-            }
-            if !ok {
-                continue 'nextcandidate;
-            }
+        if !pseudoprime(Uint::cast_from(p)) {
+            continue 'nextcandidate;
         }
         return p;
     }
