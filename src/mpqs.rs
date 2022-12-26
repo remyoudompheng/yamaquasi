@@ -45,7 +45,11 @@ pub fn mpqs(
     // See [Silverman, Section 3]
     // Look for A=D^2 such that (2A M/2)^2 ~= N/2
     // D is less than 64-bit for a 256-bit n
-    let mut polybase: Uint = isqrt(n >> 1) >> mlog;
+    let mut polybase: Uint = if n % 4 == 1 {
+        isqrt(n >> 1) >> mlog
+    } else {
+        isqrt(n << 1) >> mlog
+    };
     polybase = isqrt(polybase);
     let maxprime = fbase.bound() as u64;
     if polybase < Uint::from(maxprime) {
@@ -240,8 +244,7 @@ pub fn sieve_for_polys(fb: &FBase, n: &Uint, bmin: Uint, width: usize) -> Vec<(U
     }
     let base4 = bmin.low_u64() % 4;
     let mut result = vec![];
-'nextsieve:
-    for i in 0..width {
+    'nextsieve: for i in 0..width {
         if !composites[i] && (base4 + i as u64) % 4 == 3 {
             // No small factor, 3 mod 4
             let p = bmin + Uint::from(i);
@@ -252,14 +255,14 @@ pub fn sieve_for_polys(fb: &FBase, n: &Uint, bmin: Uint, width: usize) -> Vec<(U
                 let d = U256::cast_from(p);
                 for idx in 0..fb.len() {
                     if fb.div(idx).mod_uint(&d) == 0 {
-                        continue 'nextsieve
+                        continue 'nextsieve;
                     }
                 }
                 if r.is_zero() {
                     // FIXME: use this factor to answer.
                     eprintln!("WARNING: unexpectedly found a factor of N!");
                     println!("{}", p);
-                    continue 'nextsieve
+                    continue 'nextsieve;
                 }
                 result.push((p, r));
             }
@@ -284,7 +287,7 @@ fn make_poly(d: Uint, r: Uint, n: &Uint) -> Poly {
     //
     // otherwise:
     // A = D^2, B = sqrt(n) mod D^2, C = (4B^2 - kn) / A
-    // (Ax+2B)^2 - kn = A (Ax^2 + 2Bx + C)
+    // (Ax+2B)^2 - kn = A (Ax^2 + 4Bx + C)
     // Ax^2 + 2Bx + C = ((Ax+2B)/D)^2 mod n
     if n.low_u64() % 4 == 1 {
         // want an odd b
@@ -312,15 +315,16 @@ fn make_poly(d: Uint, r: Uint, n: &Uint) -> Poly {
 #[test]
 fn test_select_poly() {
     use crate::arith::{isqrt, sqrt_mod};
-    use crate::Int;
     use std::str::FromStr;
 
+    // n = 1 mod 4
     let n = Uint::from_str(
         "104567211693678450173299212092863908236097914668062065364632502155864426186497",
     )
     .unwrap();
     let fb = fbase::FBase::new(n, 1000);
-    let mut polybase: Uint = isqrt(n >> 1) >> 24;
+    let mlog: u32 = 24;
+    let mut polybase: Uint = isqrt(n >> 1) >> mlog;
     polybase = isqrt(polybase);
     let Poly { a, b, d } = select_polys(&fb, &n, polybase, 512)[0];
     let (a, b, d) = (Uint::cast_from(a), Uint::cast_from(b), Uint::cast_from(d));
@@ -333,23 +337,46 @@ fn test_select_poly() {
     // B^2 = N mod 4D^2
     assert_eq!(pow_mod(b, Uint::from(2u64), d * d), n % (d * d));
     println!("D={} A={} B={}", d, a, b);
-
-    let c = (n - (b * b)) / (a << 2);
+    // C = (N - B^2)/4D^2
+    let c: Uint = (n - (b * b)) / (a << 1);
+    eprintln!("n = {}", n);
+    eprintln!("P = {}*x^2+{}*x-{}", a >> 1, b, c);
 
     // Check that:
-    // Ax²+Bx+C is small
-    // 4A(Ax²+Bx+C) = (2Ax+B)^2 mod N
-    let x = Uint::from(1_234_567u64);
-    let num = ((a << 1) * x + b) % n;
-    let den = inv_mod(d << 1, n).unwrap();
-    println!("1/2D={}", den);
-    let q = (num * den) % n;
-    println!("{}", q);
-    let q2 = pow_mod(q, Uint::from(2u64), n);
-    println!("{}", q2);
-    let px = Int::from_bits(a * x * x + b * x) - Int::from_bits(c);
-    println!("Ax²+Bx+C = {}", px);
-    assert!(px.abs().bits() <= 128 + 24);
+    // Ax²+Bx+C is small and balanced
+    // min,max = ±sqrt(2N)*M
+    let target: Uint = isqrt(n >> 1) << (mlog - 1);
+    let sz = target.bits();
+    let xmax = (a << mlog) + b;
+    // ((2A M + B)^2 - n) / 4D^2
+    let pmax: Uint = ((xmax * xmax) - n) / (a << 1);
+    //assert!(pmax.bits() == target.bits());
+    eprintln!("min(P) = -{}", c);
+    eprintln!("max(P) = {}", pmax);
+    assert_eq!(c >> (sz - 12), target >> (sz - 12));
+    assert_eq!(pmax >> (sz - 12), target >> (sz - 12));
+
+    // n = 3 mod 4
+    let n = Uint::from_str("1290017141416619832024483521723784417815009599").unwrap();
+    let mlog: u32 = 16;
+    let mut polybase: Uint = isqrt(n << 1) >> mlog;
+    polybase = isqrt(polybase);
+    let Poly { a, b, d } = select_polys(&fb, &n, polybase, 512)[0];
+    let (a, b, _) = (Uint::cast_from(a), Uint::cast_from(b), Uint::cast_from(d));
+
+    let target: Uint = isqrt(n << 1) << (mlog - 1);
+    let c: Uint = (n - (b * b)) / a;
+    eprintln!("n = {}", n);
+    eprintln!("P = {}*x^2+{}*x-{}", a, b, c);
+    let xmax = (a << mlog) + b;
+    // ((2A M + B)^2 - n) / 4D^2
+    let pmax: Uint = ((xmax * xmax) - n) / a;
+    // must match target with good accuracy
+    let sz = target.bits();
+    eprintln!("min(P) = -{}", c);
+    eprintln!("max(P) = {}", pmax);
+    assert_eq!(c >> (sz - 12), target >> (sz - 12));
+    assert_eq!(pmax >> (sz - 12), target >> (sz - 12));
 
     // Sample failures in polynomial selection:
     // n=5*545739830203115604058837931639003
@@ -372,9 +399,22 @@ fn mpqs_poly(
     let mlog = mpqs_interval_logsize(&n);
     let nblocks = (2 << mlog) / BLOCK_SIZE;
     if DEBUG {
+        let pa = Int::cast_from(pol.a);
+        let pb = Int::cast_from(pol.b);
+        let (pmin, pmax) = if (pol.a % 2_u64) == 1 {
+            let pmin = (pb * pb - Int::cast_from(n)) / pa;
+            let x = (pa << mlog) + pb;
+            let pmax = (x * x - Int::cast_from(n)) / pa;
+            (pmin, pmax)
+        } else {
+            let pmin = (pb * pb - Int::cast_from(n)) / (pa << 1);
+            let x = (pa << mlog) + pb;
+            let pmax = (x * x - Int::cast_from(n)) / (pa << 1);
+            (pmin, pmax)
+        };
         eprintln!(
-            "Sieving polynomial A={} B={} M=2^{} blocks={}",
-            pol.a, pol.b, mlog, nblocks
+            "Sieving polynomial A={} B={} M=2^{} blocks={} min={} max={}",
+            pol.a, pol.b, mlog, nblocks, pmin, pmax
         );
     }
     // Precompute inverse of D^2
