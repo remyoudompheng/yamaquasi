@@ -124,14 +124,10 @@ pub struct Sieve<'a> {
     pub blk_no: usize,
     // First offset of prime actually used in sieve
     pub idxskip: usize,
-    // idx_by_log[i] is the index of first primes[idx]
-    // such that bit_length(p) == i
-    pub idx_by_log: [u32; 25],
     // Factor base
     pub fbase: &'a FBase,
     pub pfunc: &'a (dyn Fn(usize) -> SievePrime + Sync),
     // Small primes
-    pub nsmalls: usize,    // number of small primes
     pub lo: Vec<u16>,      // cursor offsets
     pub lo_prev: Vec<u16>, // clone of lo before sieving block.
     // Result of sieve.
@@ -171,8 +167,6 @@ impl<'a> Sieve<'a> {
             .position(|&p| p as usize > BLOCK_SIZE)
             .unwrap_or(fbase.len());
         let mut offs = Vec::with_capacity(2 * n_small);
-        let mut log = 0;
-        let mut idx_by_log = [0; 25];
         let maxprime = fbase.bound();
         // Need tables for logp in 16..=log(maxprime)
         let maxlog = 32 - u32::leading_zeros(maxprime as u32) as usize;
@@ -180,71 +174,66 @@ impl<'a> Sieve<'a> {
             .map(|_| SieveTable::new(nblocks))
             .collect();
 
-        let mut nsmalls = fbase.len();
-        // The prime index relative to idx_by_log
-        let mut table_pidx = 0;
-        for idx in 0..fbase.len() {
-            let SievePrime {
-                p,
-                offsets: [o1, o2],
-            } = f(idx);
-            let l = 32 - u32::leading_zeros(p) as usize;
-            if l >= log {
-                // Register new prime size
-                if log > 16 {
-                    assert!(prime_bucket(table_pidx, log - 1) < 256);
+        fbase.len();
+        for log in 0..=maxlog {
+            let idx1 = fbase.idx_by_log[log];
+            let idx2 = fbase.idx_by_log[log + 1];
+            if log < LARGE_PRIME_LOG {
+                for idx in idx1..idx2 {
+                    let SievePrime {
+                        p: _,
+                        offsets: [o1, o2],
+                    } = f(idx);
+                    // Small prime
+                    offs.push(if let Some(o1) = o1 {
+                        o1 as u16
+                    } else {
+                        OFFSET_NONE
+                    });
+                    offs.push(if let Some(o2) = o2 {
+                        o2 as u16
+                    } else {
+                        OFFSET_NONE
+                    });
+                    debug_assert!(offs.len() == 2 * idx + 2);
                 }
-                while log <= l {
-                    idx_by_log[log] = idx as u32;
-                    log += 1;
-                }
-                table_pidx = 0;
-            }
-            if l <= 15 {
-                // Small prime
-                offs.push(if let Some(o1) = o1 {
-                    o1 as u16
-                } else {
-                    OFFSET_NONE
-                });
-                offs.push(if let Some(o2) = o2 {
-                    o2 as u16
-                } else {
-                    OFFSET_NONE
-                });
-                debug_assert!(offs.len() == 2 * idx + 2);
             } else {
-                // Register number of small primes
-                if nsmalls == fbase.len() {
-                    nsmalls = idx
-                }
-                // Large prime: register them in hashmap
-                let pbucket = prime_bucket(table_pidx, l);
-                let table = &mut tables[l - LARGE_PRIME_LOG];
-                for o in [o1, o2] {
-                    let Some(o) = o else { continue };
-                    let mut off = o as usize;
-                    loop {
-                        let blk_no = off / BLOCK_SIZE;
-                        if blk_no >= nblocks {
-                            break;
+                assert!(prime_bucket((idx2 - idx1) as u32, log) < 256);
+                let table = &mut tables[log - LARGE_PRIME_LOG];
+                let pbsize = PRIME_BUCKET_SIZES[log - LARGE_PRIME_LOG];
+                let mut pbidx = 0;
+                let mut pbucket = 0;
+                for idx in idx1..idx2 {
+                    // Large prime: register them in hashmap
+                    let SievePrime {
+                        p,
+                        offsets: [o1, o2],
+                    } = f(idx);
+                    for o in [o1, o2] {
+                        let Some(o) = o else { continue };
+                        let mut off = o as usize;
+                        loop {
+                            let blk_no = off / BLOCK_SIZE;
+                            if blk_no >= nblocks {
+                                break;
+                            }
+                            let blk_off = off % BLOCK_SIZE;
+                            table.add(blk_no, blk_off, pbucket);
+                            off += p as usize;
                         }
-                        let blk_off = off % BLOCK_SIZE;
-                        table.add(blk_no, blk_off, pbucket);
-                        off += p as usize;
+                    }
+                    pbidx += 1;
+                    if pbidx == pbsize {
+                        pbidx = 0;
+                        pbucket += 1;
                     }
                 }
-                table_pidx += 1;
             }
         }
         let overflows: usize = tables.iter().map(|t| t.n_overflows).sum();
         if overflows > 0 {
             // FIXME
             //eprintln!("bucket overflows {}", overflows);
-        }
-        // Fill remainder of idx_by_log
-        for l in log..idx_by_log.len() {
-            idx_by_log[l] = fbase.len() as u32;
         }
         let idxskip = 2 * fbase
             .primes
@@ -257,10 +246,8 @@ impl<'a> Sieve<'a> {
             nblocks,
             blk_no: 0,
             idxskip,
-            idx_by_log,
             fbase,
             pfunc: f,
-            nsmalls,
             lo: offs,
             lo_prev: vec![0u16; len],
             blk: [0u8; BLOCK_SIZE],
@@ -310,9 +297,6 @@ impl<'a> Sieve<'a> {
     }
 
     pub fn sieve_block(&mut self) {
-        assert_eq!(self.nsmalls * 2, self.lo.len());
-        assert_eq!(self.nsmalls * 2, self.lo_prev.len());
-
         let len: usize = BLOCK_SIZE;
         self.blk.fill(0u8);
         let blk = &mut self.blk;
@@ -339,9 +323,9 @@ impl<'a> Sieve<'a> {
             // They are guaranteed to have >= 16 hits inside the block.
             for log in 2..=12 {
                 // Interval of primes such that bit length == log.
-                let i_start = max(self.idxskip, 2 * self.idx_by_log[log] as usize);
+                let i_start = max(self.idxskip, 2 * self.fbase.idx_by_log[log] as usize);
                 let i_end = if log < 15 {
-                    2 * self.idx_by_log[log + 1] as usize
+                    2 * self.fbase.idx_by_log[log + 1] as usize
                 } else {
                     lo.len()
                 };
@@ -387,9 +371,9 @@ impl<'a> Sieve<'a> {
             // Not so small primes, no need to process both roots at the same time.
             for log in 13..=15 {
                 // Interval of primes such that bit length == log.
-                let i_start = max(self.idxskip, 2 * self.idx_by_log[log] as usize);
+                let i_start = max(self.idxskip, 2 * self.fbase.idx_by_log[log] as usize);
                 let i_end = if log < 15 {
-                    2 * self.idx_by_log[log + 1] as usize
+                    2 * self.fbase.idx_by_log[log + 1] as usize
                 } else {
                     lo.len()
                 };
@@ -470,12 +454,9 @@ impl<'a> Sieve<'a> {
     }
 
     fn prime_bucket_bounds(&self, pbucket: usize, logp: usize) -> (usize, usize) {
-        let base = self.idx_by_log[logp] as usize;
-        let next = if logp + 1 == self.idx_by_log.len() {
-            self.fbase.len()
-        } else {
-            self.idx_by_log[logp + 1] as usize
-        };
+        let idxs = &self.fbase.idx_by_log;
+        let base = idxs[logp] as usize;
+        let next = idxs[logp + 1] as usize;
         let bsz = PRIME_BUCKET_SIZES[logp - LARGE_PRIME_LOG];
         (base + pbucket * bsz, min(next, base + (pbucket + 1) * bsz))
     }
@@ -493,7 +474,6 @@ impl<'a> Sieve<'a> {
 
     // Returns a list of block offsets and factors (as indices into the factor base).
     pub fn smooths(&self, threshold: u8) -> (Vec<u16>, Vec<Vec<usize>>) {
-        assert_eq!(self.lo_prev.len(), 2 * self.nsmalls);
         // As smallest primes have been skipped, values in self.blk
         // are smaller than they should be: subtract an upper bound for
         // the missing part from the threshold.
@@ -539,7 +519,7 @@ impl<'a> Sieve<'a> {
         let rlen = res.len();
         // Now find factors.
         let mut facs = vec![vec![]; res.len()];
-        for i in 0..self.idx_by_log[15] {
+        for i in 0..self.fbase.idx_by_log[15] {
             // Prime less than BLOCK_SIZE/2
             let i = i as usize;
             unsafe {
@@ -556,8 +536,7 @@ impl<'a> Sieve<'a> {
             }
         }
         // Prime more than BLOCK_SIZE/2
-        for i in 2 * self.idx_by_log[15]..self.lo_prev.len() as u32 {
-            let i = i as usize;
+        for i in 2 * self.fbase.idx_by_log[15]..self.lo_prev.len() {
             let pidx = i / 2;
             let off = self.lo_prev[i];
             let p = self.fbase.primes[pidx] as u16;

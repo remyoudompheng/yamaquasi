@@ -19,8 +19,8 @@ pub struct FBase {
     pub sqrts: Vec<u32>,
     pub divs: Vec<arith::Dividers>,
     // idx_by_log[i] is the index of the first prime
-    // such that bit_length == i.
-    //pub idx_by_log: [usize; 24+1],
+    // such that bit_length >= i.
+    pub idx_by_log: [usize; 24 + 1],
 }
 
 impl FBase {
@@ -29,15 +29,29 @@ impl FBase {
         let mut primes = vec![];
         let mut sqrts = vec![];
         let mut divs = vec![];
+        let mut idx_by_log = [0; 24 + 1];
+        let mut log = 0;
         for (p, r, div) in prepare_factor_base(&n, &ps) {
+            let p = p as u32;
+            let l = 32 - u32::leading_zeros(p) as usize;
+            if l >= log {
+                for idx in log..=l {
+                    idx_by_log[idx] = primes.len();
+                }
+                log = l + 1;
+            }
             primes.push(p as u32);
             sqrts.push(r as u32);
             divs.push(div);
+        }
+        for idx in log..idx_by_log.len() {
+            idx_by_log[idx] = primes.len();
         }
         FBase {
             primes,
             sqrts,
             divs,
+            idx_by_log,
         }
     }
 
