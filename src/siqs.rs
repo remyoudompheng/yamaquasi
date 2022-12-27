@@ -87,16 +87,7 @@ pub fn siqs(
     // We pack them as (u64, u32)
     //
     let start_offset: i64 = -(1 << mlog);
-    let pdata = SieveSIQS::prepare_pdata(start_offset, &fbase);
-
-    let s = SieveSIQS {
-        n,
-        fbase: &fbase,
-        rels: RwLock::new(RelationSet::new(*n, maxlarge)),
-        maxlarge,
-        use_double,
-        pdata,
-    };
+    let s = SieveSIQS::new(n, &fbase, maxlarge, use_double, start_offset);
 
     let polys_done = AtomicUsize::new(0);
     let gap = AtomicUsize::new(fbase.len());
@@ -569,21 +560,21 @@ impl Poly {
 
 /// Given coefficients A and B, compute all roots (Ax+B)^2=N
 /// modulo the factor base, computing (r - B)/A mod p
-pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, idx: usize) -> Poly {
-    let idx = idx << 1;
+pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
+    let pol_idx = pol_idx << 1;
     // Combine roots: don't reduce modulo n.
     // This allows combining the roots modulo the factor base,
     // with the issue that (Ax+B) is no longer minimal for x=0
     // but for round(-B/A) which is extremely small.
     let mut b = Uint::ZERO;
     for i in 0..a.factors.len() {
-        b += a.roots[i][(idx >> i) & 1];
+        b += a.roots[i][(pol_idx >> i) & 1];
     }
     // Also combine roots mod p
-    let first = idx % 16;
+    let first = pol_idx % 16;
     let mut bmodp = a.roots_mod_p[first].clone();
     for i in 1..(a.factors.len() + 3) / 4 {
-        let v = &a.roots_mod_p[16 * i + ((idx >> (4 * i)) % 16)];
+        let v = &a.roots_mod_p[16 * i + ((pol_idx >> (4 * i)) % 16)];
         assert_eq!(v.len() % 8, 0);
         // first += v
         let mut idx = 0;
@@ -601,33 +592,51 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, idx: usize) -> Poly {
     }
     // Compute final polynomial roots
     // (±r - B)/A = (-B/A) ± (r/p) solutions of (Ax+B)^2 = N
-    let mut r1p = a.rp.clone().into_boxed_slice();
+    let mut r1p = bmodp;
     let mut r2p = a.rp.clone().into_boxed_slice();
     let mut idx = 0;
-    while idx < bmodp.len() {
+    let primes = &s.fbase.primes[..];
+    let offsets = &s.offset_modp[..];
+    assert_eq!(r1p.len(), r2p.len());
+    assert!(r1p.len() >= primes.len());
+    assert_eq!(primes.len() % 8, 0);
+    while idx < primes.len() {
         unsafe {
             // (possibly) unaligned pointers
-            let b8 = (bmodp.get_unchecked(idx) as *const u32) as *const [i32; 8];
-            let r18 = (r1p.get_unchecked_mut(idx) as *mut u32) as *mut [i32; 8];
-            let r28 = (r2p.get_unchecked_mut(idx) as *mut u32) as *mut [i32; 8];
-            let mut b8w = wide::i32x8::new(*b8);
-            let mut r18w = wide::i32x8::new(*r18);
-            let mut r28w = wide::i32x8::new(*r28);
-            b8w = -b8w;
-            r18w = b8w + r18w;
-            r28w = b8w - r28w;
-            // shift and reduce mod p
-            let mut r18a = r18w.to_array();
-            let mut r28a = r28w.to_array();
-            for i in 0..8 {
-                if idx + i < s.pdata.len() {
-                    let (off, div31) = SieveSIQS::unpack_pdata(s.pdata[idx + i]);
-                    r18a[i] = div31.modi32(r18a[i] - off as i32) as i32;
-                    r28a[i] = div31.modi32(r28a[i] - off as i32) as i32;
-                }
+            let r18 = (r1p.get_unchecked_mut(idx) as *mut u32) as *mut [u32; 8];
+            let r28 = (r2p.get_unchecked_mut(idx) as *mut u32) as *mut [u32; 8];
+            // FIXME: this is out of bound if len(primes)%16 != 0
+            let ps = (primes.get_unchecked(idx) as *const u32) as *const [u32; 8];
+            let offs = (offsets.get_unchecked(idx) as *const u32) as *const [u32; 8];
+            let b8w = wide::u32x8::new(*r18);
+            let r8w = wide::u32x8::new(*r28);
+            let p8 = wide::u32x8::new(*ps);
+            let off8 = wide::u32x8::new(*offs);
+
+            // We need to compute -bmodp ± a.rp - offset_modp modulo p
+            // To properly benefit from SIMD vectorization we need to avoid
+            // multiplication and division.
+            // We use the fact that individual terms are already reduced modulo p
+            // so that the reduction can be written as conditional subtractions by p.
+
+            // Compute 5p
+            let p8_x5 = (p8 << 2) + p8;
+            // Compute the "smaller" term r2 = 5*p -bmodp -a.rp - offset
+            // and reduce r2 mod p. It is between 0 and 5p.
+            let mut r28w: wide::u32x8 = p8_x5 - b8w - r8w - off8;
+            debug_assert!(r28w >> 24 == wide::u32x8::ZERO);
+            // Repeatedly mask and subtract p to reduce mod p.
+            for _ in 0..5 {
+                r28w -= p8 & !(r28w.cmp_lt(p8));
             }
-            *r18 = r18a;
-            *r28 = r28a;
+            debug_assert!(r28w >> 24 == wide::u32x8::ZERO);
+            *r28 = r28w.to_array();
+            // Now add 2*rp, the result is < 3p
+            // subtract at most 2 times p.
+            let mut r18w: wide::u32x8 = r28w + (r8w << 1);
+            r18w -= p8 & !(r18w.cmp_lt(p8));
+            r18w -= p8 & !(r18w.cmp_lt(p8));
+            *r18 = r18w.to_array();
         }
         idx += 8;
     }
@@ -650,8 +659,8 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, idx: usize) -> Poly {
             cp = p as u64 - cp;
         }
         let r = div.divmod64(cp * div.inv(2 * bp).unwrap()).1 as u32;
-        let (off, div31) = SieveSIQS::unpack_pdata(s.pdata[pidx]);
-        let r = div31.modu31(r + p as u32 - off as u32);
+        let off = s.offset_modp[pidx];
+        let r = div.div31.modu31(r + p as u32 - off);
         r1p[pidx] = r;
         r2p[pidx] = r;
     }
@@ -703,40 +712,31 @@ pub struct SieveSIQS<'a> {
     pub maxlarge: u64,
     pub use_double: bool,
     pub rels: RwLock<RelationSet>,
-    pub pdata: Vec<(u64, u32)>,
+    pub offset_modp: Box<[u32]>,
 }
 
 impl<'a> SieveSIQS<'a> {
-    pub fn prepare_pdata(start_offset: i64, fb: &FBase) -> Vec<(u64, u32)> {
-        let mut pdata = vec![];
+    pub fn new(
+        n: &'a Uint,
+        fb: &'a FBase,
+        maxlarge: u64,
+        use_double: bool,
+        start_offset: i64,
+    ) -> Self {
+        let mut offsets = vec![0u32; (fb.len() + 15) & !15].into_boxed_slice();
+        assert_eq!(offsets.len() % 16, 0);
         for idx in 0..fb.len() {
-            let p = fb.prime(idx);
-            let off = p.div.modi64(start_offset) as u64;
-            let arith::Divider31 { p, m31, s31 } = p.div.div31;
-            pdata.push(SieveSIQS::pack_pdata(off, p, s31, m31));
+            let off = fb.div(idx).modi64(start_offset) as u32;
+            offsets[idx] = off;
         }
-        pdata
-    }
-
-    #[inline]
-    fn pack_pdata(off: u64, p: u32, s31: u32, m31: u32) -> (u64, u32) {
-        (off << 32 | (p as u64) << 8 | s31 as u64, m31)
-    }
-
-    #[inline]
-    fn unpack_pdata(t: (u64, u32)) -> (u64, arith::Divider31) {
-        let (x, m31) = t;
-        let off = x >> 32;
-        let p = (x as u32) >> 8;
-        let s31 = x as u8;
-        (
-            off,
-            arith::Divider31 {
-                p,
-                m31,
-                s31: s31 as u32,
-            },
-        )
+        SieveSIQS {
+            n,
+            fbase: fb,
+            rels: RwLock::new(RelationSet::new(*n, maxlarge)),
+            maxlarge,
+            use_double,
+            offset_modp: offsets,
+        }
     }
 }
 
@@ -915,15 +915,7 @@ fn test_poly_prepare() {
     const N240: &str = "1563849171863495214507949103370077342033765608728382665100245282240408041";
     let n = Uint::from_str(N240).unwrap();
     let fb = fbase::FBase::new(n, 10000);
-    let pdata = SieveSIQS::prepare_pdata(0, &fb);
-    let s = SieveSIQS {
-        n: &n,
-        fbase: &fb,
-        rels: RwLock::new(RelationSet::new(n, fb.bound() as u64)),
-        maxlarge: fb.bound() as u64,
-        use_double: false,
-        pdata,
-    };
+    let s = SieveSIQS::new(&n, &fb, fb.bound() as u64, false, 0);
     // Prepare A values
     // Only test 10 A values and 35 polynomials per A.
     let f = select_siqs_factors(&fb, &n, 9);

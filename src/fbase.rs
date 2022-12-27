@@ -31,7 +31,11 @@ impl FBase {
         let mut divs = vec![];
         let mut idx_by_log = [0; 24 + 1];
         let mut log = 0;
-        for (p, r, div) in prepare_factor_base(&n, &ps) {
+        let mut prepared = prepare_factor_base(&n, &ps);
+        // Align to a multiple of 8.
+        // This is required for SIMD code.
+        prepared.truncate(8 * (prepared.len() / 8));
+        for (p, r, div) in prepared {
             let p = p as u32;
             let l = 32 - u32::leading_zeros(p) as usize;
             if l >= log {
@@ -44,6 +48,7 @@ impl FBase {
             sqrts.push(r as u32);
             divs.push(div);
         }
+        assert!(primes.len() % 8 == 0);
         for idx in log..idx_by_log.len() {
             idx_by_log[idx] = primes.len();
         }
