@@ -47,12 +47,8 @@ pub fn siqs(
     eprintln!("Smoothness bound {}", fbase.bound());
     eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls(),);
 
-    let mlog = interval_logsize(n);
-    if mlog >= 20 {
-        eprintln!("Sieving interval size {}M", 2 << (mlog - 20));
-    } else {
-        eprintln!("Sieving interval size {}k", 2 << (mlog - 10));
-    }
+    let mm = interval_size(n);
+    eprintln!("Sieving interval size {}k", mm >> 10);
 
     // Generate all values of A now.
     let nfacs = nfactors(n) as usize;
@@ -86,7 +82,7 @@ pub fn siqs(
     // * multiplier and shift for Divider31 (32 + 8 bits)
     // We pack them as (u64, u32)
     //
-    let start_offset: i64 = -(1 << mlog);
+    let start_offset: i64 = -(mm as i64) / 2;
     let s = SieveSIQS::new(n, &fbase, maxlarge, use_double, start_offset);
 
     let polys_done = AtomicUsize::new(0);
@@ -164,7 +160,7 @@ pub fn siqs(
         let rels = s.rels.read().unwrap();
         rels.log_progress(format!(
             "Sieved {}M {} polys",
-            ((pdone) << (mlog + 1 - 10)) >> 10,
+            (pdone as u64 * mm as u64) >> 20,
             pdone,
         ));
         if gap.load(Ordering::Relaxed) == 0 {
@@ -236,18 +232,27 @@ fn a_tolerance_divisor(n: &Uint) -> usize {
     }
 }
 
-fn interval_logsize(n: &Uint) -> u32 {
+fn interval_size(n: &Uint) -> u32 {
     // Choose very small intervals since the cost of switching
     // polynomials is very small (less than 1ms).
     // Large intervals also hurt memory locality during sieve.
+    // We want an integral amount of 32k blocks:
+    // 1 block under 100 bits
+    // 4 blocks for 120-180 bits
+    // ~10 blocks for 240 bits
+    // ~32 blocks for 300 bits
     let sz = n.bits();
-    match sz {
-        0..=119 => 15,
-        // 270 bits => we want mlog=18
-        // 300 bits => we want mlog=19
-        120..=330 => 14 + sz / 60, // 16..19
-        _ => 20,
-    }
+    let nblocks = match sz {
+        0..=100 => 1,
+        101..=130 => 2,
+        131..=160 => 3,
+        161..=190 => 5,
+        191..=260 => (sz - 140) / 10,    // 5..12
+        261..=300 => (sz - 200) / 5,     // 12..20
+        301..=350 => (2 * sz - 500) / 5, // 20..40
+        _ => 40,
+    };
+    nblocks * sieve::BLOCK_SIZE as u32
 }
 
 fn large_prime_factor(n: &Uint) -> u64 {
@@ -290,10 +295,13 @@ pub struct Factors<'a> {
 // twice the number of expected factors in A, because the number of
 // combinations is large enough to generate values close to the target.
 pub fn select_siqs_factors<'a>(fb: &'a FBase, n: &'a Uint, nfacs: usize) -> Factors<'a> {
-    let mlog = interval_logsize(n);
+    let mm = interval_size(n);
     // For interval [-M,M] the target is sqrt(2N) / M, see [Pomerance].
     // Don't go below 2000 for extremely small numbers.
-    let target = max(Uint::from(2000u64), arith::isqrt(n << 1) >> mlog);
+    let target = max(
+        Uint::from(2000u64),
+        arith::isqrt(n << 1) / Uint::from(mm as u64 / 2),
+    );
     let idx = fb
         .primes
         .partition_point(|&p| Uint::from(p as u64).pow(nfacs as u32) < target);
@@ -680,18 +688,21 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
 // Sieving process
 
 fn siqs_sieve_poly(s: &SieveSIQS, n: &Uint, a: &A, pol: &Poly) {
-    let mlog = interval_logsize(n);
-    let nblocks: usize = (2 << mlog) / BLOCK_SIZE;
+    let mm = interval_size(n) as usize;
+    let nblocks: usize = mm / BLOCK_SIZE;
     if DEBUG {
         eprintln!(
-            "Sieving polynomial A={} B={} M=2^{} blocks={}",
-            pol.a, pol.b, mlog, nblocks
+            "Sieving polynomial A={} B={} M={}k blocks={}",
+            pol.a,
+            pol.b,
+            mm / 2048,
+            nblocks
         );
     }
 
     // Construct initial state.
-    let start_offset: i64 = -(1 << mlog);
-    let end_offset: i64 = 1 << mlog;
+    let start_offset: i64 = -(mm as i64) / 2;
+    let end_offset: i64 = (mm as i64) / 2;
     let pfunc = move |pidx| {
         let p = s.fbase.p(pidx);
         pol.prepare_prime(pidx, p)
@@ -759,8 +770,8 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
     } else {
         maxlarge
     };
-
-    let target = s.n.bits() / 2 + interval_logsize(s.n) - max_cofactor.bits();
+    let interval_m = interval_size(s.n) as u64 / 2;
+    let target = s.n.bits() / 2 + (interval_m).bits() - max_cofactor.bits();
     let n = s.n;
     let (idx, facss) = st.smooths(target as u8);
     for (i, facs) in idx.into_iter().zip(facss) {
