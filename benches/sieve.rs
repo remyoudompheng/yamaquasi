@@ -84,19 +84,27 @@ brunch::benches! {
     {
         // Fully prepare one polynomial for a given A.
         // It is 6 times faster than MPQS preparation.
+        use std::sync::RwLock;
+        use yamaquasi::relations:: RelationSet;
+
         let n = Uint::from_str(PQ256).unwrap();
         let fb = fbase::FBase::new(n, 5000);
         let f = siqs::select_siqs_factors(&fb, &n, 9);
         let a_ints = siqs::select_a(&f, 40);
         let a_s: Vec<_> = a_ints.iter().map(|a_int| siqs::prepare_a(&f, a_int, &fb)).collect();
+        let pdata = siqs::SieveSIQS::prepare_pdata(0, &fb);
+        let s = siqs::SieveSIQS {
+            n: &n,
+            fbase: &fb,
+            rels: RwLock::new(RelationSet::new(n, fb.bound() as u64)),
+            maxlarge: fb.bound() as u64,
+            use_double: false,
+            pdata,
+        };
         Bench::new("prepare 1 SIQS polynomial (n = 256 bits)")
         .with_samples(20_000)
-        .run_seeded((&n, &fb, a_s.first().unwrap()), |(n, fb, a)| {
-            let pol = siqs::make_polynomial(n, a, 123);
-            (0..fb.len()).map(|pidx| {
-                let pdiv = fb.div(pidx);
-                pol.prepare_prime(pidx, &fb, &pdiv.div31, 12345, a)
-            }).last()
+        .run_seeded((&n, &s, a_s.first().unwrap()), |(n, s, a)| {
+            siqs::make_polynomial(s, n, a, 123);
         })
     },
     // Block sieve

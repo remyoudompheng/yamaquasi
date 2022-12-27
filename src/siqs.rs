@@ -87,13 +87,7 @@ pub fn siqs(
     // We pack them as (u64, u32)
     //
     let start_offset: i64 = -(1 << mlog);
-    let mut pdata = vec![];
-    for idx in 0..fbase.len() {
-        let p = fbase.prime(idx);
-        let off = p.div.modi64(start_offset) as u64;
-        let arith::Divider31 { p, m31, s31 } = p.div.div31;
-        pdata.push(SieveSIQS::pack_pdata(off, p, s31, m31));
-    }
+    let pdata = SieveSIQS::prepare_pdata(start_offset, &fbase);
 
     let s = SieveSIQS {
         n,
@@ -704,15 +698,26 @@ fn siqs_sieve_poly(s: &SieveSIQS, n: &Uint, a: &A, pol: &Poly) {
 }
 
 pub struct SieveSIQS<'a> {
-    n: &'a Uint,
-    fbase: &'a FBase,
-    maxlarge: u64,
-    use_double: bool,
-    rels: RwLock<RelationSet>,
-    pdata: Vec<(u64, u32)>,
+    pub n: &'a Uint,
+    pub fbase: &'a FBase,
+    pub maxlarge: u64,
+    pub use_double: bool,
+    pub rels: RwLock<RelationSet>,
+    pub pdata: Vec<(u64, u32)>,
 }
 
 impl<'a> SieveSIQS<'a> {
+    pub fn prepare_pdata(start_offset: i64, fb: &FBase) -> Vec<(u64, u32)> {
+        let mut pdata = vec![];
+        for idx in 0..fb.len() {
+            let p = fb.prime(idx);
+            let off = p.div.modi64(start_offset) as u64;
+            let arith::Divider31 { p, m31, s31 } = p.div.div31;
+            pdata.push(SieveSIQS::pack_pdata(off, p, s31, m31));
+        }
+        pdata
+    }
+
     #[inline]
     fn pack_pdata(off: u64, p: u32, s31: u32, m31: u32) -> (u64, u32) {
         (off << 32 | (p as u64) << 8 | s31 as u64, m31)
@@ -856,7 +861,7 @@ fn test_poly_a() {
         let fb = fbase::FBase::new(*n, fb_size);
 
         let facs = select_siqs_factors(&fb, n, nfacs as usize);
-        let target = facs.target;
+        let target = Uint::cast_from(facs.target);
 
         let a_vals = select_a(&facs, want);
         let _10000 = Uint::from(10000u64);
@@ -910,6 +915,15 @@ fn test_poly_prepare() {
     const N240: &str = "1563849171863495214507949103370077342033765608728382665100245282240408041";
     let n = Uint::from_str(N240).unwrap();
     let fb = fbase::FBase::new(n, 10000);
+    let pdata = SieveSIQS::prepare_pdata(0, &fb);
+    let s = SieveSIQS {
+        n: &n,
+        fbase: &fb,
+        rels: RwLock::new(RelationSet::new(n, fb.bound() as u64)),
+        maxlarge: fb.bound() as u64,
+        use_double: false,
+        pdata,
+    };
     // Prepare A values
     // Only test 10 A values and 35 polynomials per A.
     let f = select_siqs_factors(&fb, &n, 9);
@@ -933,7 +947,7 @@ fn test_poly_prepare() {
         for idx in 0..35 {
             let idx = 7 * idx;
             // Generate and check each polynomial.
-            let pol = make_polynomial(&n, &a, idx);
+            let pol = make_polynomial(&s, &n, &a, idx);
             let (pa, pb, pc) = (pol.a, pol.b, pol.c);
             // B is a square root of N modulo A.
             assert_eq!((pb * pb) % pa, n % pa);
@@ -947,11 +961,7 @@ fn test_poly_prepare() {
             }
             for pidx in 0..fb.len() {
                 // Roots are roots of Ax^2+2Bx+C modulo p.
-                for r in pol
-                    .prepare_prime(pidx, &fb, &fb.div(pidx).div31, 0, &a)
-                    .offsets
-                {
-                    let Some(r) = r else { continue };
+                for r in [pol.r1p[pidx], pol.r2p[pidx]] {
                     let r = r as u64;
                     let v = pa * Uint::from(r * r) + pb * Uint::from(2 * r);
                     let v = Int::from_bits(v) + pc;
