@@ -21,7 +21,6 @@ pub type Int = arith::I1024;
 pub type Uint = arith::U1024;
 
 // Top-level functions
-use std::collections::BTreeSet;
 use std::str::FromStr;
 
 use arith::Num;
@@ -39,7 +38,7 @@ pub struct Preferences {
     pub verbose: bool,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub enum Algo {
     Auto,
     Squfof,
@@ -67,6 +66,9 @@ impl FromStr for Algo {
 
 /// Factorizes an integer into a product of factors.
 pub fn factor(n: Uint, alg: Algo, prefs: &Preferences) -> Vec<Uint> {
+    if n.is_zero() {
+        return vec![n];
+    }
     let mut factors = vec![];
     if prefs.verbose {
         eprintln!("Testing small prime divisors");
@@ -82,19 +84,9 @@ pub fn factor(n: Uint, alg: Algo, prefs: &Preferences) -> Vec<Uint> {
             }
         }
     }
-    if nred.is_one() {
-        // do nothing
-    } else if pseudoprime(nred) {
-        factors.push(nred);
-    } else {
-        factor_qs(nred, alg, prefs, &mut factors);
+    if nred != n && prefs.verbose {
+        eprintln!("Factoring {}", nred);
     }
-    check_factors(&n, &factors);
-    factors.sort();
-    factors
-}
-
-fn factor_qs(n: Uint, alg: Algo, prefs: &Preferences, factors: &mut Vec<Uint>) {
     // Create thread pool
     let tpool: Option<rayon::ThreadPool> = prefs.threads.map(|t| {
         if prefs.verbose {
@@ -106,8 +98,37 @@ fn factor_qs(n: Uint, alg: Algo, prefs: &Preferences, factors: &mut Vec<Uint>) {
             .expect("cannot create thread pool")
     });
     let tpool = tpool.as_ref();
+    factor_impl(nred, alg, prefs, &mut factors, tpool);
+
+    check_factors(&n, &factors);
+    factors.sort();
+    factors
+}
+
+fn factor_impl(
+    n: Uint,
+    alg: Algo,
+    prefs: &Preferences,
+    factors: &mut Vec<Uint>,
+    tpool: Option<&rayon::ThreadPool>,
+) {
+    // Since quadratic sieve methods work by finding non-trivial random
+    // elements of multiplicative order 2 modulo n they will fail to resolve
+    // prime power factors of n (because Z/p^k Z is cyclic).
+    // So prime powers need to be explicitly tested.
+    if n.is_one() {
+        return;
+    } else if let Some((p, k)) = arith::perfect_power(n) {
+        for _ in 0..k {
+            factors.push(p)
+        }
+        return;
+    } else if pseudoprime(n) {
+        factors.push(n);
+        return;
+    }
     // Select algorithm
-    let alg = if let Algo::Auto = alg {
+    let alg_real = if let Algo::Auto = alg {
         if n.bits() <= 60 {
             Algo::Squfof
         } else {
@@ -116,12 +137,13 @@ fn factor_qs(n: Uint, alg: Algo, prefs: &Preferences, factors: &mut Vec<Uint>) {
     } else {
         alg
     };
-    match alg {
+    match alg_real {
         Algo::Qs64 => {
             assert!(n.bits() <= 64);
             if let Some((a, b)) = qsieve64::qsieve(n.low_u64()) {
-                factors.push(a.into());
-                factors.push(b.into());
+                // Recurse
+                factor_impl(a.into(), alg, prefs, factors, tpool);
+                factor_impl(b.into(), alg, prefs, factors, tpool);
             } else {
                 eprintln!("qsieve64 failed");
                 factors.push(n);
@@ -131,8 +153,8 @@ fn factor_qs(n: Uint, alg: Algo, prefs: &Preferences, factors: &mut Vec<Uint>) {
         Algo::Squfof => {
             assert!(n.bits() <= 64);
             if let Some((a, b)) = squfof::squfof(n.low_u64()) {
-                factors.push(a.into());
-                factors.push(b.into());
+                factor_impl(a.into(), alg, prefs, factors, tpool);
+                factor_impl(b.into(), alg, prefs, factors, tpool);
             } else {
                 eprintln!("SQUFOF failed");
                 factors.push(n);
@@ -149,7 +171,7 @@ fn factor_qs(n: Uint, alg: Algo, prefs: &Preferences, factors: &mut Vec<Uint>) {
     let nk = n * Uint::from(k);
     // TODO: handle the case where n is not coprime to the factor base
     // TODO: handle the case of prime powers
-    let rels = match alg {
+    let rels = match alg_real {
         Algo::Auto => unreachable!("impossible"),
         Algo::Qs64 => unreachable!("impossible"),
         Algo::Squfof => unreachable!("impossible"),
@@ -160,8 +182,7 @@ fn factor_qs(n: Uint, alg: Algo, prefs: &Preferences, factors: &mut Vec<Uint>) {
     // Determine non trivial divisors.
     let divs = relations::final_step(&n, &rels, true);
     // A factorization of n.
-    let mut facs = BTreeSet::<Uint>::new();
-    facs.insert(n);
+    let mut facs = vec![n];
     for d in divs {
         // is it combined with existing divisors?
         let mut residue = d;
@@ -176,14 +197,30 @@ fn factor_qs(n: Uint, alg: Algo, prefs: &Preferences, factors: &mut Vec<Uint>) {
             !split
         });
         assert_eq!(residue.to_u64(), Some(1));
+        let mut residue = d;
         for f in splits {
-            let gcd: Uint = Integer::gcd(&f, &d);
-            facs.insert(f / gcd);
-            facs.insert(gcd);
+            let gcd: Uint = Integer::gcd(&f, &residue);
+            if gcd != f && !gcd.is_one() {
+                facs.push(f / gcd);
+                facs.push(gcd);
+            } else {
+                // Can this happen?
+                facs.push(f);
+            }
+            residue /= gcd;
         }
     }
     for f in facs {
-        factors.push(f);
+        if let Some((p, k)) = arith::perfect_power(f) {
+            for _ in 0..k {
+                factors.push(p)
+            }
+        } else if !pseudoprime(f) {
+            eprintln!("Recursively factor {}", f);
+            factor_impl(f, alg, prefs, factors, tpool);
+        } else {
+            factors.push(f);
+        }
     }
 }
 
@@ -239,14 +276,14 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     // FAIL: 2 small factors (443 * 1151 * 172633679917074861804179395686166722361211)
     //let n = Uint::from_str("88024704953957052509918444604606608564924960423")?;
     //factor(n, Algo::Auto, &Preferences::default());
-    // FAIL: perfect square (17819845476047^2)
-    //eprintln!("=> test square");
-    //let n = Uint::from_str("317546892790192732050746209")?;
-    //factor(n, Algo::Auto, &Preferences::default());
-    // FAIL: perfect cube
-    //eprintln!("=> test cube");
-    //let n = Uint::from_str("350521251909490182639506149")?;
-    //factor(n, Algo::Auto, &Preferences::default());
+    // perfect square (17819845476047^2)
+    eprintln!("=> test square");
+    let n = Uint::from_str("317546892790192732050746209")?;
+    factor(n, Algo::Auto, &Preferences::default());
+    // perfect cube
+    eprintln!("=> test cube");
+    let n = Uint::from_str("350521251909490182639506149")?;
+    factor(n, Algo::Auto, &Preferences::default());
     // not squarefree (839322217^2 * 705079549)
     eprintln!("=> test not squarefree");
     let n = Uint::from_str("496701596915056959994534861")?;

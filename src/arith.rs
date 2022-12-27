@@ -3,9 +3,8 @@
 // license that can be found in the LICENSE file.
 
 pub use num_integer::sqrt as isqrt;
-use num_integer::Integer;
-use num_traits::cast::ToPrimitive;
-use num_traits::identities::One;
+use num_integer::{Integer, Roots};
+use num_traits::{One, Pow, ToPrimitive};
 use std::ops::{Shl, Shr};
 use std::str::FromStr;
 
@@ -405,6 +404,23 @@ impl Dividers {
             }
         }
     }
+}
+
+// Tests whether n can be written as p^k for k <= 20.
+// This is enough to filter square factors before quadratic sieve,
+// because trial division by the factor base will already catch
+// the case where k > 20 (p < 2^20 if n has 400 bits).
+pub fn perfect_power<N>(n: N) -> Option<(N, u32)>
+where
+    N: Copy + Roots + Pow<u32, Output = N>,
+{
+    for k in [2, 3, 5, 7, 11, 13, 17, 19_u32] {
+        let r = n.nth_root(k);
+        if r.pow(k) == n {
+            return Some((r, k));
+        }
+    }
+    None
 }
 
 // A divider for 31-bit integers.
