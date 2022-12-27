@@ -27,7 +27,7 @@ esac
 for bits in 40 60 80 100 120 140 160 180 200 220 240 260; do
     # Prepare random inputs
     for i in {0..50}; do
-        python semiprimes.py $bits
+        python scripts/semiprimes.py $bits
     done 1> testinputs$bits.txt 2>/dev/null
     args=${args%,}
     echo "=== INPUT $bits bits ==="
