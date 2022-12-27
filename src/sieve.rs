@@ -336,8 +336,56 @@ impl<'a> Sieve<'a> {
                 lo[i] = off as u16;
             }
             // Small primes: perform ordinary sieving.
-            // They are guaranteed to have offsets inside the block.
-            for log in 2..=15 {
+            // They are guaranteed to have >= 16 hits inside the block.
+            for log in 2..=12 {
+                // Interval of primes such that bit length == log.
+                let i_start = max(self.idxskip, 2 * self.idx_by_log[log] as usize);
+                let i_end = if log < 15 {
+                    2 * self.idx_by_log[log + 1] as usize
+                } else {
+                    lo.len()
+                };
+                let log = log as u8;
+                for i in i_start / 2..i_end / 2 {
+                    let p = *primes.get_unchecked(i);
+                    let mut off1: usize = *lo_prev.get_unchecked(2 * i) as usize;
+                    let mut off2: usize = *lo_prev.get_unchecked(2 * i + 1) as usize;
+                    if off1 != OFFSET_NONE as usize && off2 != OFFSET_NONE as usize {
+                        // Almost always true
+                        let m = max(off1, off2);
+                        let p = p as usize;
+                        let mut kp = 0 as usize;
+                        let ll = len - p - m;
+                        while kp < ll {
+                            // both kp+off1 and kp+off2 are in range
+                            *blk.get_unchecked_mut(kp + off1) += log;
+                            *blk.get_unchecked_mut(kp + off2) += log;
+                            *blk.get_unchecked_mut(kp + p + off1) += log;
+                            *blk.get_unchecked_mut(kp + p + off2) += log;
+                            kp += 2 * p as usize;
+                        }
+                        off1 += kp;
+                        off2 += kp
+                    }
+                    // Update state.
+                    if off1 != OFFSET_NONE as usize {
+                        while off1 < len {
+                            *blk.get_unchecked_mut(off1) += log;
+                            off1 += p as usize;
+                        }
+                        *lo.get_unchecked_mut(2 * i) = (off1 % BLOCK_SIZE) as u16;
+                    }
+                    if off2 != OFFSET_NONE as usize {
+                        while off2 < len {
+                            *blk.get_unchecked_mut(off2) += log;
+                            off2 += p as usize;
+                        }
+                        *lo.get_unchecked_mut(2 * i + 1) = (off2 % BLOCK_SIZE) as u16;
+                    }
+                }
+            }
+            // Not so small primes, no need to process both roots at the same time.
+            for log in 13..=15 {
                 // Interval of primes such that bit length == log.
                 let i_start = max(self.idxskip, 2 * self.idx_by_log[log] as usize);
                 let i_end = if log < 15 {
@@ -353,24 +401,10 @@ impl<'a> Sieve<'a> {
                         continue;
                     }
                     let log = log as u8;
-                    if p < 1024 {
-                        let ll = len - 4 * p as usize;
-                        while off < ll {
-                            *blk.get_unchecked_mut(off) += log;
-                            off += p as usize;
-                            *blk.get_unchecked_mut(off) += log;
-                            off += p as usize;
-                            *blk.get_unchecked_mut(off) += log;
-                            off += p as usize;
-                            *blk.get_unchecked_mut(off) += log;
-                            off += p as usize;
-                        }
-                    }
                     while off < len {
                         *blk.get_unchecked_mut(off) += log;
                         off += p as usize;
                     }
-                    // Update state.
                     *lo.get_unchecked_mut(i) = (off % BLOCK_SIZE) as u16;
                 }
             }
@@ -480,14 +514,13 @@ impl<'a> Sieve<'a> {
                         let mut t = (*blk16)[j];
                         let ij = (i + j) as u16;
                         // Now add missing log(p) for smallest primes.
-                        for i in 0..self.idxskip {
-                            let off = self.lo_prev[i];
-                            if off == OFFSET_NONE {
-                                continue;
-                            }
-                            let pp = self.fbase.p(i / 2);
-                            let pdiv = self.fbase.div(i / 2);
-                            if pdiv.modu16(ij) == off {
+                        for i in 0..self.idxskip / 2 {
+                            let pp = *self.fbase.primes.get_unchecked(i);
+                            let pdiv = self.fbase.divs.get_unchecked(i);
+                            let off1 = *self.lo_prev.get_unchecked(2 * i);
+                            let off2 = *self.lo_prev.get_unchecked(2 * i + 1);
+                            let imod = pdiv.modu16(ij);
+                            if imod == off1 || imod == off2 {
                                 let log = 32 - u32::leading_zeros(pp) as u8;
                                 t += log;
                             }
@@ -506,19 +539,19 @@ impl<'a> Sieve<'a> {
         let rlen = res.len();
         // Now find factors.
         let mut facs = vec![vec![]; res.len()];
-        for i in 0..2 * self.idx_by_log[15] {
+        for i in 0..self.idx_by_log[15] {
             // Prime less than BLOCK_SIZE/2
             let i = i as usize;
-            let pidx = i / 2;
-            let off = self.lo_prev[i];
-            if off == OFFSET_NONE {
-                continue;
-            }
-            let pdiv = &self.fbase.divs[pidx];
-            for idx in 0..rlen {
-                let r = res[idx];
-                if pdiv.modu16(r) == off {
-                    facs[idx].push(pidx)
+            unsafe {
+                let pdiv = self.fbase.divs.get_unchecked(i);
+                let off1 = self.lo_prev[2 * i];
+                let off2 = self.lo_prev[2 * i + 1];
+                // OFFSET_NONE will never match.
+                for idx in 0..rlen {
+                    let rmod = pdiv.modu16(res[idx]);
+                    if rmod == off1 || rmod == off2 {
+                        facs[idx].push(i)
+                    }
                 }
             }
         }
