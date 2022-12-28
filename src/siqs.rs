@@ -122,7 +122,7 @@ pub fn siqs(
     let poly_idxs: Vec<usize> = (0..polys_per_a).collect();
 
     for a_int in a_ints.iter() {
-        let a = &prepare_a(&factors, a_int, &fbase);
+        let a = &prepare_a(&factors, a_int, &fbase, start_offset);
         eprintln!(
             "Sieving A={} (factors {})",
             a.a,
@@ -355,10 +355,15 @@ pub struct A<'a> {
     // bj^2 = n mod pj, 0 mod pi (i != j)
     roots: Vec<[Uint; 2]>,
     // To prepare polynomial roots faster, precompute sets of roots mod p
-    // in a "radix-16" way.
-    // roots_mod_p[16i+j] is the combination of roots[4i+j1][j2] mod p
+    // in a "radix-16" way. We need (-B±r)/A - offset
+    //
+    // roots_mod_p[16i+j] is the combination of minus roots[4i+j1][j2] mod p
     // where (j1,j2) goes through the bit mask (j << (4*i)).
     // The roots are pre-multiplied by ainv to make preparation easier.
+    //
+    // If i==0 we also add -rp - start_offset % p
+    // to avoid doing it repeatedly.
+    //
     // Since the number of factors is at most 12, at most 3 vectors
     // out of 48 will be added to compute the final result for a given polynomial.
     roots_mod_p: Box<[Box<[u32]>]>,
@@ -450,7 +455,7 @@ pub fn select_a(f: &Factors, want: usize) -> Vec<Uint> {
     candidates
 }
 
-pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase) -> A<'a> {
+pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase, start_offset: i64) -> A<'a> {
     let afactors: Vec<(usize, &Prime)> = f
         .factors
         .iter()
@@ -480,6 +485,14 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase) -> A<'a> {
             factors_idx.push(pidx);
         }
         ainv.push(div.inv(amod).unwrap_or(1) as u32);
+    }
+    // Compute sqrt(n)/A mod p
+    let mut rp = vec![0u32; (fbase.len() + 15) & !15];
+    assert!(rp.len() % 16 == 0);
+    for pidx in 0..fbase.len() {
+        let r = fbase.r(pidx);
+        let pdiv = fbase.div(pidx);
+        rp[pidx] = pdiv.divmod64(ainv[pidx] as u64 * r as u64).1 as u32;
     }
     // Compute basic roots
     let mut roots = vec![];
@@ -514,18 +527,16 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase) -> A<'a> {
         let v = &mut roots_mod_p[idx];
         assert!(v.len() % 16 == 0);
         for pidx in 0..fbase.len() {
+            let p = fbase.p(pidx) as i32;
             let pdiv = fbase.div(pidx);
             let b_over_a = b * arith::U256::from(ainv[pidx]);
-            v[pidx] = pdiv.mod_uint(&b_over_a) as u32;
+            // If i = 0, subtract rp and offset
+            let mut val = p - pdiv.mod_uint(&b_over_a) as i32;
+            if i == 0 {
+                val = val - rp[pidx] as i32 - start_offset as i32;
+            }
+            v[pidx] = pdiv.div31.modi32(val) as u32;
         }
-    }
-    // Compute sqrt(n)/A mod p
-    let mut rp = vec![0u32; (fbase.len() + 15) & !15];
-    assert!(rp.len() % 16 == 0);
-    for pidx in 0..fbase.len() {
-        let r = fbase.r(pidx);
-        let pdiv = fbase.div(pidx);
-        rp[pidx] = pdiv.divmod64(ainv[pidx] as u64 * r as u64).1 as u32;
     }
     A {
         a: *a,
@@ -547,25 +558,6 @@ pub struct Poly {
     r2p: Box<[u32]>,
 }
 
-impl Poly {
-    #[inline]
-    pub fn prepare_prime(&self, idx: usize, p: u32) -> sieve::SievePrime {
-        // Compute polynomial roots.
-        let offsets = if p == 2 {
-            // FIXME
-            [Some(0), Some(1)]
-        } else {
-            let r1 = self.r1p[idx];
-            let r2 = self.r2p[idx];
-            [
-                Some(self.r1p[idx]),
-                if r1 == r2 { None } else { Some(self.r2p[idx]) },
-            ]
-        };
-        sieve::SievePrime { p, offsets }
-    }
-}
-
 /// Given coefficients A and B, compute all roots (Ax+B)^2=N
 /// modulo the factor base, computing (r - B)/A mod p
 pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
@@ -579,9 +571,8 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
         b += a.roots[i][(pol_idx >> i) & 1];
     }
     // Also combine roots mod p
-    let first = pol_idx % 16;
-    let mut bmodp = a.roots_mod_p[first].clone();
-    for i in 1..(a.factors.len() + 3) / 4 {
+    let mut bmodp = vec![0u32; a.roots_mod_p[0].len()].into_boxed_slice();
+    for i in 0..(a.factors.len() + 3) / 4 {
         let v = &a.roots_mod_p[16 * i + ((pol_idx >> (4 * i)) % 16)];
         assert_eq!(v.len() % 8, 0);
         // first += v
@@ -600,11 +591,13 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
     }
     // Compute final polynomial roots
     // (±r - B)/A = (-B/A) ± (r/p) solutions of (Ax+B)^2 = N
+    //
+    // In prepare_a, everything has been done so that bmodp = (-r - B)/A - offset
+    // We only need to add 2r for the second root, and reduce mod p.
     let mut r1p = bmodp;
-    let mut r2p = a.rp.clone().into_boxed_slice();
+    let mut r2p = vec![0u32; r1p.len()].into_boxed_slice();
     let mut idx = 0;
     let primes = &s.fbase.primes[..];
-    let offsets = &s.offset_modp[..];
     assert_eq!(r1p.len(), r2p.len());
     assert!(r1p.len() >= primes.len());
     assert_eq!(primes.len() % 8, 0);
@@ -613,42 +606,38 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
             // (possibly) unaligned pointers
             let r18 = (r1p.get_unchecked_mut(idx) as *mut u32) as *mut [u32; 8];
             let r28 = (r2p.get_unchecked_mut(idx) as *mut u32) as *mut [u32; 8];
+            let rs = (a.rp.get_unchecked(idx) as *const u32) as *const [u32; 8];
             let ps = (primes.get_unchecked(idx) as *const u32) as *const [u32; 8];
-            let offs = (offsets.get_unchecked(idx) as *const u32) as *const [u32; 8];
-            let b8w = wide::u32x8::new(*r18);
-            let r8w = wide::u32x8::new(*r28);
+            let mut r1w = wide::u32x8::new(*r18);
+            let r8 = wide::u32x8::new(*rs);
             let p8 = wide::u32x8::new(*ps);
-            let off8 = wide::u32x8::new(*offs);
 
-            // We need to compute -bmodp ± a.rp - offset_modp modulo p
+            // Reduce r1 mod p.
             // To properly benefit from SIMD vectorization we need to avoid
             // multiplication and division.
             // We use the fact that individual terms are already reduced modulo p
             // so that the reduction can be written as conditional subtractions by p.
 
-            // Compute 5p
-            let p8_x5 = (p8 << 2) + p8;
-            // Compute the "smaller" term r2 = 5*p -bmodp -a.rp - offset
-            // and reduce r2 mod p. It is between 0 and 5p.
-            let mut r28w: wide::u32x8 = p8_x5 - b8w - r8w - off8;
-            debug_assert!(r28w >> 24 == wide::u32x8::ZERO);
+            // r1 < 3p so at most 2 subtractions are required.
             // Repeatedly mask and subtract p to reduce mod p.
             // FIXME: there is a bug in wide 0.7.5
             // where u32x8::cmp_lt is mapped to cmp_eq_mask_i32_m256i
             // We use (r2 > p-1) as mask instead of (not r2 < p)
             let p8_m1 = p8 - wide::u32x8::ONE;
-            for _ in 0..5 {
-                r28w -= p8 & r28w.cmp_gt(p8_m1);
-            }
-            debug_assert!(r28w >> 24 == wide::u32x8::ZERO);
-            *r28 = r28w.to_array();
-            // Now add 2*rp, the result is < 3p
-            // subtract at most 2 times p.
-            let mut r18w: wide::u32x8 = r28w + (r8w << 1);
+            r1w -= p8 & r1w.cmp_gt(p8_m1);
+            r1w -= p8 & r1w.cmp_gt(p8_m1);
+            *r18 = r1w.to_array();
+            debug_assert!(r1w >> 24 == wide::u32x8::ZERO);
+            debug_assert!(r1w.cmp_gt(p8_m1) == wide::u32x8::ZERO);
+            // Compute the second root by adding 2*rp
+            let mut r2w: wide::u32x8 = r1w + (r8 << 1);
+            // The result is < 3p, subtract at most 2 times p.
             // FIXME: don't use u32x8::cmp_lt in wide 0.7.5
-            r18w -= p8 & r18w.cmp_gt(p8_m1);
-            r18w -= p8 & r18w.cmp_gt(p8_m1);
-            *r18 = r18w.to_array();
+            r2w -= p8 & r2w.cmp_gt(p8_m1);
+            r2w -= p8 & r2w.cmp_gt(p8_m1);
+            *r28 = r2w.to_array();
+            debug_assert!(r2w >> 24 == wide::u32x8::ZERO);
+            debug_assert!(r2w.cmp_gt(p8_m1) == wide::u32x8::ZERO);
         }
         idx += 8;
     }
@@ -659,6 +648,11 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
     let c = (Int::from_bits(b * b) - Int::from_bits(*n)) / Int::from_bits(a.a);
     debug_assert!(Int::from_bits(*n) == Int::from_bits(b * b) - c * Int::from_bits(a.a));
 
+    // Special case for p=2
+    // Inherited from previous code.
+    // FIXME: why???
+    r1p[0] = 0;
+    r2p[0] = 1;
     // Special case for divisors of A.
     // poly % p = 2Bx + C, root is -C/2B
     for &pidx in a.factors_idx.iter() {
@@ -707,9 +701,17 @@ fn siqs_sieve_poly(s: &SieveSIQS, n: &Uint, a: &A, pol: &Poly) {
     // Construct initial state.
     let start_offset: i64 = -(mm as i64) / 2;
     let end_offset: i64 = (mm as i64) / 2;
-    let pfunc = move |pidx| {
-        let p = s.fbase.p(pidx);
-        pol.prepare_prime(pidx, p)
+    let primes = &s.fbase.primes[..];
+    let r1p = &pol.r1p[..];
+    let r2p = &pol.r2p[..];
+    let pfunc = move |pidx| -> sieve::SievePrime {
+        unsafe {
+            let p = *primes.get_unchecked(pidx);
+            let r1 = *r1p.get_unchecked(pidx);
+            let r2 = *r2p.get_unchecked(pidx);
+            let offsets = [Some(r1), if r1 == r2 { None } else { Some(r2) }];
+            sieve::SievePrime { p, offsets }
+        }
     };
     let mut state = sieve::Sieve::new(start_offset, nblocks, s.fbase, &pfunc);
     if nblocks == 0 {
@@ -936,7 +938,7 @@ fn test_poly_prepare() {
     let f = select_siqs_factors(&fb, &n, 9);
     let a_ints = select_a(&f, 10);
     for a_int in &a_ints {
-        let a = prepare_a(&f, a_int, &fb);
+        let a = prepare_a(&f, a_int, &fb, 0);
         // Check CRT coefficients.
         assert_eq!(a.a, a.factors.iter().map(|x| Uint::from(x.p)).product());
         for (i, r) in a.roots.iter().enumerate() {
@@ -972,7 +974,14 @@ fn test_poly_prepare() {
                     let r = r as u64;
                     let v = pa * Uint::from(r * r) + pb * Uint::from(2 * r);
                     let v = Int::from_bits(v) + pc;
-                    assert_eq!(v.abs().to_bits() % (fb.p(pidx) as u64), 0);
+                    assert_eq!(
+                        v.abs().to_bits() % (fb.p(pidx) as u64),
+                        0,
+                        "p={} r={} P(r) mod p={}",
+                        fb.p(pidx),
+                        r,
+                        v.abs().to_bits() % (fb.p(pidx) as u64)
+                    );
                 }
             }
         }
