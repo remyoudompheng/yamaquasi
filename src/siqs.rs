@@ -613,7 +613,6 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
             // (possibly) unaligned pointers
             let r18 = (r1p.get_unchecked_mut(idx) as *mut u32) as *mut [u32; 8];
             let r28 = (r2p.get_unchecked_mut(idx) as *mut u32) as *mut [u32; 8];
-            // FIXME: this is out of bound if len(primes)%16 != 0
             let ps = (primes.get_unchecked(idx) as *const u32) as *const [u32; 8];
             let offs = (offsets.get_unchecked(idx) as *const u32) as *const [u32; 8];
             let b8w = wide::u32x8::new(*r18);
@@ -634,16 +633,21 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
             let mut r28w: wide::u32x8 = p8_x5 - b8w - r8w - off8;
             debug_assert!(r28w >> 24 == wide::u32x8::ZERO);
             // Repeatedly mask and subtract p to reduce mod p.
+            // FIXME: there is a bug in wide 0.7.5
+            // where u32x8::cmp_lt is mapped to cmp_eq_mask_i32_m256i
+            // We use (r2 > p-1) as mask instead of (not r2 < p)
+            let p8_m1 = p8 - wide::u32x8::ONE;
             for _ in 0..5 {
-                r28w -= p8 & !(r28w.cmp_lt(p8));
+                r28w -= p8 & r28w.cmp_gt(p8_m1);
             }
             debug_assert!(r28w >> 24 == wide::u32x8::ZERO);
             *r28 = r28w.to_array();
             // Now add 2*rp, the result is < 3p
             // subtract at most 2 times p.
             let mut r18w: wide::u32x8 = r28w + (r8w << 1);
-            r18w -= p8 & !(r18w.cmp_lt(p8));
-            r18w -= p8 & !(r18w.cmp_lt(p8));
+            // FIXME: don't use u32x8::cmp_lt in wide 0.7.5
+            r18w -= p8 & r18w.cmp_gt(p8_m1);
+            r18w -= p8 & r18w.cmp_gt(p8_m1);
             *r18 = r18w.to_array();
         }
         idx += 8;
