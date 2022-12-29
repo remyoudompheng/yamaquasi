@@ -177,6 +177,120 @@ pub fn siqs(
     rels.into_inner()
 }
 
+/// Helper function to study performance impact of parameters
+pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
+    // Prepare central parameters and A values.
+    let (k, score) = fbase::select_multiplier(n);
+    eprintln!("Using fixed multiplier {} (score {:.2}/8)", k, score);
+    let n = &(n * Uint::from(k));
+
+    let fb0 = params::factor_base_size(n);
+    let fb0 = if n.bits() > 256 { fb0 / 2 } else { fb0 };
+    let lf0 = large_prime_factor(n);
+    let use_double = n.bits() > 256;
+    // This factor base is only to select A
+    let fbase0 = FBase::new(*n, fb0);
+    let mm0 = interval_size(n);
+    let blocks0 = mm0 as i64 / BLOCK_SIZE as i64;
+
+    let nfacs = nfactors(n) as usize;
+    let polys_per_a = 1 << (nfacs - 1);
+
+    let tpool = threads.map(|t| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(t)
+            .build()
+            .expect("cannot create thread pool")
+    });
+
+    eprintln!("Base params fb={fb0} lf={lf0}");
+    // The value of a varies according to interval size.
+    let mut factorss = vec![];
+    let mut mms = vec![];
+    let mut a_s = vec![];
+    let dblk = max(1, blocks0 / 6);
+    for blks in [
+        blocks0 - 2 * dblk,
+        blocks0 - dblk,
+        blocks0,
+        blocks0 + dblk,
+        blocks0 + 2 * dblk,
+    ] {
+        if blks > 0 {
+            // FIXME: functions have their own parameters.
+            let mm = BLOCK_SIZE * (blks as usize);
+            let factors = select_siqs_factors(&fbase0, n, nfacs);
+            let a_ints = select_a(&factors, a_value_count(n));
+            let a0 = a_ints[0];
+            let polys_per_a = 1 << (nfacs - 1);
+            eprintln!("Test set M={}k A={} npolys={}", mm / 2048, a0, polys_per_a);
+            // sample polynomial
+            let a = &prepare_a(&factors, &a0, &fbase0, -(mm as i64) / 2);
+            let s = SieveSIQS::new(n, &fbase0, 0, use_double, -(mm as i64) / 2);
+            let pol = make_polynomial(&s, n, a, 0);
+            eprintln!("min(P) ~ {}", pol.c);
+            eprintln!(
+                "max(P) ~ {}",
+                Int::cast_from(pol.a) * Int::from(mm * mm / 4)
+                    + Int::cast_from(pol.b) * Int::from(mm)
+                    + pol.c
+            );
+            mms.push(mm);
+            factorss.push(factors);
+            a_s.push(a0);
+        }
+    }
+
+    // Iterate on parameters
+    for fb in [4 * fb0 / 5, fb0, 5 * fb0 / 4] {
+        // Print separator: results have different meanings
+        eprintln!("===");
+        let fbase = FBase::new(*n, fb);
+        for lf in [2 * lf0 / 3, lf0, 3 * lf0 / 2] {
+            for use_double in [false, true] {
+                for (idx, &mm) in mms.iter().enumerate() {
+                    let aint = a_s[idx];
+                    let factors = &factorss[idx];
+                    let maxprime = fbase.bound() as u64;
+                    let maxlarge: u64 = maxprime * lf as u64;
+                    let s = SieveSIQS::new(n, &fbase, maxlarge, use_double, -(mm as i64) / 2);
+                    // Measure metrics
+                    let t0 = std::time::Instant::now();
+                    let a = &prepare_a(factors, &aint, &fbase, -(mm as i64) / 2);
+                    if let Some(pool) = tpool.as_ref() {
+                        let poly_idxs: Vec<usize> = (0..polys_per_a).collect();
+                        pool.install(|| {
+                            poly_idxs.par_iter().for_each(|&idx| {
+                                let pol = make_polynomial(&s, n, a, idx);
+                                siqs_sieve_poly(&s, n, a, &pol);
+                            });
+                        })
+                    } else {
+                        for idx in 0..polys_per_a {
+                            let pol = make_polynomial(&s, n, a, idx);
+                            siqs_sieve_poly(&s, n, a, &pol);
+                        }
+                    }
+                    let dt = t0.elapsed().as_secs_f64();
+                    let rels = s.rels.read().unwrap();
+                    eprintln!(
+                        "fb={fb} B1={lf} B2={} M={}k dt={dt:2.3}s {:.2}ns/i c={} ({:.1}/s) p={} ({:.1}/s) pp={} ({:.1}/s)",
+                        if use_double { 2 } else { 0 },
+                        mm / 2048,
+                        dt * 1.0e9 / (mm as f64) / (polys_per_a as f64),
+                        rels.len(),
+                        rels.len() as f64 / dt,
+                        rels.n_partials,
+                        rels.n_partials as f64/ dt,
+                        rels.n_doubles,
+                        rels.n_doubles as f64/dt,
+                    )
+                }
+            }
+        }
+    }
+}
+
 // Parameters:
 // m = number of needed A values
 // k = number of factors in each A
