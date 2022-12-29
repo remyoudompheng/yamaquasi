@@ -161,11 +161,7 @@ impl<'a> Sieve<'a> {
         };
 
         // Primes duplicated for each cursor offset.
-        let n_small = fbase
-            .primes
-            .iter()
-            .position(|&p| p as usize > BLOCK_SIZE)
-            .unwrap_or(fbase.len());
+        let n_small = fbase.idx_by_log[LARGE_PRIME_LOG];
         let mut offs = Vec::with_capacity(2 * n_small);
         let maxprime = fbase.bound();
         // Need tables for logp in 16..=log(maxprime)
@@ -203,24 +199,36 @@ impl<'a> Sieve<'a> {
                 let pbsize = PRIME_BUCKET_SIZES[log - LARGE_PRIME_LOG];
                 let mut pbidx = 0;
                 let mut pbucket = 0;
+                let interval_size = (nblocks * BLOCK_SIZE) as isize;
                 for idx in idx1..idx2 {
                     // Large prime: register them in hashmap
                     let SievePrime {
                         p,
                         offsets: [o1, o2],
                     } = f(idx);
-                    for o in [o1, o2] {
-                        let Some(o) = o else { continue };
-                        let mut off = o as usize;
-                        loop {
-                            let blk_no = off / BLOCK_SIZE;
-                            if blk_no >= nblocks {
-                                break;
-                            }
-                            let blk_off = off % BLOCK_SIZE;
-                            table.add(blk_no, blk_off, pbucket);
-                            off += p as usize;
-                        }
+                    let mut kp: isize = 0;
+                    let [Some(o1), Some(o2)] = [o1, o2]
+                        else { unreachable!("large primes must have 2 roots") };
+                    let (o1, o2) = (o1 as isize, o2 as isize);
+                    let p = p as isize;
+                    let rmax = max(o1, o2) as isize;
+                    let m = interval_size - p - rmax;
+                    while kp < m {
+                        table.add((kp + o1) as usize, pbucket);
+                        table.add((kp + o2) as usize, pbucket);
+                        table.add((kp + p + o1) as usize, pbucket);
+                        table.add((kp + p + o2) as usize, pbucket);
+                        kp += 2 * p;
+                    }
+                    let mut off = o1 as isize + kp;
+                    while off < interval_size {
+                        table.add(off as usize, pbucket);
+                        off += p;
+                    }
+                    let mut off = o2 as isize + kp;
+                    while off < interval_size {
+                        table.add(off as usize, pbucket);
+                        off += p;
                     }
                     pbidx += 1;
                     if pbidx == pbsize {
@@ -283,12 +291,10 @@ impl<'a> Sieve<'a> {
                 let Some(o) = o else { continue };
                 let mut off = o as usize;
                 loop {
-                    let blk_no = off / BLOCK_SIZE;
-                    if blk_no >= self.nblocks {
+                    if off >= self.nblocks * BLOCK_SIZE {
                         break;
                     }
-                    let blk_off = off % BLOCK_SIZE;
-                    table.add(blk_no, blk_off, pbucket);
+                    table.add(off, pbucket);
                     off += p as usize;
                 }
             }
@@ -402,8 +408,14 @@ impl<'a> Sieve<'a> {
                 .iter()
                 .map(|t| {
                     (
-                        t.entries.get_unchecked(self.blk_no),
-                        t.blens.get_unchecked(self.blk_no),
+                        t.entries.get_unchecked(
+                            self.blk_no * SieveTable::N_ENTRIES
+                                ..(self.blk_no + 1) * SieveTable::N_ENTRIES,
+                        ),
+                        t.blens.get_unchecked(
+                            self.blk_no * SieveTable::N_BUCKETS
+                                ..(self.blk_no + 1) * SieveTable::N_BUCKETS,
+                        ),
                     )
                 })
                 .collect()
@@ -552,15 +564,14 @@ impl<'a> Sieve<'a> {
         if self.tables.len() == 0 {
             return (res, facs);
         }
+        let base_off = self.blk_no * BLOCK_SIZE;
         for j in 0..rlen {
             let r = res[j];
-            let (b, boff) = SieveTable::bucket(r as usize);
+            let (b, boff) = SieveTable::bucket(base_off + r as usize);
             for (tidx, t) in self.tables.iter().enumerate() {
                 let logp = tidx + LARGE_PRIME_LOG;
-                let blen = t.blens[self.blk_no][b] as usize;
-                for &(off, pbucket) in
-                    &t.entries[self.blk_no][b * BUCKET_SIZE..b * BUCKET_SIZE + blen]
-                {
+                let blen = t.blens[b] as usize;
+                for &(off, pbucket) in &t.entries[b * BUCKET_SIZE..b * BUCKET_SIZE + blen] {
                     if boff as u8 == off {
                         // Walk candidate primes
                         let (pmin, pmax) = self.prime_bucket_bounds(pbucket as usize, logp);
@@ -628,8 +639,8 @@ const MAX_OVERFLOWS: usize = 32;
 // A size class is an interval [2^k, 2^(k+1)] for k in 15..24
 #[derive(Clone)]
 pub struct SieveTable {
-    entries: Vec<[(u8, u8); Self::N_ENTRIES]>,
-    blens: Vec<[u8; Self::N_BUCKETS]>,
+    entries: Vec<(u8, u8)>,
+    blens: Vec<u8>,
     overflows: [(u16, u8); 16],
     n_overflows: usize,
 }
@@ -640,21 +651,17 @@ impl SieveTable {
 
     fn new(nblocks: usize) -> Self {
         SieveTable {
-            entries: vec![[(0u8, 0u8); Self::N_ENTRIES]; nblocks],
-            blens: vec![[0u8; Self::N_BUCKETS]; nblocks],
+            entries: vec![(0u8, 0u8); Self::N_ENTRIES * nblocks],
+            blens: vec![0u8; Self::N_BUCKETS * nblocks],
             overflows: [(0u16, 0u8); 16],
             n_overflows: 0,
         }
     }
 
     fn reset(&mut self) {
-        for t in &mut self.entries {
-            t.fill((0u8, 0u8));
-        }
-        for t in &mut self.blens {
-            t.fill(0u8);
-        }
-        self.overflows.fill((0u16, 0u8));
+        // no need to reset entries, overflows
+        // as long as the counters are reset
+        self.blens.fill(0u8);
         self.n_overflows = 0;
     }
 
@@ -663,31 +670,35 @@ impl SieveTable {
     }
 
     #[inline]
-    fn add(&mut self, blk_no: usize, blk_off: usize, pidx: u32) {
+    fn add(&mut self, offset: usize, pidx: u32) {
         debug_assert!(pidx < 256);
-        let (b, bucket_off) = Self::bucket(blk_off);
+        debug_assert!(offset < self.entries.len() * BLOCK_SIZE / Self::N_ENTRIES);
+        let (b, bucket_off) = Self::bucket(offset);
         unsafe {
-            let blen_p = self.blens.get_unchecked_mut(blk_no).get_unchecked_mut(b);
+            let blen_p = self.blens.get_unchecked_mut(b);
             let mut blen = *blen_p;
             if blen < BUCKET_SIZE as u8 {
-                // std::mem::replace compiles to a single 64-bit mov
                 *self
                     .entries
-                    .get_unchecked_mut(blk_no)
                     .get_unchecked_mut(b * BUCKET_SIZE + blen as usize) =
                     (bucket_off as u8, pidx as u8);
                 blen += 1;
                 *blen_p = blen;
             } else {
-                if self.n_overflows < self.overflows.len() {
-                    self.overflows[self.n_overflows] = (blk_off as u16, pidx as u8);
-                }
-                self.n_overflows += 1;
-                if self.n_overflows >= MAX_OVERFLOWS {
-                    // Extremely unlikely to ever happen.
-                    eprintln!("WARNING: max overflows reached {}", self.n_overflows);
-                }
+                self.add_overflow(offset, pidx);
             }
+        }
+    }
+
+    #[inline(never)]
+    fn add_overflow(&mut self, offset: usize, pidx: u32) {
+        if self.n_overflows < self.overflows.len() {
+            self.overflows[self.n_overflows] = ((offset % BLOCK_SIZE) as u16, pidx as u8);
+        }
+        self.n_overflows += 1;
+        if self.n_overflows >= MAX_OVERFLOWS {
+            // Extremely unlikely to ever happen.
+            eprintln!("WARNING: max overflows reached {}", self.n_overflows);
         }
     }
 }
