@@ -172,7 +172,7 @@ impl RelationSet {
             // Factor base elements have at most 24 bits
             self.n_partials += 1;
             if self.combine_single(&r) {
-                return
+                return;
             }
             let p = r.cofactor;
             self.partial.insert(r.cofactor, r.pack());
@@ -191,7 +191,7 @@ impl RelationSet {
             } else {
                 // No combination available.
                 let (p, q) = (p as u32, q as u32);
-                let key = if p < q { (p , q ) } else { (q , p ) };
+                let key = if p < q { (p, q) } else { (q, p) };
                 self.doubles.insert(key, PackedRelation::pack(r));
                 self.doubles_rev.insert((key.1, key.0));
             }
@@ -205,8 +205,16 @@ impl RelationSet {
     }
 
     fn walk_doubles(&mut self, root: u32) {
-        let pqs: Vec<(u32, u32)> = self.doubles.range((root, 0)..(root+1, 0)).map(|(&k, _)| k).collect();
-        let qps: Vec<(u32, u32)> = self.doubles_rev.range((root, 0)..(root+1, 0)).map(|&k| k).collect();
+        let pqs: Vec<(u32, u32)> = self
+            .doubles
+            .range((root, 0)..(root + 1, 0))
+            .map(|(&k, _)| k)
+            .collect();
+        let qps: Vec<(u32, u32)> = self
+            .doubles_rev
+            .range((root, 0)..(root + 1, 0))
+            .map(|&k| k)
+            .collect();
         for key @ &(p, q) in &pqs {
             let Some(r) = self.doubles.remove(key) else { continue };
             self.doubles_rev.remove(&(q, p));
@@ -359,7 +367,7 @@ impl RelationSet {
         } else if self.partial.contains_key(&p) && self.partial.contains_key(&q) {
             // Ideal case, both primes already available.
             //   1    3 relations are involved.
-            //  / \  
+            //  / \
             // p---q
             let rp = self.partial.get(&p).unwrap().unpack();
             let rq = self.partial.get(&q).unwrap().unpack();
