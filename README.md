@@ -1,7 +1,39 @@
 Yamaquasi is a Rust implementation of several variants of the Quadratic sieve
 factorisation method. It attempts to balance efficiency and readability.
 
-# Performance
+# Description
+
+Yamaquasi can be used as a general-purpose factoring utility through command `ymqs`.
+
+It implements several variants of the Quadratic sieve factoring method with light
+boilerplate allowing it to completely factor most integers with fewer than
+110 decimal digits.
+
+There is no guarantee to obtain a successful factorization even when input size
+is small enough due to edge cases (non squarefree integers, small factors,
+many factors), but most integers will be processed successfully.
+
+Utilities like YAFU (https://github.com/bbuhrow/yafu) can be used for more
+reliable or efficient factoring.
+
+# Choices
+
+To keep a good balance with readability Yamaquasi does not include inline assembly
+nor architecture-specific code. However optimization choices are guided by tests
+on desktop x64-64 platforms (less than 10 cores with a few MB of L3 cache), and
+unsafe Rust is used to skip bound checks or force using SIMD.
+
+There is no plan to implement non-quadratic sieve methods (such as ECM or Pollard P-1).
+A SQUFOF implementation is used internally for small integers.
+
+Parameter choices were tested on integers from 40 to 330 bits. By default, the command
+line utility will combine this with trial division to factor arbitrary inputs.
+
+Input integers over 500 bit size cannot be factored in a reasonable time
+using quadratic sieve methods and will be rejected. Internal data structures
+assume that this upper bound is enforced.
+
+# Benchmarks
 
 The following benchmarks use balanced semiprimes as input (product of 2 primes
 of similar size). The figures below are not guaranteed to follow a rigorous
@@ -36,22 +68,12 @@ The CPU clock rate is usually slower when multiple cores are active.
 `msieve` uses SQUFOF and ordinary quadratic sieve below 85 bits.
 `flintqs` rejects inputs smaller than 40 decimal digits.
 
-The linear algebra implementation of yamaquasi is single-threaded.
-There is no plan to use architecture-specific inline assembly,
-but unsafe Rust or crates providing optimizations (such as
-SIMD-enabled routines) are used.
+On platforms supporting SMT (Simultaneous Multi-Threading) a small benefit
+can be observed when fully using all available logical cores.
 
-# Choice of thresholds and parameters
-
-The chosen parameters received tweaks to accomodate very small
-inputs (under 100 bits) for which the quadratic sieve
-is not the most effective method.
-
-A maximum input size (500 bits) is enforced and data structures assume
-that bound.
-
-The sieve assumes that the factor base can be represented by 24-bit
-integers (enough for the first million prime numbers).
+On x86-64 architectures, several parts of the code can be accelerated
+by enabling AVX2 using `RUSTFLAGS='-C target-cpu=native'`
+or `RUSTFLAGS='-C target-feature=+avx2'`.
 
 # Implementation
 
@@ -84,6 +106,11 @@ It features the 3 variants: classical quadratic sieve, multiple polynomial
 quadratic sieve, self-initializing (hypercube) multiple polynomial
 quadratic sieve.
 
+Several optimization techniques are not used in Yamaquasi: the Gray code enumeration
+for SIQS polynomials is not used (instead a base 16 representation avoids excessive
+initialization cost), and the formulas avoiding a few inner products in Block Lanczos
+are not implemented.
+
 ## Integer arithmetic
 
 Since it is unreasonable to use the quadratic sieve to factor numbers larger
@@ -92,13 +119,7 @@ modular arithmetic provided by the `bnum` crate, and 64-bit arithmetic
 for computations involving the factor base. Polynomial coefficients are
 guaranteed to be smaller than 256 bits.
 
-## Polynomial selection (MPQS)
-
-The polynomial selection looks for pseudoprimes D such that the input number
-N is a quadratic residue modulo D. The search uses slight sieving to
-find multiple appropriate values of D in a single pass.
-
-## Parallel processing
+## Multithread support
 
 Yamaquasi uses the `rayon` Rust crate to provide parallel computation capabilities.
 
@@ -111,22 +132,17 @@ of polynomials over a thread pool.
 ## Memory usage
 
 Yamaquasi does not write any relations to disk and keeps everything in memory
-in a compact format. Memory usage will be less than 2GB even when factoring
-100 digits.
+in a compact format. Memory usage will be less than 1GB even when factoring
+100-digit inputs.
 
 ## Linear algebra
 
 Kernel computation for mod 2 matrices is done through a naïve Gauss reduction
 using bit vectors from crate `bitvec_simd`. It will typically take less than
-1 second for a size 5000 matrix, with a O(n³) complexity.
+a fraction of second for a size 5000 matrix, with a O(n³) complexity.
 
-Above size 5000, the Block Lanczos algorithm is used. However, the matrices
-D, E, F from Montgomery's article are not used: instead, the vectors are chosen
-to optimistically achieve the correct condition for O(n²) complexity
-using simple formulas. The implementation uses blocks of 256 vectors
-using 256-bit wide variables provided by the `wide` crate.
+Above size 5000, the Block Lanczos algorithm is used (complexity O(n²), without
+the optimized matrices `Di`, `Ei`, `Fi` from Montgomery's article that avoid
+several inner products of blocks.
+The implementation uses width 64 blocks with `u64` word type.
 
-# Bugs
-
-The program is not guaranteed to provide a factorization for all inputs in
-the supported range due to invariant failures or incorrect parameter choices.
