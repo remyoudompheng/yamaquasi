@@ -138,8 +138,7 @@ where
     }
 }
 
-#[allow(dead_code)]
-fn inv_mod64(n: u64, p: u64) -> Option<u64> {
+pub fn inv_mod64(n: u64, p: u64) -> Option<u64> {
     let e = Integer::extended_gcd(&(n as i64), &(p as i64));
     if e.gcd == 1 {
         let x = if e.x < 0 { e.x + p as i64 } else { e.x };
@@ -186,6 +185,8 @@ fn mulmod<T: Num>(a: T, b: T, p: T) -> T {
     (a * b) % p
 }
 
+/// A precomputed structure to divide by a static prime number
+/// via Barrett reduction. This is used for primes from the factor base.
 #[derive(Clone, Debug)]
 pub struct Dividers {
     p: u32,
@@ -330,7 +331,8 @@ impl Dividers {
 
     /// Modular inverse. Prime number is supposed to be small (<= 32 bits).
     /// The algorithm is an extended binary GCD.
-    pub fn inv(&self, k: u64) -> Option<u64> {
+    #[allow(dead_code)]
+    fn inv(&self, k: u64) -> Option<u64> {
         if self.p == 2 {
             if k % 2 == 0 {
                 return None;
@@ -468,6 +470,84 @@ impl Divider31 {
     }
 }
 
+/// A precomputed structure to compute faster modular inverses
+/// via "Montgomery modular inverse". The implementation follows
+/// the presentation by Lórencz (https://doi.org/10.1007/3-540-36400-5_6)
+/// and is attributed to Kaliski.
+pub struct Inverter {
+    // A fixed prime number assumed to be less than 30 bits.
+    pub p: u32,
+    // Precomputed 2^-k mod p
+    invpow2: [u32; 64],
+    // Barrett reduction parameters
+    m63: u64,
+    s63: usize,
+}
+
+impl Inverter {
+    pub fn new(p: u32) -> Inverter {
+        // Inverse powers of 2
+        let mut invpow2 = [0; 64];
+        let mut x: u32 = 1;
+        for k in 0..invpow2.len() {
+            invpow2[k] = x;
+            if x % 2 == 0 {
+                x /= 2;
+            } else {
+                x = (x + p) / 2;
+            }
+        }
+        // Barrett reduction parameters
+        let m127 = (1u128 << 127) / (p as u128) + 1;
+        let sz = m127.bits();
+        let m63 = (m127 >> (sz - 64)).low_u64() + 1; // 64 bits
+        let s63 = 127 + 64 - sz as usize; // m63 >> s63 = m127 >> 127
+        Inverter {
+            p,
+            invpow2,
+            m63,
+            s63,
+        }
+    }
+
+    pub fn invert(&self, x: u32) -> u32 {
+        if self.p == 2 {
+            return x % 2;
+        }
+        if x == 0 {
+            panic!("0 has no inverse");
+        }
+        let p = self.p as u64;
+        // Similar to binary GCD, with invariants:
+        // rx = -u*2^k, sx = v*2^k
+        let (mut u, mut v) = (self.p, x);
+        let (mut r, mut s) = (0_u32, 1_u32);
+        let mut k = 0_u32;
+        while v > 0 {
+            // Loop at most 2*p.bits() times
+            if u % 2 == 0 {
+                (u, s) = (u / 2, s * 2);
+            } else if v % 2 == 0 {
+                (v, r) = (v / 2, r * 2);
+            } else if u > v {
+                (u, r, s) = ((u - v) / 2, r + s, s * 2);
+            } else {
+                // v > u
+                (v, r, s) = ((v - u) / 2, r * 2, r + s);
+            }
+            k = k + 1;
+            debug_assert!(((r as u64) * (x as u64) + ((u as u64) << k)) % p == 0);
+        }
+        debug_assert!(u == 1);
+        // Now u = 1, rx = -2^k
+        // Divide by -2^k
+        let n = (r as u64) * (p - self.invpow2[k as usize] as u64);
+        let nm = n as u128 * self.m63 as u128;
+        let q = (nm >> self.s63) as u64;
+        (n - q * p) as u32
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,6 +607,25 @@ mod tests {
             let k = U1024::from(k);
             let kinv = inv_mod(k, n).unwrap();
             assert_eq!((kinv * k) % n, U1024::one());
+        }
+    }
+
+    #[test]
+    fn test_inv_mod_fast() {
+        const PRIMES: &[u32] = &[2473, 63977, 2500363, 300 * 1024 + 1];
+        for &p in PRIMES {
+            let inv = Inverter::new(p);
+            for k in 1..p / 2 {
+                if k > 50000 {
+                    break;
+                }
+                let kinv = inv.invert(k);
+                assert_eq!(
+                    (k as u64 * kinv as u64) % (p as u64),
+                    1,
+                    "p={p} k={k} k^-1={kinv}"
+                );
+            }
         }
     }
 

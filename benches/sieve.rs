@@ -1,6 +1,6 @@
 use brunch::Bench;
 use std::str::FromStr;
-use yamaquasi::arith::isqrt;
+use yamaquasi::arith::{self, isqrt};
 use yamaquasi::Uint;
 use yamaquasi::{fbase, mpqs, qsieve, siqs};
 
@@ -57,13 +57,16 @@ brunch::benches! {
     {
         let n = Uint::from_str(PQ256).unwrap();
         let fb = fbase::FBase::new(n, 5000);
+        let inverters: Vec<_> = (0..fb.len())
+            .map(|idx| arith::Inverter::new(fb.p(idx)))
+            .collect();
         let polybase: Uint = isqrt(isqrt(n));
         let pol = &mpqs::select_polys(&fb, &n, polybase, 1000)[0];
         Bench::new("prepare 5000 primes for MPQS poly (n: 256 bit)")
         .run_seeded((pol, &fb), |(pol, fb)| {
             (0..fb.len()).map(|pidx| {
                 let fbase::Prime { p, r, div } = fb.prime(pidx);
-                pol.prepare_prime(p as u32, r as u32, div, 12345)
+                pol.prepare_prime(p as u32, r as u32, div, &inverters[pidx], 12345)
             }).collect::<Vec<_>>()
         })
     },

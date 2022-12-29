@@ -326,7 +326,7 @@ pub fn select_siqs_factors<'a>(fb: &'a FBase, n: &'a Uint, nfacs: usize) -> Fact
             let pinvq = if p.p == q.p {
                 0
             } else {
-                q.div.inv(p.p).unwrap()
+                arith::inv_mod64(p.p as u64, q.p as u64).unwrap()
             };
             row.push(pinvq as u32);
         }
@@ -479,12 +479,13 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase, start_offset: i64
     let mut ainv = vec![];
     let mut factors_idx = vec![];
     for pidx in 0..fbase.len() {
+        let p = fbase.p(pidx);
         let div = fbase.div(pidx);
         let amod = div.mod_uint(a);
         if amod == 0 {
             factors_idx.push(pidx);
         }
-        ainv.push(div.inv(amod).unwrap_or(1) as u32);
+        ainv.push(arith::inv_mod64(amod, p as u64).unwrap_or(1) as u32);
     }
     // Compute sqrt(n)/A mod p
     let mut rp = vec![0u32; (fbase.len() + 15) & !15];
@@ -664,7 +665,9 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
         if !c.is_negative() {
             cp = p as u64 - cp;
         }
-        let r = div.divmod64(cp * div.inv(2 * bp).unwrap()).1 as u32;
+        let r = div
+            .divmod64(cp * arith::inv_mod64(2 * bp, p as u64).unwrap())
+            .1 as u32;
         let off = s.offset_modp[pidx];
         let r = div.div31.modu31(r + p as u32 - off);
         r1p[pidx] = r;

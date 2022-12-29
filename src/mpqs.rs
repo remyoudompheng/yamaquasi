@@ -55,6 +55,13 @@ pub fn mpqs(
     if polybase < Uint::from(maxprime) {
         polybase = Uint::from(maxprime);
     }
+
+    // Precompute inverters: preparation of polynomials is almost entirely spent
+    // in modular inversion.
+    let inverters: Vec<_> = (0..fb)
+        .map(|idx| arith::Inverter::new(fbase.p(idx)))
+        .collect();
+
     // Generate multiple polynomials at a time.
     // For small numbers (90-140 bits) usually less than
     // a hundred polynomials will provide enough relations.
@@ -71,7 +78,9 @@ pub fn mpqs(
     let mut polyidx = 0;
     let mut polys_done = 0;
     let use_double = n.bits() > 256;
-    eprintln!("Generated {} polynomials", polys.len());
+    if crate::DEBUG {
+        eprintln!("Generated {} polynomials", polys.len());
+    }
     let maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(&n));
     eprintln!("Max large prime {}", maxlarge);
     if use_double {
@@ -106,7 +115,7 @@ pub fn mpqs(
             let v = pool.install(|| {
                 (&polys[polyidx..])
                     .par_iter()
-                    .map(|p| mpqs_poly(p, n, &fbase, maxlarge, use_double, &rels))
+                    .map(|p| mpqs_poly(p, n, &fbase, &inverters, maxlarge, use_double, &rels))
                     .collect()
             });
             polys_done += polys.len() - polyidx;
@@ -117,7 +126,7 @@ pub fn mpqs(
             let pol = &polys[polyidx];
             polyidx += 1;
             polys_done += 1;
-            mpqs_poly(pol, n, &fbase, maxlarge, use_double, &rels);
+            mpqs_poly(pol, n, &fbase, &inverters, maxlarge, use_double, &rels);
         }
         let rels = rels.read().unwrap();
         if rels.len() >= target {
@@ -165,6 +174,7 @@ impl Poly {
         p: u32,
         r: u32,
         div: &arith::Dividers,
+        inv: &arith::Inverter,
         offset: i32,
     ) -> sieve::SievePrime {
         let off: u32 = div.div31.modi32(offset);
@@ -184,9 +194,10 @@ impl Poly {
             // Transform roots as: r -> (r - B) / A
             let a = div.divmod_uint(&self.a).1;
             let b = div.divmod_uint(&self.b).1;
-            let Some(ainv) = div.inv(a) else {
+            if a == 0 {
                 unreachable!("MPQS D={} is not a large prime???", isqrt(self.a));
             };
+            let ainv = inv.invert(a as u32) as u64;
             [
                 Some(shift(
                     div.divmod64((p as u64 + r as u64 - b) * ainv).1 as u32,
@@ -212,12 +223,13 @@ fn test_poly_prime() {
     let p = 10223;
     let r = 4526;
     let div = arith::Dividers::new(10223);
+    let inv = arith::Inverter::new(10223);
     let poly = Poly {
         a: U256::from_str("13628964805482736048449433716121").unwrap(),
         b: U256::from_str("2255304218805619815720698662795").unwrap(),
         d: U256::from(3691742787015739u64),
     };
-    for rt in poly.prepare_prime(p, r, &div, 0).offsets {
+    for rt in poly.prepare_prime(p, r, &div, &inv, 0).offsets {
         let Some(rt) = rt else { continue };
         let x1: Uint = Uint::cast_from(poly.a) * Uint::from(rt) + Uint::cast_from(poly.b);
         let x1p: u64 = (x1 % Uint::from(p)).to_u64().unwrap();
@@ -396,6 +408,7 @@ fn mpqs_poly(
     pol: &Poly,
     n: Uint,
     fbase: &FBase,
+    inverters: &[arith::Inverter],
     maxlarge: u64,
     use_double: bool,
     rels: &RwLock<RelationSet>,
@@ -445,7 +458,8 @@ fn mpqs_poly(
         let p = fbase.p(pidx);
         let r = fbase.r(pidx);
         let div = fbase.div(pidx);
-        pol.prepare_prime(p, r, div, start_offset as i32)
+        let inv = &inverters[pidx];
+        pol.prepare_prime(p, r, div, inv, start_offset as i32)
     };
     let mut state = sieve::Sieve::new(start_offset, nblocks, fbase, &pfunc);
     if nblocks == 0 {

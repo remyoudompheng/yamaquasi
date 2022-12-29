@@ -44,6 +44,36 @@ brunch::benches! {
         .with_timeout(Duration::from_secs(1))
         .run_seeded((1234567, &div), |(k, div)| for _ in 0..1000 { div.inv(k); })
     },
+    {
+        let inv = arith::Inverter::new(257);
+        Bench::new("1000x inv_mod fast(17, 257)")
+        .with_timeout(Duration::from_secs(1))
+        .run_seeded((17, &inv), |(k, inv)| for _ in 0..1000 { inv.invert(k); })
+    },
+    {
+        let inv = arith::Inverter::new(65537);
+        Bench::new("1000x inv_mod fast(17, 65537)")
+        .with_timeout(Duration::from_secs(1))
+        .run_seeded((17, &inv), |(k, inv)| for _ in 0..1000 { inv.invert(k); })
+    },
+    {
+        let inv = arith::Inverter::new(65537);
+        Bench::new("1000x inv_mod fast(40507, 65537)")
+        .with_timeout(Duration::from_secs(1))
+        .run_seeded((40507, &inv), |(k, inv)| for _ in 0..1000 { inv.invert(k); })
+    },
+    {
+        let inv = arith::Inverter::new(1048583);
+        Bench::new("1000x inv_mod fast(4057, 1048583)")
+        .with_timeout(Duration::from_secs(1))
+        .run_seeded((4057, &inv), |(k, inv)| for _ in 0..1000 { inv.invert(k); })
+    },
+    {
+        let inv = arith::Inverter::new(1048583);
+        Bench::new("1000x inv_mod fast(1234567, 1048583)")
+        .with_timeout(Duration::from_secs(1))
+        .run_seeded((1234567, &inv), |(k, inv)| for _ in 0..1000 { inv.invert(k); })
+    },
     // Large modular inverses
     {
         let prime160 = U512::from_str(P160).unwrap();
