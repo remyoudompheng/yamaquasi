@@ -332,7 +332,7 @@ impl Dividers {
     /// Modular inverse. Prime number is supposed to be small (<= 32 bits).
     /// The algorithm is an extended binary GCD.
     #[allow(dead_code)]
-    fn inv(&self, k: u64) -> Option<u64> {
+    pub fn inv(&self, k: u64) -> Option<u64> {
         if self.p == 2 {
             if k % 2 == 0 {
                 return None;

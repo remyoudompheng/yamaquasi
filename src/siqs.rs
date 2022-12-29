@@ -649,11 +649,6 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
     let c = (Int::from_bits(b * b) - Int::from_bits(*n)) / Int::from_bits(a.a);
     debug_assert!(Int::from_bits(*n) == Int::from_bits(b * b) - c * Int::from_bits(a.a));
 
-    // Special case for p=2
-    // Inherited from previous code.
-    // FIXME: why???
-    r1p[0] = 0;
-    r2p[0] = 1;
     // Special case for divisors of A.
     // poly % p = 2Bx + C, root is -C/2B
     for &pidx in a.factors_idx.iter() {
