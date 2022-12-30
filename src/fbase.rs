@@ -220,8 +220,8 @@ pub fn try_factor64(fb: Option<&pollard_pm1::PM1Base>, n: u64) -> Option<(u64, u
         return None;
     }
     let pm1_budget = match n.bits() {
-        0..=42 => 2000,
-        43..=45 => 5000,
+        0..=42 => 5000,
+        43..=45 => 10000,
         46..=48 => 20000,
         49.. => 30000,
     };

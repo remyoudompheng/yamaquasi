@@ -116,7 +116,8 @@ brunch::benches! {
         Bench::new("5x P-1 n=56 bits")
             .with_timeout(Duration::from_secs(3))
             .run_seeded(n56, |ns| for &n in ns {
-                pb.factor(n, 40000).unwrap();
+                let Some(_) = pb.factor(n, 3000)
+                    else { panic!("failure on {n}") };
             })
     },
     {
@@ -132,7 +133,24 @@ brunch::benches! {
         Bench::new("5x P-1 n=52 bits with large bound")
             .with_timeout(Duration::from_secs(3))
             .run_seeded(n52hard, |ns| for &n in ns {
-                pb.factor(n, 100000).unwrap();
+                let Some(_) = pb.factor(n, 8000)
+                    else { panic!("failure on {n}") };
+            })
+    },
+    {
+        let n52hard: &[u64] = &[
+            1834558324821379, // B=750223
+            2804193742926553, // B=621133
+            4216338048915137, // B=717683
+            14385962168468899, // B=772847
+            4263495252146089, // B=804511
+        ];
+        let pb = pollard_pm1::PM1Base::new();
+        Bench::new("5x P-1 n=52 bits with very large bound")
+            .with_timeout(Duration::from_secs(3))
+            .run_seeded(n52hard, |ns| for &n in ns {
+                let Some(_) = pb.factor(n, 70000)
+                    else { panic!("failure on {n}") };
             })
     },
     {

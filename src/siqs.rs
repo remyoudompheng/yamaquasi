@@ -27,6 +27,7 @@ use rayon::prelude::*;
 use crate::arith::{self, Num, U256};
 use crate::fbase::{self, FBase, Prime};
 use crate::params::{self, BLOCK_SIZE};
+use crate::pollard_pm1;
 use crate::relations::{self, Relation, RelationSet};
 use crate::sieve;
 use crate::{Int, Uint, DEBUG};
@@ -842,6 +843,7 @@ pub struct SieveSIQS<'a> {
     pub use_double: bool,
     pub rels: RwLock<RelationSet>,
     pub offset_modp: Box<[u32]>,
+    pub pm1_base: Option<pollard_pm1::PM1Base>,
 }
 
 impl<'a> SieveSIQS<'a> {
@@ -865,6 +867,11 @@ impl<'a> SieveSIQS<'a> {
             maxlarge,
             use_double,
             offset_modp: offsets,
+            pm1_base: if use_double {
+                Some(pollard_pm1::PM1Base::new())
+            } else {
+                None
+            },
         }
     }
 }
@@ -928,7 +935,7 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
         }
         let pq = if cofactor > maxprime * maxprime {
             // Possibly a double large prime
-            let pq = fbase::try_factor64(None, cofactor);
+            let pq = fbase::try_factor64(s.pm1_base.as_ref(), cofactor);
             match pq {
                 Some((p, q)) if p > maxlarge || q > maxlarge => continue,
                 None if cofactor > maxlarge => continue,
