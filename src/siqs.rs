@@ -926,12 +926,22 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
         if cofactor > max_cofactor {
             continue;
         }
-        let pq = fbase::try_factor64(cofactor);
-        match pq {
-            Some((p, q)) if p > maxlarge || q > maxlarge => continue,
-            None if cofactor > maxlarge => continue,
-            _ => {}
-        }
+        let pq = if cofactor > maxprime * maxprime {
+            // Possibly a double large prime
+            let pq = fbase::try_factor64(None, cofactor);
+            match pq {
+                Some((p, q)) if p > maxlarge || q > maxlarge => continue,
+                None if cofactor > maxlarge => continue,
+                _ => pq,
+            }
+        } else {
+            // Must be prime
+            debug_assert!(!fbase::certainly_composite(cofactor));
+            if cofactor > maxlarge {
+                continue;
+            }
+            None
+        };
         // Complete with factors of A
         for f in &a.factors {
             if let Some(idx) = factors.iter().position(|&(p, _)| p as u64 == f.p) {

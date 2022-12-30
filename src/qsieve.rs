@@ -297,7 +297,7 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
         if cofactor > max_cofactor {
             continue;
         }
-        let pq = fbase::try_factor64(cofactor);
+        let pq = fbase::try_factor64(None, cofactor);
         if pq.is_none() && cofactor > maxlarge {
             continue;
         }

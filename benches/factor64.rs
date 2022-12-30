@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use brunch::Bench;
-use yamaquasi::{fbase, qsieve64, squfof};
+use yamaquasi::{fbase, pollard_pm1, qsieve64, squfof};
 
 brunch::benches! {
     {
@@ -86,6 +86,53 @@ brunch::benches! {
             .with_timeout(Duration::from_secs(3))
             .run_seeded(n56, |ns| for &n in ns {
                 squfof::squfof(n).unwrap();
+            })
+    },
+    {
+        let n59hard: &[u64] = &[
+            28379446573532569,
+            56181815869659373,
+            87824287206965359,
+            89058989051837809,
+            89859608810317271,
+        ];
+        Bench::new("5x SQUFOF n=~56 bits with hard multiplier")
+            .with_timeout(Duration::from_secs(3))
+            .run_seeded(n59hard, |ns| for &n in ns {
+                squfof::squfof(n).unwrap();
+            })
+    },
+    {
+        let n56: &[u64] = &[
+            // from n56 above
+            39128513926139749, // B=2693
+            40952332749496541, // B=127
+            56396468816856241, // B=1663
+            // from n59hard
+            28379446573532569, // B=11447
+            56181815869659373, // B=17489
+        ];
+        let pb = pollard_pm1::PM1Base::new();
+        Bench::new("5x P-1 n=56 bits")
+            .with_timeout(Duration::from_secs(3))
+            .run_seeded(n56, |ns| for &n in ns {
+                pb.factor(n, 40000).unwrap();
+            })
+    },
+    {
+        let n52hard: &[u64] = &[
+            1229054827205021, // B=55213
+            1728782896618079, // B=52627
+            2531488701194069, // B=53923
+            1122065566442519, // B=57527
+            5733442064937071, // B=55127
+
+        ];
+        let pb = pollard_pm1::PM1Base::new();
+        Bench::new("5x P-1 n=52 bits with large bound")
+            .with_timeout(Duration::from_secs(3))
+            .run_seeded(n52hard, |ns| for &n in ns {
+                pb.factor(n, 100000).unwrap();
             })
     },
     {

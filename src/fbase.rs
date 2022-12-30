@@ -6,6 +6,8 @@
 //! This file is common to all variants (QS, MPQS, SIQS).
 
 use crate::arith;
+use crate::arith::Num;
+use crate::pollard_pm1;
 use crate::Uint;
 
 /// A factor base consisting of 24-bit primes related to an input number N,
@@ -213,9 +215,18 @@ pub fn certainly_composite(n: u64) -> bool {
 // Try to factor a possible "double large prime".
 // A number of assumptions are made, in particular
 // than composites are necessary more than 24 bit wide.
-pub fn try_factor64(n: u64) -> Option<(u64, u64)> {
+pub fn try_factor64(fb: Option<&pollard_pm1::PM1Base>, n: u64) -> Option<(u64, u64)> {
     if n >> 24 == 0 || !certainly_composite(n) {
         return None;
+    }
+    let pm1_budget = match n.bits() {
+        0..=42 => 2000,
+        43..=45 => 5000,
+        46..=48 => 20000,
+        49.. => 30000,
+    };
+    if let Some(pq) = fb.and_then(|fb| fb.factor(n, pm1_budget)) {
+        return Some(pq);
     }
     crate::squfof::squfof(n)
 }
