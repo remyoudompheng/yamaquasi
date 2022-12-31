@@ -42,10 +42,6 @@ use crate::relations::{self, Relation, RelationSet};
 use crate::sieve;
 use crate::{Int, Uint, DEBUG};
 
-// Constant B2 such that double large primes are bounded by
-// factor base bound * B1 * B2 where B1 is the single large prime factor.
-const DOUBLE_LARGE_PRIME_FACTOR: u64 = 2;
-
 pub fn siqs(
     n: &Uint,
     prefs: &crate::Preferences,
@@ -368,6 +364,28 @@ fn a_tolerance_divisor(n: &Uint) -> usize {
     }
 }
 
+// Interval size and large prime bound determine the sieve performance:
+//
+// Factor base size (smoothness bound B)
+// Determines the output levels of the sieve (exponentially low
+// if B is below the ideal levels).
+//
+// When using single large prime (p < B*B1)
+// the detection threshold is lowered to sqrt(n/2)/M/B1
+// Single large primes disappear quickly (B1 > 400 doesn't yield
+// more p-relations, B1 = 100 already gives a majority of p-relations)
+//
+// When using double large primes (p < B*B1, pq < B²*B1*B2 where B2 < B1)
+// the detection threshold is lowered to sqrt(n/2)/M/(B*B1*B2)
+// - all single large primes will be detected
+// - the extra cost of smooth candidates is fully determined by B1*B2
+// For a fixed product B1*B2, choosing a large B1 yields more p-relations,
+// only limited by available memory. Experimentally double large primes
+// are quickly depleted even with small B2.
+//
+// Since B is bounded by 2^24 and we want cofactors to fit in u64,
+// B1*B2 must not exceed 2^16.
+
 fn interval_size(n: &Uint) -> u32 {
     // Choose very small intervals since the cost of switching
     // polynomials is very small (less than 1ms).
@@ -392,28 +410,36 @@ fn interval_size(n: &Uint) -> u32 {
 }
 
 fn large_prime_factor(n: &Uint) -> u64 {
-    let sz = n.bits();
+    let sz = n.bits() as u64;
     match sz {
         0..=49 => {
             // Large cofactors for extremely small numbers
             // to compensate small intervals
-            100 + 2 * n.bits() as u64
+            100 + 2 * sz
         }
         50..=100 =>
         // Polynomials are scarce, we need many relations:
         {
-            300 - 2 * n.bits() as u64 // 200..100
+            300 - 2 * sz // 200..100
         }
         101..=250 => {
             // More large primes to compensate fewer relations
-            n.bits() as u64
+            sz
         }
         251.. => {
-            // Bound large primes to avoid exceeding 32 bits.
-            128 + n.bits() as u64 / 2
+            // For these input sizes, smooth numbers are so sparse
+            // that we need very large cofactors, so any value of B1 is fine.
+            //
+            // For size 256, B1=200-300 is enough to deplete 90% of p-relations
+            // For size 320, B1=~400 is enough to deplete 90% of relations
+            128 + sz / 2
         }
     }
 }
+
+// Constant B2 such that double large primes are bounded by
+// factor base bound * B1 * B2 where B1 is the single large prime factor.
+const DOUBLE_LARGE_PRIME_FACTOR: u64 = 2;
 
 // Polynomial selection
 
