@@ -53,7 +53,7 @@ pub fn siqs(
 
     // Generate all values of A now.
     let nfacs = nfactors(n) as usize;
-    let factors = select_siqs_factors(&fbase, n, nfacs);
+    let factors = select_siqs_factors(&fbase, n, nfacs, mm as usize);
     let a_ints = select_a(&factors, a_value_count(n));
     let polys_per_a = 1 << (nfacs - 1);
     eprintln!(
@@ -84,7 +84,7 @@ pub fn siqs(
     // We pack them as (u64, u32)
     //
     let start_offset: i64 = -(mm as i64) / 2;
-    let s = SieveSIQS::new(n, &fbase, maxlarge, use_double, start_offset);
+    let s = SieveSIQS::new(n, &fbase, maxlarge, use_double, mm as usize);
 
     let polys_done = AtomicUsize::new(0);
     let gap = AtomicUsize::new(fbase.len());
@@ -142,7 +142,7 @@ pub fn siqs(
                         return;
                     }
                     let pol = make_polynomial(&s, n, a, idx);
-                    siqs_sieve_poly(&s, n, a, &pol);
+                    siqs_sieve_poly(&s, a, &pol);
                     handle_result();
                 });
             })
@@ -150,7 +150,7 @@ pub fn siqs(
             // Single-threaded
             for idx in 0..polys_per_a {
                 let pol = make_polynomial(&s, n, a, idx);
-                siqs_sieve_poly(&s, n, a, &pol);
+                siqs_sieve_poly(&s, a, &pol);
                 let enough = handle_result();
                 if enough {
                     break;
@@ -220,14 +220,14 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
         if blks > 0 {
             // FIXME: functions have their own parameters.
             let mm = BLOCK_SIZE * (blks as usize);
-            let factors = select_siqs_factors(&fbase0, n, nfacs);
+            let factors = select_siqs_factors(&fbase0, n, nfacs, mm);
             let a_ints = select_a(&factors, a_value_count(n));
             let a0 = a_ints[0];
             let polys_per_a = 1 << (nfacs - 1);
             eprintln!("Test set M={}k A={} npolys={}", mm / 2048, a0, polys_per_a);
             // sample polynomial
             let a = &prepare_a(&factors, &a0, &fbase0, -(mm as i64) / 2);
-            let s = SieveSIQS::new(n, &fbase0, 0, use_double, -(mm as i64) / 2);
+            let s = SieveSIQS::new(n, &fbase0, 0, use_double, mm);
             let pol = make_polynomial(&s, n, a, 0);
             eprintln!("min(P) ~ {}", pol.c);
             eprintln!(
@@ -254,7 +254,7 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
                     let factors = &factorss[idx];
                     let maxprime = fbase.bound() as u64;
                     let maxlarge: u64 = maxprime * lf as u64;
-                    let s = SieveSIQS::new(n, &fbase, maxlarge, use_double, -(mm as i64) / 2);
+                    let s = SieveSIQS::new(n, &fbase, maxlarge, use_double, mm);
                     // Measure metrics
                     let t0 = std::time::Instant::now();
                     let a = &prepare_a(factors, &aint, &fbase, -(mm as i64) / 2);
@@ -263,13 +263,13 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
                         pool.install(|| {
                             poly_idxs.par_iter().for_each(|&idx| {
                                 let pol = make_polynomial(&s, n, a, idx);
-                                siqs_sieve_poly(&s, n, a, &pol);
+                                siqs_sieve_poly(&s, a, &pol);
                             });
                         })
                     } else {
                         for idx in 0..polys_per_a {
                             let pol = make_polynomial(&s, n, a, idx);
-                            siqs_sieve_poly(&s, n, a, &pol);
+                            siqs_sieve_poly(&s, a, &pol);
                         }
                     }
                     let dt = t0.elapsed().as_secs_f64();
@@ -409,8 +409,7 @@ pub struct Factors<'a> {
 // Select factors of generated A values. It is enough to select about
 // twice the number of expected factors in A, because the number of
 // combinations is large enough to generate values close to the target.
-pub fn select_siqs_factors<'a>(fb: &'a FBase, n: &'a Uint, nfacs: usize) -> Factors<'a> {
-    let mm = interval_size(n);
+pub fn select_siqs_factors<'a>(fb: &'a FBase, n: &'a Uint, nfacs: usize, mm: usize) -> Factors<'a> {
     // For interval [-M,M] the target is sqrt(2N) / M, see [Pomerance].
     // Don't go below 2000 for extremely small numbers.
     let target = max(
@@ -798,8 +797,8 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
 
 // Sieving process
 
-fn siqs_sieve_poly(s: &SieveSIQS, n: &Uint, a: &A, pol: &Poly) {
-    let mm = interval_size(n) as usize;
+fn siqs_sieve_poly(s: &SieveSIQS, a: &A, pol: &Poly) {
+    let mm = s.interval_size;
     let nblocks: usize = mm / BLOCK_SIZE;
     if DEBUG {
         eprintln!(
@@ -838,6 +837,7 @@ fn siqs_sieve_poly(s: &SieveSIQS, n: &Uint, a: &A, pol: &Poly) {
 
 pub struct SieveSIQS<'a> {
     pub n: &'a Uint,
+    pub interval_size: usize,
     pub fbase: &'a FBase,
     pub maxlarge: u64,
     pub use_double: bool,
@@ -852,8 +852,9 @@ impl<'a> SieveSIQS<'a> {
         fb: &'a FBase,
         maxlarge: u64,
         use_double: bool,
-        start_offset: i64,
+        interval_size: usize,
     ) -> Self {
+        let start_offset: i64 = -(interval_size as i64) / 2;
         let mut offsets = vec![0u32; (fb.len() + 15) & !15].into_boxed_slice();
         assert_eq!(offsets.len() % 16, 0);
         for idx in 0..fb.len() {
@@ -862,6 +863,7 @@ impl<'a> SieveSIQS<'a> {
         }
         SieveSIQS {
             n,
+            interval_size,
             fbase: fb,
             rels: RwLock::new(RelationSet::new(*n, maxlarge)),
             maxlarge,
@@ -1006,7 +1008,7 @@ fn test_poly_a() {
         let fb_size = params::factor_base_size(n);
         let fb = fbase::FBase::new(*n, fb_size);
 
-        let facs = select_siqs_factors(&fb, n, nfacs as usize);
+        let facs = select_siqs_factors(&fb, n, nfacs as usize, 1 << 20);
         let target = Uint::cast_from(facs.target);
 
         let a_vals = select_a(&facs, want);
@@ -1064,7 +1066,7 @@ fn test_poly_prepare() {
     let s = SieveSIQS::new(&n, &fb, fb.bound() as u64, false, 0);
     // Prepare A values
     // Only test 10 A values and 35 polynomials per A.
-    let f = select_siqs_factors(&fb, &n, 9);
+    let f = select_siqs_factors(&fb, &n, 9, 1 << 20);
     let a_ints = select_a(&f, 10);
     for a_int in &a_ints {
         let a = prepare_a(&f, a_int, &fb, 0);

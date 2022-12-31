@@ -77,7 +77,7 @@ brunch::benches! {
         let fb = fbase::FBase::new(n, 5000);
         Bench::new("prepare 50 A values for SIQS (n = 256 bits)")
         .run_seeded((&fb, &n), |(fb, n)| {
-            let f = siqs::select_siqs_factors(fb, n, 9);
+            let f = siqs::select_siqs_factors(fb, n, 9, 1 << 20);
             let a_ints = siqs::select_a(&f, 40);
             for a_int in &a_ints {
                 siqs::prepare_a(&f, a_int, fb, 0);
@@ -89,7 +89,7 @@ brunch::benches! {
         // It is 6 times faster than MPQS preparation.
         let n = Uint::from_str(PQ256).unwrap();
         let fb = fbase::FBase::new(n, 5000);
-        let f = siqs::select_siqs_factors(&fb, &n, 9);
+        let f = siqs::select_siqs_factors(&fb, &n, 9, 1 << 20);
         let a_ints = siqs::select_a(&f, 40);
         let a_s: Vec<_> = a_ints.iter().map(|a_int| siqs::prepare_a(&f, a_int, &fb, 0)).collect();
         let s = siqs::SieveSIQS::new(&n, &fb , fb.bound() as u64, false, 0);
