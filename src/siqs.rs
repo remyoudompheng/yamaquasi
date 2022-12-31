@@ -755,6 +755,8 @@ pub struct Poly {
     a: Uint,
     b: Uint,
     c: Int,
+    // Rounded root of the polynomial
+    root: u32,
     // Precomputed roots
     r1p: Box<[u32]>,
     r2p: Box<[u32]>,
@@ -921,6 +923,16 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
     }
     // Each r1p,r2p[idx] is a root of P(x+offset) modulo p[idx]
 
+    // The rounded root may be wrong by an offset |B/A| which is bounded
+    // by 2 * #factors(A)
+    // This is because we don't reduce B modulo A.
+    let root = if polytype == PolyType::Type1 {
+        (arith::isqrt(*n) / a.a).low_u64()
+    } else {
+        (arith::isqrt(*n) / (a.a << 1) as Uint).low_u64()
+    };
+    assert!((root as usize) < s.interval_size / 2);
+
     // n has at most 512 bits, and b < sqrt(n)
     assert!(b.bits() < 256);
     Poly {
@@ -928,6 +940,7 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
         a: a.a,
         b,
         c,
+        root: root as u32,
         r1p,
         r2p,
         n: *s.n,
@@ -937,7 +950,7 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
 // Sieving process
 
 fn siqs_sieve_poly(s: &SieveSIQS, a: &A, pol: &Poly) {
-    let mm = s.interval_size;
+    let mm = s.interval_size as usize;
     let nblocks: usize = mm / BLOCK_SIZE;
     if DEBUG {
         eprintln!(
@@ -992,7 +1005,7 @@ impl<'a> SieveSIQS<'a> {
         use_double: bool,
         interval_size: usize,
     ) -> Self {
-        let start_offset: i64 = -(interval_size as i64) / 2;
+        let start_offset = -(interval_size as i64 / 2);
         let mut offsets = vec![0u32; (fb.len() + 15) & !15].into_boxed_slice();
         assert_eq!(offsets.len() % 16, 0);
         for idx in 0..fb.len() {
@@ -1045,8 +1058,9 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
         s.interval_size as u64 / 4
     };
     let target = s.n.bits() / 2 + msize.bits() - max_cofactor.bits();
+
     let n = s.n;
-    let (idx, facss) = st.smooths(target as u8);
+    let (idx, facss) = st.smooths(target as u8, Some(pol.root));
     for (i, facs) in idx.into_iter().zip(facss) {
         let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
         let (v, y) = pol.eval(st.offset + (i as i64));
@@ -1150,7 +1164,7 @@ fn test_poly_a() {
         let fb_size = params::factor_base_size(n);
         let fb = fbase::FBase::new(*n, fb_size);
 
-        let facs = select_siqs_factors(&fb, n, nfacs as usize, 1 << 20);
+        let facs = select_siqs_factors(&fb, n, nfacs as usize, 256 << 10);
         let target = Uint::cast_from(facs.target);
 
         let a_vals = select_a(&facs, want);
@@ -1205,7 +1219,7 @@ fn test_poly_prepare() {
     const N240: &str = "1563849171863495214507949103370077342033765608728382665100245282240408041";
     let n = Uint::from_str(N240).unwrap();
     let fb = fbase::FBase::new(n, 10000);
-    let s = SieveSIQS::new(&n, &fb, fb.bound() as u64, false, 0);
+    let s = SieveSIQS::new(&n, &fb, fb.bound() as u64, false, 1 << 20);
     // Prepare A values
     // Only test 10 A values and 35 polynomials per A.
     let f = select_siqs_factors(&fb, &n, 9, 1 << 20);

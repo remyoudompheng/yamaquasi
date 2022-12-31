@@ -485,12 +485,18 @@ impl<'a> Sieve<'a> {
     }
 
     // Returns a list of block offsets and factors (as indices into the factor base).
-    pub fn smooths(&self, threshold: u8) -> (Vec<u16>, Vec<Vec<usize>>) {
+    // The threshold is given for the "ends" of the interval.
+    //
+    pub fn smooths(&self, threshold: u8, root: Option<u32>) -> (Vec<u16>, Vec<Vec<usize>>) {
         // As smallest primes have been skipped, values in self.blk
         // are smaller than they should be: subtract an upper bound for
         // the missing part from the threshold.
-        let skipbits = self.skipbits();
+        //
+        // Also subtract log(BLOCK_SIZE) to handle root.
+        let skipbits = self.skipbits() + (if root.is_some() { 15 } else { 0 });
         let threshold2 = threshold - min(skipbits, threshold as usize / 2) as u8;
+        // How many zeros in half interval size M ?
+        let mzeros = u32::leading_zeros(self.nblocks as u32 * BLOCK_SIZE as u32 / 2);
 
         let mut res: Vec<u16> = vec![];
         let thr16x = wide::u8x16::splat(threshold2 - 1);
@@ -501,9 +507,12 @@ impl<'a> Sieve<'a> {
                 let blk16 = (&self.blk[i] as *const u8) as *const [u8; 16];
                 let blk16w = wide::u8x16::new(*blk16);
                 if thr16x != blk16w.max(thr16x) {
-                    // Some element is > threshold-1
+                    // Some element is > threshold2-1
                     for j in 0..16 {
                         let mut t = (*blk16)[j];
+                        if t <= threshold2 {
+                            continue;
+                        }
                         let ij = (i + j) as u16;
                         // Now add missing log(p) for smallest primes.
                         for i in 0..self.idxskip / 2 {
@@ -517,6 +526,17 @@ impl<'a> Sieve<'a> {
                                 t += log;
                             }
                         }
+                        // Compensate for distance to root.
+                        if let Some(r) = root {
+                            let x = (ij as i32)
+                                + (self.blk_no * BLOCK_SIZE - self.nblocks * BLOCK_SIZE / 2) as i32;
+                            let dist = (x.abs() - r as i32).abs();
+                            let zeros = u32::leading_zeros(dist as u32);
+                            if zeros > mzeros {
+                                t += (zeros - mzeros) as u8;
+                            }
+                        }
+                        // Now apply requested threshold.
                         if t >= threshold {
                             res.push(ij)
                         }
@@ -738,7 +758,7 @@ fn test_sieve_block() {
     let expect: &[u16] = &[
         314, 957, 1779, 2587, 5882, 7121, 13468, 16323, 22144, 23176, 32407,
     ];
-    let (idxs, facss) = s.smooths(70);
+    let (idxs, facss) = s.smooths(70, None);
     eprintln!("sieve > 70 {:?}", idxs);
     let mut res = vec![];
     for (i, facs) in idxs.into_iter().zip(facss) {

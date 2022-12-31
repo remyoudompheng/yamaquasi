@@ -158,7 +158,7 @@ brunch::benches! {
         .run_seeded(s, |s| {
             let mut s1 = s.clone();
             s1.sieve_block();
-            let idxs = s1.smooths(70).0;
+            let idxs = s1.smooths(70, None).0;
             assert!(10 <= idxs.len() && idxs.len() <= 20);
             s1.next_block();
         })
@@ -172,7 +172,7 @@ brunch::benches! {
         .run_seeded(s, |s| {
             let mut s1 = s.clone();
             s1.sieve_block();
-            let idxs = s1.smooths(84).0;
+            let idxs = s1.smooths(84, None).0;
             assert!(10 <= idxs.len() && idxs.len() <= 20);
             s1.next_block();
         })

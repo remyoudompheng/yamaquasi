@@ -333,7 +333,7 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
     let target = s.n.bits() / 2 + magnitude - max_cofactor.bits();
     assert!(target < 256);
     let n = &s.n;
-    let (idxs, facss) = st.smooths(target as u8);
+    let (idxs, facss) = st.smooths(target as u8, None);
     let maybe_two: i64 = if s.only_odds { 2 } else { 1 };
     for (i, facs) in idxs.into_iter().zip(facss) {
         let x = if !backward {

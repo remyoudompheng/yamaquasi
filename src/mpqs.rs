@@ -535,7 +535,7 @@ fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) {
     };
     let target = s.n.bits() / 2 + mpqs_interval_logsize(&s.n) - max_cofactor.bits();
     let (pol, n, dinv, d2inv) = (s.pol, &s.n, &s.dinv, &s.d2inv);
-    let (idxs, facss) = st.smooths(target as u8);
+    let (idxs, facss) = st.smooths(target as u8, None);
     for (i, facs) in idxs.into_iter().zip(facss) {
         let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
         // Evaluate polynomial
