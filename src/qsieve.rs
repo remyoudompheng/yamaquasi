@@ -164,8 +164,10 @@ pub struct SieveQS<'a> {
 impl<'a> SieveQS<'a> {
     pub fn new(n: Uint, fbase: &'a FBase, maxlarge: u64, use_double: bool) -> Self {
         let mut nsqrt = isqrt(n);
-        let only_odds = if n.low_u64() % 4 == 1 {
-            // If n == 1 mod 4, only use odd numbers.
+        let only_odds = if n.low_u64() % 8 == 1 {
+            // If n == 1 mod 8, only use odd numbers.
+            // It could also be done for n = 1 mod 4, but it does not statistically
+            // increase the yield and results in more complicated code.
             // Make sqrt odd.
             nsqrt += Uint::from(1 - nsqrt % 2_u64);
             true
@@ -276,14 +278,14 @@ impl<'a> SieveQS<'a> {
                     };
                 }
             }
-        }
-        if s1 % 2 == 0 {
-            // s2 % 2 == 0 as well
-            s1 /= 2;
-            s2 /= 2;
-        } else {
-            s1 = (s1 + p) / 2;
-            s2 = (s2 + p) / 2;
+            if s1 % 2 == 0 {
+                // s2 % 2 == 0 as well
+                s1 /= 2;
+                s2 /= 2;
+            } else {
+                s1 = (s1 + p) / 2;
+                s2 = (s2 + p) / 2;
+            }
         }
         s1 += p - off - 1;
         s2 += p - off - 1;
