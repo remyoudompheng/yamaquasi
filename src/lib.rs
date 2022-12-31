@@ -81,17 +81,17 @@ pub fn factor(n: Uint, alg: Algo, prefs: &Preferences) -> Vec<Uint> {
             factors.push(p);
             nred /= p;
             if prefs.verbose {
-                eprintln!("Found small factor {}", p);
+                eprintln!("Found small factor {p}");
             }
         }
     }
     if nred != n && prefs.verbose {
-        eprintln!("Factoring {}", nred);
+        eprintln!("Factoring {nred}");
     }
     // Create thread pool
     let tpool: Option<rayon::ThreadPool> = prefs.threads.map(|t| {
         if prefs.verbose {
-            eprintln!("Using a pool of {} threads", t);
+            eprintln!("Using a pool of {t} threads");
         }
         rayon::ThreadPoolBuilder::new()
             .num_threads(t)
@@ -167,7 +167,7 @@ fn factor_impl(
 
     let (k, score) = fbase::select_multiplier(n);
     if prefs.verbose {
-        eprintln!("Selected multiplier {} (score {:.2}/10)", k, score);
+        eprintln!("Selected multiplier {k} (score {score:.2}/10)");
     }
     let nk = n * Uint::from(k);
     // TODO: handle the case where n is not coprime to the factor base
@@ -217,7 +217,7 @@ fn factor_impl(
                 factors.push(p)
             }
         } else if !pseudoprime(f) {
-            eprintln!("Recursively factor {}", f);
+            eprintln!("Recursively factor {f}");
             factor_impl(f, alg, prefs, factors, tpool);
         } else {
             factors.push(f);

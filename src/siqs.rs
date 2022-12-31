@@ -1118,7 +1118,7 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
         }
         let x = y.abs().to_bits() % n;
         if DEBUG {
-            eprintln!("x={} smooth {} cofactor {}", x, v, cofactor);
+            eprintln!("x={x} smooth {v} cofactor {cofactor}");
         }
         assert!(
             cofactor == 1 || cofactor > maxprime as u64,

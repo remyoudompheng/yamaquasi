@@ -41,7 +41,7 @@ fn main() {
         let q0 = U256::from_digits(words);
         let p = Uint::cast_from(nextprime(&fbase, p0 >> (256 - bits / 2)));
         let q = Uint::cast_from(nextprime(&fbase, q0 >> (256 - bits / 2)));
-        eprintln!("p={} q={} => n={}", p, q, p * q);
+        eprintln!("p={p} q={q} => n={}", p * q);
         // Factor
         let n = p * q;
         let prefs = Preferences {
@@ -54,15 +54,14 @@ fn main() {
         let alg = Algo::from_str(&mode).unwrap();
         let pq = factor(n, alg, &prefs);
         if pq.len() != 2 {
-            eprintln!("ERROR failed to factor {}={}*{}", n, p, q);
+            eprintln!("ERROR failed to factor {n}={p}*{q}");
             std::process::exit(1);
         }
         assert!(&pq == &[p, q] || &pq == &[q, p]);
         i += 1;
         let elapsed = t0.elapsed().as_secs_f64();
         eprintln!(
-            "Processed {} numbers in {:.3}s (average {:.3}s)",
-            i,
+            "Processed {i} numbers in {:.3}s (average {:.3}s)",
             elapsed,
             elapsed / (i as f64)
         );

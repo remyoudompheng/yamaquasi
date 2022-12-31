@@ -352,10 +352,10 @@ fn test_select_poly() {
     assert_eq!(a << 1, d * d);
     // B^2 = N mod 4D^2
     assert_eq!(pow_mod(b, Uint::from(2u64), d * d), n % (d * d));
-    eprintln!("D={} A={} B={}", d, a, b);
+    eprintln!("D={d} A={a} B={b}");
     // C = (N - B^2)/4D^2
     let c: Uint = (n - (b * b)) / (a << 1);
-    eprintln!("n = {}", n);
+    eprintln!("n = {n}");
     eprintln!("P = {}*x^2+{}*x-{}", a >> 1, b, c);
 
     // Check that:
@@ -367,8 +367,8 @@ fn test_select_poly() {
     // ((2A M + B)^2 - n) / 4D^2
     let pmax: Uint = ((xmax * xmax) - n) / (a << 1);
     //assert!(pmax.bits() == target.bits());
-    eprintln!("min(P) = -{}", c);
-    eprintln!("max(P) = {}", pmax);
+    eprintln!("min(P) = -{c}");
+    eprintln!("max(P) = {pmax}");
     assert_eq!(c >> (sz - 12), target >> (sz - 12));
     assert_eq!(pmax >> (sz - 12), target >> (sz - 12));
 
@@ -382,15 +382,15 @@ fn test_select_poly() {
 
     let target: Uint = isqrt(n << 1) << (mlog - 1);
     let c: Uint = (n - (b * b)) / a;
-    eprintln!("n = {}", n);
-    eprintln!("P = {}*x^2+{}*x-{}", a, b, c);
+    eprintln!("n = {n}");
+    eprintln!("P = {a}*x^2+{b}*x-{c}");
     let xmax = (a << mlog) + b;
     // ((2A M + B)^2 - n) / 4D^2
     let pmax: Uint = ((xmax * xmax) - n) / a;
     // must match target with good accuracy
     let sz = target.bits();
-    eprintln!("min(P) = -{}", c);
-    eprintln!("max(P) = {}", pmax);
+    eprintln!("min(P) = -{c}");
+    eprintln!("max(P) = {pmax}");
     assert_eq!(c >> (sz - 12), target >> (sz - 12));
     assert_eq!(pmax >> (sz - 12), target >> (sz - 12));
 

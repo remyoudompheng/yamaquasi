@@ -30,7 +30,7 @@ pub fn squfof(n: u64) -> Option<(u64, u64)> {
             }
             let b = (nsqrt + p_prev) / q;
             let p = b * q - p_prev;
-            //eprintln!("i={}, bi={} Pi={} Qi={}", i, b, p, q);
+            //eprintln!("i={i}, bi={b} Pi={p} Qi={q}");
             let qnext = if p_prev > p {
                 q_prev + b * (p_prev - p)
             } else {
@@ -61,7 +61,7 @@ pub fn squfof(n: u64) -> Option<(u64, u64)> {
             }
             let b = (nsqrt + p_prev) / q;
             let p = b * q - p_prev;
-            //eprintln!("i={}, bi={} Pi={} Qi={}", i, b, p, q);
+            //eprintln!("i={i}, bi={b} Pi={p} Qi={q}");
             let qnext = if p_prev > p {
                 q_prev + b * (p_prev - p)
             } else {
@@ -76,7 +76,7 @@ pub fn squfof(n: u64) -> Option<(u64, u64)> {
             q = qnext;
         }
         let f = Integer::gcd(&n, &p_prev);
-        //eprintln!("final p={} gcd={}", p_prev, f);
+        //eprintln!("final p={p_prev} gcd={f}");
         if f > 1 {
             assert_eq!(n % f, 0);
             return Some((f, n / f));
@@ -130,7 +130,7 @@ fn test_squfof() {
             let p = 123456789 + i * 2468;
             let q = 198765431 + j * 1590;
             let Some((x,y))  = squfof(p*q)
-                else { panic!("failed for {}*{}", p, q) };
+                else { panic!("failed for {p}*{q}") };
             assert!(x > 1 && y > 1 && x * y == p * q);
         }
     }
