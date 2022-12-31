@@ -42,6 +42,10 @@ use crate::relations::{self, Relation, RelationSet};
 use crate::sieve;
 use crate::{Int, Uint, DEBUG};
 
+// Constant B2 such that double large primes are bounded by
+// factor base bound * B1 * B2 where B1 is the single large prime factor.
+const DOUBLE_LARGE_PRIME_FACTOR: u64 = 2;
+
 pub fn siqs(
     n: &Uint,
     prefs: &crate::Preferences,
@@ -79,7 +83,10 @@ pub fn siqs(
     let maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(n));
     eprintln!("Max large prime {}", maxlarge);
     if use_double {
-        eprintln!("Max double large prime {}", maxlarge * maxprime * 2);
+        eprintln!(
+            "Max double large prime {}",
+            maxlarge * maxprime * DOUBLE_LARGE_PRIME_FACTOR
+        );
     }
 
     // Prepare packed auxiliary numbers (the Prime structure is > 64 bytes large)
@@ -278,7 +285,7 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
                     let rels = s.rels.read().unwrap();
                     eprintln!(
                         "fb={fb} B1={lf} B2={} M={}k dt={dt:2.3}s {:.2}ns/i c={} ({:.1}/s) p={} ({:.1}/s) pp={} ({:.1}/s)",
-                        if use_double { 2 } else { 0 },
+                        if use_double { DOUBLE_LARGE_PRIME_FACTOR } else { 0 },
                         mm / 2048,
                         dt * 1.0e9 / (mm as f64) / (polys_per_a as f64),
                         rels.len(),
@@ -998,7 +1005,7 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
         // the lower and upper end of the large prime range is a good
         // midpoint.
         // See [Lentra-Manasse]
-        maxlarge * maxprime * 2
+        maxlarge * maxprime * DOUBLE_LARGE_PRIME_FACTOR
     } else {
         maxlarge
     };
