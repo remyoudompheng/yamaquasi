@@ -115,11 +115,14 @@ pub const SMALL_PRIMES: &[u64] = &[
 /// Selects k such kn is a quadratic residue modulo many small primes.
 /// The scoring system is the average bit length of the smooth factor
 /// of sieved numbers.
+/// It is usually possible to obtain a score close to 10 with
+/// a reasonably small multiplier.
 pub fn select_multiplier(n: Uint) -> (u32, f64) {
     let mut best = 1;
     let mut best_score = 0.0;
-    for k in 1..100 {
+    for k in 1..200 {
         let mag = expected_smooth_magnitude(&(n * Uint::from(k)));
+        // A multiplier k increases the size of P(x) by sqrt(k)
         let mag = (mag - 0.5 * (k as f64).ln()) / std::f64::consts::LN_2;
         if mag > best_score {
             best_score = mag;
@@ -143,12 +146,22 @@ pub fn expected_smooth_magnitude(n: &Uint) -> f64 {
         let np: u64 = *n % p;
         let exp = if p == 2 {
             match *n % 8u64 {
-                // square root modulo every power of 2
-                // score is 1/2 + 1/4 + ...
-                1 => 1.0,
-                // square root modulo 2 and 4, score is 1/2 + 1/4
-                5 => 0.75,
-                // square root modulo 2, score 1/2
+                // Modulo 8:
+                // n has 4 square roots modulo 8 but also modulo 16, 32 etc.
+                // 3/2 + 1/4 + 1/8 + ... = 2
+                //
+                // When using type 2 polynomials (2Ax+B)^2-n / 4:
+                // - we only use odd (2Ax+B) => multiply score by 2
+                // - we eliminate a factor 4 => subtract 2
+                // - values are 2x smaller => add 1
+                // Final score: 2*2 - 2 + 1 = 3
+                1 => 3.0,
+                // x²-n can be divisible by 4 (half of the time) but never by 8.
+                // When using a type 2 polynomial, the factor 4 is already eliminated
+                // but there is an additional score 1 because polynomial values are 2x smaller.
+                5 => 1.0,
+                // x²-n can never be divisible by 4.
+                // It is divisible by 2 half of the time.
                 3 | 7 => 0.5,
                 _ => 0.0,
             }

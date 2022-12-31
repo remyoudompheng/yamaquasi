@@ -167,7 +167,7 @@ fn factor_impl(
 
     let (k, score) = fbase::select_multiplier(n);
     if prefs.verbose {
-        eprintln!("Selected multiplier {} (score {:.2}/8)", k, score);
+        eprintln!("Selected multiplier {} (score {:.2}/10)", k, score);
     }
     let nk = n * Uint::from(k);
     // TODO: handle the case where n is not coprime to the factor base

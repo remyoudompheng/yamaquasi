@@ -74,6 +74,9 @@ pub fn qsieve(
             maxlarge * fbase.bound() as u64 * 2
         );
     }
+    if qs.only_odds {
+        eprintln!("N is 1 mod 4, only odd numbers will be sieved");
+    }
 
     // These counters are actually not accessed concurrently.
     let fwd_offset = AtomicI64::new(0i64);
@@ -151,6 +154,7 @@ pub struct SieveQS<'a> {
     // Precomputed nsqrt_mods modulo the factor base.
     nsqrt_mods: Vec<u32>,
     fbase: &'a FBase,
+    only_odds: bool,
 
     maxlarge: u64,
     use_double: bool,
@@ -159,7 +163,15 @@ pub struct SieveQS<'a> {
 
 impl<'a> SieveQS<'a> {
     pub fn new(n: Uint, fbase: &'a FBase, maxlarge: u64, use_double: bool) -> Self {
-        let nsqrt = isqrt(n);
+        let mut nsqrt = isqrt(n);
+        let only_odds = if n.low_u64() % 4 == 1 {
+            // If n == 1 mod 4, only use odd numbers.
+            // Make sqrt odd.
+            nsqrt += Uint::from(1 - nsqrt % 2_u64);
+            true
+        } else {
+            false
+        };
         let nsqrt_mods: Vec<u32> = fbase
             .divs
             .iter()
@@ -169,8 +181,9 @@ impl<'a> SieveQS<'a> {
         SieveQS {
             n,
             nsqrt,
-            fbase,
             nsqrt_mods,
+            fbase,
+            only_odds,
             maxlarge,
             use_double,
             rels: RwLock::new(RelationSet::new(n, maxlarge)),
@@ -193,8 +206,36 @@ impl<'a> SieveQS<'a> {
         let Prime { p, r, div } = self.fbase.prime(pidx);
         let base = self.nsqrt_mods[pidx] as u64;
         let off: u64 = div.modi64(offset);
-        let mut s1 = r + 2 * p - off - base;
-        let mut s2 = 3 * p - r - off - base;
+        let mut s1 = 2 * p + r - base;
+        let mut s2 = 2 * p - r - base;
+        // If we are in "only odds" mode, the polynomial is
+        // not (R + x)^2 - n but (R + 2x)^2 - n so the roots
+        // must be divided by 2.
+        if self.only_odds {
+            if p == 2 {
+                if base == self.n.low_u64() % 2 {
+                    return SievePrime {
+                        p: 2,
+                        offsets: [Some(0), Some(1)],
+                    };
+                } else {
+                    return SievePrime {
+                        p: 2,
+                        offsets: [None, None],
+                    };
+                }
+            }
+            if s1 % 2 == 0 {
+                // s2 % 2 == 0 as well
+                s1 /= 2;
+                s2 /= 2;
+            } else {
+                s1 = (s1 + p) / 2;
+                s2 = (s2 + p) / 2;
+            }
+        }
+        s1 += p - off;
+        s2 += p - off;
         while s1 >= p {
             s1 -= p
         }
@@ -213,11 +254,39 @@ impl<'a> SieveQS<'a> {
 
     fn prepare_prime_bck(&self, pidx: usize, offset: i64) -> SievePrime {
         let Prime { p, r, div } = self.fbase.prime(pidx);
-        // Return r such that nsqrt - (r + 1) is a root of n.
+        // Return r such that nsqrt - 2(r + 1) is a root of n.
         let base = self.nsqrt_mods[pidx] as u64;
         let off: u64 = div.modi64(offset);
-        let mut s1 = 2 * p + base - r - off - 1;
-        let mut s2 = p + base + r - off - 1;
+        let mut s1 = 2 * p + base - r;
+        let mut s2 = 2 * p + base + r;
+        // If we are in "only odds" mode, the polynomial is
+        // not (R + x)^2 - n but (R + 2x)^2 - n so the roots
+        // must be divided by 2.
+        if self.only_odds {
+            if p == 2 {
+                if base == self.n.low_u64() % 2 {
+                    return SievePrime {
+                        p: 2,
+                        offsets: [Some(0), Some(1)],
+                    };
+                } else {
+                    return SievePrime {
+                        p: 2,
+                        offsets: [None, None],
+                    };
+                }
+            }
+        }
+        if s1 % 2 == 0 {
+            // s2 % 2 == 0 as well
+            s1 /= 2;
+            s2 /= 2;
+        } else {
+            s1 = (s1 + p) / 2;
+            s2 = (s2 + p) / 2;
+        }
+        s1 += p - off - 1;
+        s2 += p - off - 1;
         while s1 >= p {
             s1 -= p
         }
@@ -256,17 +325,19 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
     } else {
         maxlarge
     };
-    let magnitude =
-        u64::BITS - u64::leading_zeros(std::cmp::max(st.offset.abs() as u64, len as u64));
+    let magnitude = u64::BITS
+        - u64::leading_zeros(std::cmp::max(st.offset.abs() as u64, len as u64))
+        + (if s.only_odds { 1 } else { 0 });
     let target = s.n.bits() / 2 + magnitude - max_cofactor.bits();
     assert!(target < 256);
     let n = &s.n;
     let (idxs, facss) = st.smooths(target as u8);
+    let maybe_two: i64 = if s.only_odds { 2 } else { 1 };
     for (i, facs) in idxs.into_iter().zip(facss) {
         let x = if !backward {
-            Int::from_bits(s.nsqrt) + Int::from(offset as i64 + i as i64)
+            Int::from_bits(s.nsqrt) + Int::from(maybe_two * (offset as i64 + i as i64))
         } else {
-            Int::from_bits(s.nsqrt) - Int::from(offset as i64 + i as i64 + 1)
+            Int::from_bits(s.nsqrt) - Int::from(maybe_two * (offset as i64 + i as i64 + 1))
         };
         let candidate: Int = x * x - Int::from_bits(*n);
         let mut factors: Vec<(i64, u64)> = vec![];
@@ -297,11 +368,22 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
         if cofactor > max_cofactor {
             continue;
         }
-        let pq = fbase::try_factor64(None, cofactor);
-        if pq.is_none() && cofactor > maxlarge {
-            continue;
-        }
-
+        let pq = if cofactor > maxprime * maxprime {
+            // Possibly a double large prime
+            let pq = fbase::try_factor64(None, cofactor);
+            match pq {
+                Some((p, q)) if p > maxlarge || q > maxlarge => continue,
+                None if cofactor > maxlarge => continue,
+                _ => pq,
+            }
+        } else {
+            // Must be prime
+            debug_assert!(!fbase::certainly_composite(cofactor));
+            if cofactor > maxlarge {
+                continue;
+            }
+            None
+        };
         //println!("i={} smooth {} cofactor {}", i, cabs, cofactor);
         let rel = Relation {
             x: x.abs().to_bits(),

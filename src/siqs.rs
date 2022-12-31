@@ -15,6 +15,16 @@
 //! are such that N has 2^k modular square roots modulo N
 //! which can be computed from the factor base data through the Chinese remainder
 //! theorem.
+//!
+//! Just like MPQS (see [Silverman])
+//! there are two types of polynomials:
+//! type 1 (Ax^2+2Bx+C) = (Ax+B)^2/A mod N where B^2-AC=N
+//! => always a valid choice, A=sqrt(2N)/M max value sqrt(N)M
+//!
+//! type 2 (Ax^2+Bx+C) = (2Ax+B)^2/4A mod N where B^2-4AC=N
+//! => only valid if N=1 mod 4, A=sqrt(N/2)/M max value sqrt(N)M/2
+//! If N=5 mod 8 all polynomial values will be odd.
+//! If N=1 mod 8 all polynomial values will be even.
 
 use std::cmp::max;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -182,7 +192,7 @@ pub fn siqs(
 pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
     // Prepare central parameters and A values.
     let (k, score) = fbase::select_multiplier(n);
-    eprintln!("Using fixed multiplier {} (score {:.2}/8)", k, score);
+    eprintln!("Using fixed multiplier {} (score {:.2}/10)", k, score);
     let n = &(n * Uint::from(k));
 
     let fb0 = params::factor_base_size(n);
@@ -229,13 +239,8 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
             let a = &prepare_a(&factors, &a0, &fbase0, -(mm as i64) / 2);
             let s = SieveSIQS::new(n, &fbase0, 0, use_double, mm);
             let pol = make_polynomial(&s, n, a, 0);
-            eprintln!("min(P) ~ {}", pol.c);
-            eprintln!(
-                "max(P) ~ {}",
-                Int::cast_from(pol.a) * Int::from(mm * mm / 4)
-                    + Int::cast_from(pol.b) * Int::from(mm)
-                    + pol.c
-            );
+            eprintln!("min(P) ~ {}", pol.eval(0).0);
+            eprintln!("max(P) ~ {}", pol.eval(mm as i64 / 2).0);
             mms.push(mm);
             factorss.push(factors);
             a_s.push(a0);
@@ -406,15 +411,33 @@ pub struct Factors<'a> {
     pub inverses: Vec<Vec<u32>>,
 }
 
+impl<'a> Factors<'a> {
+    fn polytype(&self) -> PolyType {
+        if *self.n % 4u64 == 1 {
+            PolyType::Type2
+        } else {
+            PolyType::Type1
+        }
+    }
+}
+
 // Select factors of generated A values. It is enough to select about
 // twice the number of expected factors in A, because the number of
 // combinations is large enough to generate values close to the target.
 pub fn select_siqs_factors<'a>(fb: &'a FBase, n: &'a Uint, nfacs: usize, mm: usize) -> Factors<'a> {
     // For interval [-M,M] the target is sqrt(2N) / M, see [Pomerance].
+    // Note that if N=1 mod 4, the target can be sqrt(N/2)/M
+    // giving smaller numbers.
     // Don't go below 2000 for extremely small numbers.
     let target = max(
         Uint::from(2000u64),
-        arith::isqrt(n << 1) / Uint::from(mm as u64 / 2),
+        if *n % 4u64 == 1 {
+            // Type 2
+            arith::isqrt(n >> 1) / Uint::from(mm as u64 / 2)
+        } else {
+            // Type 1
+            arith::isqrt(n << 1) / Uint::from(mm as u64 / 2)
+        },
     );
     let idx = fb
         .primes
@@ -428,8 +451,9 @@ pub fn select_siqs_factors<'a>(fb: &'a FBase, n: &'a Uint, nfacs: usize, mm: usi
         idx - nfacs..idx + max(nfacs, 6)
     };
     // Make sure that selected factors don't divide n.
+    // Also never take the first prime (usually 2).
     let selection: Vec<Prime> = selected_idx
-        .filter(|&i| i < fb.len() && fb.div(i).mod_uint(n) != 0)
+        .filter(|&i| i > 0 && i < fb.len() && fb.div(i).mod_uint(n) != 0)
         .map(|i| fb.prime(i))
         .collect();
     // Precompute inverses
@@ -460,6 +484,9 @@ pub fn select_siqs_factors<'a>(fb: &'a FBase, n: &'a Uint, nfacs: usize, mm: usi
 /// The square roots are sum(CRT[j] b[j]) with 2 choices for each b[j].
 /// Precompute CRT[j] b[j] modulo the factor base (F vectors)
 /// then combine them for each polynomial (faster than computing 2^F vectors).
+///
+/// Beware: for type 2 polynomials (Ax^2+Bx+C)
+/// the roots are: (±r - B) / 2A
 pub struct A<'a> {
     a: Uint,
     factors: Vec<Prime<'a>>,
@@ -595,8 +622,13 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase, start_offset: i64
     for pidx in 0..fbase.len() {
         let p = fbase.p(pidx);
         let div = fbase.div(pidx);
-        let amod = div.mod_uint(a);
-        if amod == 0 {
+        let amod = if f.polytype() == PolyType::Type1 {
+            div.mod_uint(a)
+        } else {
+            div.mod_uint(&(a << 1))
+        };
+        // We have made sure that 2 never divides A.
+        if amod == 0 && p != 2 {
             factors_idx.push(pidx);
         }
         ainv.push(arith::inv_mod64(amod, p as u64).unwrap_or(1) as u32);
@@ -610,11 +642,17 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase, start_offset: i64
         rp[pidx] = pdiv.divmod64(ainv[pidx] as u64 * r as u64).1 as u32;
     }
     // Compute basic roots
+    // For type 2 polynomials we require that B is odd!
+    // To achieve that, choose roots all having the same parity (odd for i=0, even for i>0)
     let mut roots = vec![];
     for i in 0..afactors.len() {
-        let r1 = afactors[i].1.r;
-        let r2 = afactors[i].1.p - afactors[i].1.r;
-        roots.push([(crt[i] * Uint::from(r1)) % a, (crt[i] * Uint::from(r2)) % a]);
+        let r = (crt[i] * Uint::from(afactors[i].1.r)) % a;
+        let parity = (r % 2_u64) + (if i == 0 { 1 } else { 0 });
+        if parity % 2 == 1 {
+            roots.push([a - r, a + r])
+        } else {
+            roots.push([r, (a << 1) - r])
+        }
     }
     // Compute roots mod p.
     // We need 16(l/4) + (2^(l%4)) vectors.
@@ -663,19 +701,57 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase, start_offset: i64
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum PolyType {
+    Type1,
+    Type2,
+}
+
 #[derive(Debug)]
 pub struct Poly {
+    kind: PolyType,
     a: Uint,
     b: Uint,
     c: Int,
     // Precomputed roots
     r1p: Box<[u32]>,
     r2p: Box<[u32]>,
+    n: Uint,
+}
+
+impl Poly {
+    // Returns v, y such that:
+    // P(x) = v
+    // y^2 = A P(x) mod n
+    // For type 1, y = Ax + B
+    // For type 2, y = (Ax + B/2)
+    fn eval(&self, x: i64) -> (Int, Int) {
+        let x = Int::from(x);
+        if self.kind == PolyType::Type1 {
+            // Evaluate polynomial Ax^2 + 2Bx+ C
+            let ax_b = Int::from_bits(self.a) * x + Int::from_bits(self.b);
+            let v = (ax_b + Int::from_bits(self.b)) * x + self.c;
+            (v, ax_b)
+        } else {
+            // Evaluate polynomial Ax^2 + Bx+ C
+            let ax = Int::from_bits(self.a) * x;
+            let v = (ax + Int::from_bits(self.b)) * x + self.c;
+            // Build ax + (n-b)//2
+            let b_half = (self.b + self.n) >> 1;
+            let y = ax + Int::from_bits(b_half);
+            (v, y)
+        }
+    }
 }
 
 /// Given coefficients A and B, compute all roots (Ax+B)^2=N
 /// modulo the factor base, computing (r - B)/A mod p
 pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
+    let polytype = if *s.n % 4_u64 == 1 {
+        PolyType::Type2
+    } else {
+        PolyType::Type1
+    };
     let pol_idx = pol_idx << 1;
     // Combine roots: don't reduce modulo n.
     // This allows combining the roots modulo the factor base,
@@ -684,6 +760,9 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
     let mut b = Uint::ZERO;
     for i in 0..a.factors.len() {
         b += a.roots[i][(pol_idx >> i) & 1];
+    }
+    if polytype == PolyType::Type2 {
+        assert!(b % 2_u64 == 1);
     }
     // Also combine roots mod p
     let mut bmodp = vec![0u32; a.roots_mod_p[0].len()].into_boxed_slice();
@@ -757,14 +836,29 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
         idx += 8;
     }
 
-    debug_assert!((b * b) % a.a == n % a.a);
     // Compute c such that b^2 - ac = N
     // (Ax+B)^2 - n = A(Ax^2 + 2Bx + C)
-    let c = (Int::from_bits(b * b) - Int::from_bits(*n)) / Int::from_bits(a.a);
-    debug_assert!(Int::from_bits(*n) == Int::from_bits(b * b) - c * Int::from_bits(a.a));
+    let c = if polytype == PolyType::Type1 {
+        debug_assert!((b * b) % a.a == n % a.a);
+        (Int::from_bits(b * b) - Int::from_bits(*n)) / Int::from_bits(a.a)
+    } else {
+        debug_assert!((b * b) % (a.a << 2) == n % (a.a << 2));
+        (Int::from_bits(b * b) - Int::from_bits(*n)) / Int::from_bits(a.a << 2)
+    };
+
+    // Manually repair roots modulo 2 for Type 2
+    if polytype == PolyType::Type2 && s.fbase.p(0) == 2 {
+        // A and B are odd. If C is even, 0 and 1 are roots.
+        if c.abs().to_bits() % 2_u64 == 0 {
+            r1p[0] = 0;
+            r2p[0] = 1;
+        }
+    }
 
     // Special case for divisors of A.
     // poly % p = 2Bx + C, root is -C/2B
+    // type2:
+    // poly % p = Bx + C, root is -C/B
     for &pidx in a.factors_idx.iter() {
         let pidx = pidx as usize;
         let div = &s.fbase.div(pidx);
@@ -774,9 +868,10 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
         if !c.is_negative() {
             cp = p as u64 - cp;
         }
-        let r = div
-            .divmod64(cp * arith::inv_mod64(2 * bp, p as u64).unwrap())
-            .1 as u32;
+        let multiplier = if polytype == PolyType::Type1 { 2 } else { 1 };
+        let Some(binv) = arith::inv_mod64(multiplier * bp, p as u64)
+            else { unreachable!("no inverse of b={bp} mod p={p}") };
+        let r = div.divmod64(cp * binv).1 as u32;
         let off = s.offset_modp[pidx];
         let r = div.div31.modu31(r + p as u32 - off);
         r1p[pidx] = r;
@@ -787,11 +882,13 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
     // n has at most 512 bits, and b < sqrt(n)
     assert!(b.bits() < 256);
     Poly {
+        kind: polytype,
         a: a.a,
         b,
         c,
         r1p,
         r2p,
+        n: *s.n,
     }
 }
 
@@ -809,7 +906,6 @@ fn siqs_sieve_poly(s: &SieveSIQS, a: &A, pol: &Poly) {
             nblocks
         );
     }
-
     // Construct initial state.
     let start_offset: i64 = -(mm as i64) / 2;
     let end_offset: i64 = (mm as i64) / 2;
@@ -897,16 +993,21 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
     } else {
         maxlarge
     };
-    let interval_m = interval_size(s.n) as u64 / 2;
-    let target = s.n.bits() / 2 + (interval_m).bits() - max_cofactor.bits();
+    // Polynomial values range from [-m sqrt(2n), m sqrt(2n)] so they have variable size.
+    // The smallest values are about A which is sqrt(2n) / m
+    // If the target is too low, the sieve will be slow.
+    let msize = if pol.kind == PolyType::Type1 {
+        s.interval_size as u64 / 2
+    } else {
+        // Values are smaller (M/2 sqrt(n)) for type 2.
+        s.interval_size as u64 / 4
+    };
+    let target = s.n.bits() / 2 + msize.bits() - max_cofactor.bits();
     let n = s.n;
     let (idx, facss) = st.smooths(target as u8);
     for (i, facs) in idx.into_iter().zip(facss) {
         let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
-        // Evaluate polynomial Ax^2 + 2Bx+ C
-        let x = Int::from(st.offset + (i as i64));
-        let ax_b = Int::from_bits(pol.a) * x + Int::from_bits(pol.b);
-        let v = (ax_b + Int::from_bits(pol.b)) * x + pol.c;
+        let (v, y) = pol.eval(st.offset + (i as i64));
         // xrel^2 = (Ax+B)^2 = A * v mod n
         // v is never divisible by A
         if v.is_negative() {
@@ -959,8 +1060,7 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
                 factors.push((f.p as i64, 1));
             }
         }
-        let xrel = ax_b.abs().to_bits() % n;
-        let xrel = if v.is_negative() { n - xrel } else { xrel };
+        let x = y.abs().to_bits() % n;
         if DEBUG {
             eprintln!("x={} smooth {} cofactor {}", x, v, cofactor);
         }
@@ -970,7 +1070,7 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
             cofactor
         );
         let rel = Relation {
-            x: xrel,
+            x,
             cofactor,
             factors,
             cyclelen: 1,
@@ -1027,9 +1127,9 @@ fn test_poly_a() {
             d2 - 100.0
         );
         if n.bits() < 150 {
-            // 1% tolerance
-            assert!(d1 - 100.0 < 1.0);
-            assert!(d2 - 100.0 < 1.0);
+            // 2% tolerance
+            assert!(d1 - 100.0 < 2.0);
+            assert!(d2 - 100.0 < 2.0);
             assert!(a_vals.len() >= want);
         } else {
             assert!(d1 - 100.0 < 0.5);
@@ -1088,23 +1188,27 @@ fn test_poly_prepare() {
             let idx = 7 * idx;
             // Generate and check each polynomial.
             let pol = make_polynomial(&s, &n, &a, idx);
-            let (pa, pb, pc) = (pol.a, pol.b, pol.c);
+            let (pa, pb) = (pol.a, pol.b);
             // B is a square root of N modulo A.
             assert_eq!((pb * pb) % pa, n % pa);
             // Check that (Ax+B)^2 - n = A(Ax^2+2Bx+C)
             for x in [1u64, 100, 50000] {
-                let u = pa * Uint::from(x) + pb;
-                let u = Int::from_bits(u * u) - Int::from_bits(n);
-                let v = pa * Uint::from(x * x) + (pb << 1) * Uint::from(x);
-                let v = Int::from_bits(v) + pc;
-                assert_eq!(u, Int::from_bits(pa) * v);
+                let (v, y) = pol.eval(x as i64);
+                let u = y * y;
+                if pol.kind == PolyType::Type1 {
+                    assert_eq!(u, Int::from_bits(pa) * v);
+                } else {
+                    // Type2: (Ax+B/2)^2 - n = A(Ax^2 + Bx + (B^2-4n)/4A)
+                    assert_eq!(
+                        u % Int::cast_from(n),
+                        (Int::from_bits(pa) * v).rem_euclid(Int::cast_from(n))
+                    );
+                }
             }
             for pidx in 0..fb.len() {
                 // Roots are roots of Ax^2+2Bx+C modulo p.
                 for r in [pol.r1p[pidx], pol.r2p[pidx]] {
-                    let r = r as u64;
-                    let v = pa * Uint::from(r * r) + pb * Uint::from(2 * r);
-                    let v = Int::from_bits(v) + pc;
+                    let v = pol.eval(r as i64).0;
                     assert_eq!(
                         v.abs().to_bits() % (fb.p(pidx) as u64),
                         0,

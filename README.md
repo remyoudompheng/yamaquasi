@@ -111,6 +111,18 @@ for SIQS polynomials is not used (instead a base 16 representation avoids excess
 initialization cost), and the formulas avoiding a few inner products in Block Lanczos
 are not implemented.
 
+## Case of numbers n=8k+1
+
+The numbers such that `n % 8 == 1` are special because they have modular square
+roots modulo every power of 2, providing additional factors, and because
+`x^2 - n` is divisible by 8 for every odd `x`.
+
+In MPQS and SIQS this is used by polynomials `Ax²+Bx+C = ((2Ax+B)²-n)/4`
+whose values are both twice smaller and always even.
+
+In classical QS this is used by sieving only odd values so that
+`(2k+1)²-n` is always divisible by 8.
+
 ## Integer arithmetic
 
 Since it is unreasonable to use the quadratic sieve to factor numbers larger
