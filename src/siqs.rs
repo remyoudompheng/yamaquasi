@@ -47,13 +47,10 @@ pub fn siqs(
     prefs: &crate::Preferences,
     tpool: Option<&rayon::ThreadPool>,
 ) -> Vec<Relation> {
+    let use_double = prefs.use_double.unwrap_or(n.bits() > 256);
     // Choose factor base. Sieve twice the number of primes
     // (n will be a quadratic residue for only half of them)
-    let fb = prefs.fb_size.unwrap_or(params::factor_base_size(&n));
-    // Reduce factor base size when using large double primes
-    // since they will cover the large prime space.
-    let use_double = prefs.use_double.unwrap_or(n.bits() > 256);
-    let fb = if use_double { fb / 2 } else { fb };
+    let fb = prefs.fb_size.unwrap_or(fb_size(n, use_double));
     let fbase = FBase::new(*n, fb);
     eprintln!("Smoothness bound {}", fbase.bound());
     eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls(),);
@@ -301,7 +298,19 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
 // m = number of needed A values
 // k = number of factors in each A
 // A is around sqrt(2N)/M
-//
+
+fn fb_size(n: &Uint, use_double: bool) -> u32 {
+    // When using type 2 polynomials, values will be twice smaller
+    // as if the size of n was down by 2 bits.
+    let mut sz = params::factor_base_size(&if n.low_u64() % 8 == 1 { n >> 2 } else { *n });
+    // Reduce factor base size when using large double primes
+    // since they will cover the large prime space.
+    if use_double {
+        sz /= 2;
+    }
+    sz
+}
+
 // Number of polynomials: m * 2^(k-1)
 // 120..160 bits => k=7 (factors 8-10 bits)
 // 160..200 bits => k=8 (factors 10-11 bits)
