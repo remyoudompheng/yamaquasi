@@ -9,6 +9,7 @@ pub mod params;
 pub mod relations;
 
 // Implementations
+pub mod ecm;
 pub mod mpqs;
 pub mod pollard_pm1;
 pub mod qsieve;
@@ -127,6 +128,17 @@ fn factor_impl(
     } else if pseudoprime(n) {
         factors.push(n);
         return;
+    }
+    if n.bits() > 200 {
+        if let Algo::Auto = alg {
+            // Only in automatic mode, for large inputs, ECM can be useful.
+            if let Some((a, b)) = ecm::ecm_auto(n) {
+                factor_impl(a.into(), alg, prefs, factors, tpool);
+                eprintln!("Recursively factor {b}");
+                factor_impl(b.into(), alg, prefs, factors, tpool);
+                return;
+            }
+        }
     }
     // Select algorithm
     let alg_real = if let Algo::Auto = alg {

@@ -164,3 +164,12 @@ the optimized matrices `Di`, `Ei`, `Fi` from Montgomery's article that avoid
 several inner products of blocks.
 The implementation uses width 64 blocks with `u64` word type.
 
+## ECM implementation
+
+To make it easier to factorize general numbers (not necessarily balanced
+products of 2 primes), a basic implementation of ECM using Edwards curves
+is provided. It partially follows the EECM paper (Bernstein-Birkner-Lange-Peters)
+available at https://eecm.cr.yp.to/index.html
+
+Because the quadratic sieve is the main focus, the ECM is run with very
+low parameters and usually catches several factors up to 12 digits.
