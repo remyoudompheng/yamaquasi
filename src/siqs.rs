@@ -73,8 +73,6 @@ pub fn siqs(
         a_quality(&a_ints) * 100.0
     );
 
-    let done = AtomicBool::new(false);
-
     let maxprime = fbase.bound() as u64;
     let maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(n));
     eprintln!("Max large prime {}", maxlarge);
@@ -85,55 +83,58 @@ pub fn siqs(
         );
     }
 
-    // Prepare packed auxiliary numbers (the Prime structure is > 64 bytes large)
-    // They are constant over the whole process.
-    // We need for each p the in factor base:
-    // * interval start offset mod p (24 bits)
-    // * prime number p (24 bits)
-    // * multiplier and shift for Divider31 (32 + 8 bits)
-    // We pack them as (u64, u32)
-    //
-    let start_offset: i64 = -(mm as i64) / 2;
     let s = SieveSIQS::new(n, &fbase, maxlarge, use_double, mm as usize);
 
-    let polys_done = AtomicUsize::new(0);
-    let gap = AtomicUsize::new(fbase.len());
-    let target = AtomicUsize::new(fbase.len() * 8 / 10);
+    // When using multiple threads, each thread will sieve a different A
+    // to avoid breaking parallelism during 'prepare_a'.
+    //
+    // To avoid wasting CPU on very small inputs, completion is checked after
+    // each polynomial to terminate the loop early.
 
-    let handle_result = || -> bool {
-        let rlen = {
-            let rels = s.rels.read().unwrap();
-            rels.len()
-        };
-
-        polys_done.fetch_add(1, Ordering::SeqCst);
-
-        if rlen >= target.load(Ordering::Relaxed) {
-            // unlikely
-            let rgap = {
-                let rels = s.rels.read().unwrap();
-                rels.gap()
-            };
-            gap.store(rgap, Ordering::Relaxed);
-            if rgap == 0 {
-                eprintln!("Found enough relations");
-                done.store(true, Ordering::Relaxed);
-                return true;
-            } else {
-                eprintln!("Need {} additional relations", rgap);
-                target.store(
-                    rlen + rgap + std::cmp::min(10, fb as usize / 4),
-                    Ordering::SeqCst,
-                );
+    if let Some(pool) = tpool.as_ref() {
+        pool.install(|| {
+            a_ints.par_iter().for_each(|&a_int| {
+                if s.gap.load(Ordering::Relaxed) == 0 {
+                    return;
+                }
+                if s.done.load(Ordering::Relaxed) {
+                    return;
+                }
+                sieve_a(&s, &a_int, &factors);
+            });
+        });
+    } else {
+        for a_int in a_ints {
+            sieve_a(&s, &a_int, &factors);
+            if s.gap.load(Ordering::Relaxed) == 0 {
+                break;
+            }
+            if s.done.load(Ordering::Relaxed) {
+                break;
             }
         }
-        false
-    };
+    }
+    if s.gap.load(Ordering::Relaxed) != 0 {
+        panic!("Internal error: not enough smooth numbers with selected parameters");
+    }
+    let mut rels = s.rels.into_inner().unwrap();
+    // Log final progress
+    let pdone = s.polys_done.load(Ordering::Relaxed);
+    rels.log_progress(format!(
+        "Sieved {}M {} polys",
+        (pdone as u64 * mm as u64) >> 20,
+        pdone,
+    ));
+    if rels.len() > fbase.len() + relations::MIN_KERNEL_SIZE {
+        rels.truncate(fbase.len() + relations::MIN_KERNEL_SIZE)
+    }
+    rels.into_inner()
+}
 
-    let poly_idxs: Vec<usize> = (0..polys_per_a).collect();
-
-    for a_int in a_ints.iter() {
-        let a = &prepare_a(&factors, a_int, &fbase, start_offset);
+fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {
+    let mm = s.interval_size;
+    let a = &prepare_a(&factors, a_int, &s.fbase, -(mm as i64) / 2);
+    if crate::DEBUG {
         eprintln!(
             "Sieving A={} (factors {})",
             a.a,
@@ -143,49 +144,52 @@ pub fn siqs(
                 .collect::<Vec<_>>()[..]
                 .join("*")
         );
+    }
+    let nfacs = a.factors.len();
+    let polys_per_a = 1 << (nfacs - 1);
+    for idx in 0..polys_per_a {
+        if s.done.load(Ordering::Relaxed) {
+            // Interrupt early.
+            return;
+        }
 
-        if let Some(pool) = tpool.as_ref() {
-            // Multi-threaded
-            pool.install(|| {
-                poly_idxs.par_iter().for_each(|&idx| {
-                    if done.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    let pol = make_polynomial(&s, n, a, idx);
-                    siqs_sieve_poly(&s, a, &pol);
-                    handle_result();
-                });
-            })
-        } else {
-            // Single-threaded
-            for idx in 0..polys_per_a {
-                let pol = make_polynomial(&s, n, a, idx);
-                siqs_sieve_poly(&s, a, &pol);
-                let enough = handle_result();
-                if enough {
-                    break;
-                }
+        let pol = make_polynomial(&s, s.n, a, idx);
+        siqs_sieve_poly(&s, a, &pol);
+        // Check status.
+        let rlen = {
+            let rels = s.rels.read().unwrap();
+            rels.len()
+        };
+
+        s.polys_done.fetch_add(1, Ordering::SeqCst);
+
+        if rlen >= s.target.load(Ordering::Relaxed) {
+            // unlikely: are we done yet?
+            let rgap = {
+                let rels = s.rels.read().unwrap();
+                rels.gap()
+            };
+            s.gap.store(rgap, Ordering::Relaxed);
+            if rgap == 0 {
+                eprintln!("Found enough relations");
+                s.done.store(true, Ordering::Relaxed);
+                return;
+            } else {
+                eprintln!("Need {} additional relations", rgap);
+                s.target.store(
+                    rlen + rgap + std::cmp::min(10, s.fbase.len() as usize / 4),
+                    Ordering::SeqCst,
+                );
             }
         }
-        let pdone = polys_done.load(Ordering::Relaxed);
-        let rels = s.rels.read().unwrap();
-        rels.log_progress(format!(
-            "Sieved {}M {} polys",
-            (pdone as u64 * mm as u64) >> 20,
-            pdone,
-        ));
-        if gap.load(Ordering::Relaxed) == 0 {
-            break;
-        }
     }
-    if gap.load(Ordering::Relaxed) != 0 {
-        panic!("Internal error: not enough smooth numbers with selected parameters");
-    }
-    let mut rels = s.rels.into_inner().unwrap();
-    if rels.len() > fbase.len() + relations::MIN_KERNEL_SIZE {
-        rels.truncate(fbase.len() + relations::MIN_KERNEL_SIZE)
-    }
-    rels.into_inner()
+    let pdone = s.polys_done.load(Ordering::Relaxed);
+    let rels = s.rels.read().unwrap();
+    rels.log_progress(format!(
+        "Sieved {}M {} polys",
+        (pdone as u64 * mm as u64) >> 20,
+        pdone,
+    ));
 }
 
 /// Helper function to study performance impact of parameters
@@ -995,6 +999,12 @@ pub struct SieveSIQS<'a> {
     pub rels: RwLock<RelationSet>,
     pub offset_modp: Box<[u32]>,
     pub pm1_base: Option<pollard_pm1::PM1Base>,
+    // A signal for threads to stop sieving.
+    pub done: AtomicBool,
+    // Progress trackers
+    polys_done: AtomicUsize,
+    gap: AtomicUsize,
+    target: AtomicUsize,
 }
 
 impl<'a> SieveSIQS<'a> {
@@ -1012,6 +1022,7 @@ impl<'a> SieveSIQS<'a> {
             let off = fb.div(idx).modi64(start_offset) as u32;
             offsets[idx] = off;
         }
+        let fb_size = fb.len();
         SieveSIQS {
             n,
             interval_size,
@@ -1025,6 +1036,10 @@ impl<'a> SieveSIQS<'a> {
             } else {
                 None
             },
+            done: AtomicBool::new(false),
+            polys_done: AtomicUsize::new(0),
+            gap: AtomicUsize::new(fb_size),
+            target: AtomicUsize::new(fb_size * 8 / 10),
         }
     }
 }
