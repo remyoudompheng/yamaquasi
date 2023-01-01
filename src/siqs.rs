@@ -1062,52 +1062,15 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
     let n = s.n;
     let (idx, facss) = st.smooths(target as u8, Some(pol.root));
     for (i, facs) in idx.into_iter().zip(facss) {
-        let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
         let (v, y) = pol.eval(st.offset + (i as i64));
         // xrel^2 = (Ax+B)^2 = A * v mod n
         // v is never divisible by A
-        if v.is_negative() {
-            factors.push((-1, 1));
-        }
-        let mut cofactor: Uint = v.abs().to_bits();
-        for pidx in facs {
-            let p = s.fbase.p(pidx);
-            let div = s.fbase.div(pidx);
-            let mut exp = 0;
-            loop {
-                let (q, r) = div.divmod_uint(&cofactor);
-                if r == 0 {
-                    cofactor = q;
-                    exp += 1;
-                } else {
-                    break;
-                }
-            }
-            // FIXME: we should have exp > 0
-            if exp > 0 {
-                factors.push((p as i64, exp));
-            }
-        }
-        let Some(cofactor) = cofactor.to_u64() else { continue };
-        if cofactor > max_cofactor {
-            continue;
-        }
-        let pq = if cofactor > maxprime * maxprime {
-            // Possibly a double large prime
-            let pq = fbase::try_factor64(s.pm1_base.as_ref(), cofactor);
-            match pq {
-                Some((p, q)) if p > maxlarge || q > maxlarge => continue,
-                None if cofactor > maxlarge => continue,
-                _ => pq,
-            }
-        } else {
-            // Must be prime
-            debug_assert!(!fbase::certainly_composite(cofactor));
-            if cofactor > maxlarge {
-                continue;
-            }
-            None
-        };
+        let Some(((p, q), mut factors)) = fbase::cofactor(
+            s.fbase, &v, &facs,
+            maxlarge, max_cofactor, s.pm1_base.as_ref())
+            else { continue };
+        let pq = if q > 1 { Some((p, q)) } else { None };
+        let cofactor = p * q;
         // Complete with factors of A
         for f in &a.factors {
             if let Some(idx) = factors.iter().position(|&(p, _)| p as u64 == f.p) {

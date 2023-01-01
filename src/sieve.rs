@@ -89,9 +89,8 @@
 use std::cmp::{max, min};
 use wide;
 
-use crate::arith::{self, Num};
+use crate::arith;
 use crate::fbase::FBase;
-use crate::Int;
 
 pub const BLOCK_SIZE: usize = 32 * 1024;
 const OFFSET_NONE: u16 = 0xffff;
@@ -617,35 +616,6 @@ impl<'a> Sieve<'a> {
         }
         (res, facs)
     }
-
-    // Returns the quotient of x by prime divisors determined
-    // by the sieve at index i.
-    #[inline]
-    pub fn cofactor(&self, i: usize, facs: &[usize], x: &Int) -> (u64, Vec<(i64, u64)>) {
-        let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
-        if x.is_negative() {
-            factors.push((-1, 1));
-        }
-        let xabs = x.abs().to_bits();
-        let mut cofactor = xabs;
-        for &pidx in facs {
-            let pp = self.fbase.p(pidx);
-            let pdiv = self.fbase.div(pidx);
-            let mut exp = 0;
-            loop {
-                let (q, r) = pdiv.divmod_uint(&cofactor);
-                if r == 0 {
-                    cofactor = q;
-                    exp += 1;
-                } else {
-                    break;
-                }
-            }
-            factors.push((pp as i64, exp));
-        }
-        let cofactor = cofactor.to_u64().unwrap();
-        (cofactor, factors)
-    }
 }
 
 const BUCKET_WIDTH: usize = 256;
@@ -746,7 +716,7 @@ fn test_sieve_block() {
     // [73, 75, 76, 76, 78, 78, 79, 79, 79, 80, 80]
     use crate::fbase;
     use crate::qsieve;
-    use crate::Uint;
+    use crate::{Int, Uint};
     use std::str::FromStr;
 
     let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
@@ -764,8 +734,9 @@ fn test_sieve_block() {
     for (i, facs) in idxs.into_iter().zip(facss) {
         let ii = Uint::from(i as u64);
         let x = Int::from_bits((nsqrt + ii) * (nsqrt + ii) - n);
-        let (cof, _) = s.cofactor(i as usize, &facs[..], &x);
-        if cof == 1 {
+        let Some(((p, q), _)) = fbase::cofactor(&fb, &x, &facs[..], 1_000_000, 1_000_000, None)
+            else { continue };
+        if p == 1 && q == 1 {
             res.push(i);
         }
     }

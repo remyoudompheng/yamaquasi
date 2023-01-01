@@ -342,50 +342,12 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
             Int::from_bits(s.nsqrt) - Int::from(maybe_two * (offset as i64 + i as i64 + 1))
         };
         let candidate: Int = x * x - Int::from_bits(*n);
-        let mut factors: Vec<(i64, u64)> = vec![];
-        if candidate.is_negative() {
-            factors.push((-1, 1));
-        }
-        let cabs = candidate.abs().to_bits();
-        let mut cofactor: Uint = cabs;
-        for pidx in facs {
-            let p = s.fbase.p(pidx);
-            let div = s.fbase.div(pidx);
-            let mut exp = 0;
-            loop {
-                let (q, r) = div.divmod_uint(&cofactor);
-                if r == 0 {
-                    cofactor = q;
-                    exp += 1;
-                } else {
-                    break;
-                }
-            }
-            if exp > 0 {
-                // FIXME: can we have exp==0 ?
-                factors.push((p as i64, exp));
-            }
-        }
-        let Some(cofactor) = cofactor.to_u64() else { continue };
-        if cofactor > max_cofactor {
-            continue;
-        }
-        let pq = if cofactor > maxprime * maxprime {
-            // Possibly a double large prime
-            let pq = fbase::try_factor64(None, cofactor);
-            match pq {
-                Some((p, q)) if p > maxlarge || q > maxlarge => continue,
-                None if cofactor > maxlarge => continue,
-                _ => pq,
-            }
-        } else {
-            // Must be prime
-            debug_assert!(!fbase::certainly_composite(cofactor));
-            if cofactor > maxlarge {
-                continue;
-            }
-            None
-        };
+        let Some(((p, q), factors)) = fbase::cofactor(
+            s.fbase, &candidate, &facs,
+            maxlarge, max_cofactor, None)
+            else { continue };
+        let pq = if q > 1 { Some((p, q)) } else { None };
+        let cofactor = p * q;
         //println!("i={} smooth {} cofactor {}", i, cabs, cofactor);
         let rel = Relation {
             x: x.abs().to_bits(),

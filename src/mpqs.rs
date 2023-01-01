@@ -537,48 +537,22 @@ fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) {
     let (pol, n, dinv, d2inv) = (s.pol, &s.n, &s.dinv, &s.d2inv);
     let (idxs, facss) = st.smooths(target as u8, None);
     for (i, facs) in idxs.into_iter().zip(facss) {
-        let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
         // Evaluate polynomial
         let x: Int = Int::cast_from(pol.a) * Int::from(offset + (i as i64));
         let x = x + Int::cast_from(pol.b);
         let candidate: Int = x * x - Int::from_bits(*n);
         let cabs = (candidate.abs().to_bits() * d2inv) % n;
+        let Some(((p, q), mut factors)) = fbase::cofactor(
+            s.fbase, &Int::from_bits(cabs), &facs,
+            maxlarge, max_cofactor, None)
+            else { continue };
+        let pq = if q > 1 { Some((p, q)) } else { None };
+        let cofactor = p * q;
+        // Add missing sign
         if candidate.is_negative() {
             factors.push((-1, 1));
         }
-        let mut cofactor: Uint = cabs;
-        for pidx in facs {
-            let mut exp = 0;
-            let div = s.fbase.div(pidx);
-            loop {
-                let (q, r) = div.divmod_uint(&cofactor);
-                if r == 0 {
-                    cofactor = q;
-                    exp += 1;
-                } else {
-                    break;
-                }
-            }
-            if exp > 0 {
-                // FIXME: can we have exp == 0 ?
-                factors.push((s.fbase.p(pidx) as i64, exp));
-            }
-        }
-        let Some(cofactor) = cofactor.to_u64() else { continue };
-        if cofactor > max_cofactor {
-            continue;
-        }
-        let pq = fbase::try_factor64(None, cofactor);
-        if pq.is_none() && cofactor > maxlarge {
-            continue;
-        }
-
-        let sabs = (x.abs().to_bits() * dinv) % n;
-        let xrel = if candidate.is_negative() {
-            n - sabs
-        } else {
-            sabs
-        };
+        let xrel = (x.abs().to_bits() * dinv) % n;
         if DEBUG {
             eprintln!("i={} smooth {} cofactor {}", i, cabs, cofactor);
         }

@@ -8,7 +8,7 @@
 use crate::arith;
 use crate::arith::Num;
 use crate::pollard_pm1;
-use crate::Uint;
+use crate::{Int, Uint};
 
 /// A factor base consisting of 24-bit primes related to an input number N,
 /// along with useful precomputed data.
@@ -242,4 +242,65 @@ pub fn try_factor64(fb: Option<&pollard_pm1::PM1Base>, n: u64) -> Option<(u64, u
         return Some(pq);
     }
     crate::squfof::squfof(n)
+}
+
+// Performs trial division of x by fbase[idx] for prime indices in facs.
+// Returns the remaining cofactor as a product pq and a list of factors with exponents.
+// If the cofactor is too large, return None.
+#[inline]
+pub fn cofactor(
+    fbase: &FBase,
+    x: &Int,
+    facs: &[usize],
+    maxlarge: u64,
+    max_cofactor: u64,
+    pm1_base: Option<&pollard_pm1::PM1Base>,
+) -> Option<((u64, u64), Vec<(i64, u64)>)> {
+    let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
+    if x.is_negative() {
+        factors.push((-1, 1));
+    }
+    let xabs = x.abs().to_bits();
+    let mut cofactor = xabs;
+    for &pidx in facs {
+        let pp = fbase.p(pidx);
+        let pdiv = fbase.div(pidx);
+        let mut exp = 0;
+        loop {
+            let (q, r) = pdiv.divmod_uint(&cofactor);
+            if r == 0 {
+                cofactor = q;
+                exp += 1;
+            } else {
+                break;
+            }
+        }
+        // FIXME: we should have exp > 0
+        if exp > 0 {
+            factors.push((pp as i64, exp));
+        }
+    }
+    let cofactor = cofactor.to_u64()?;
+    if cofactor > max_cofactor {
+        return None;
+    }
+    let maxprime = fbase.bound() as u64;
+    let pq = if cofactor > maxprime * maxprime {
+        // Possibly a double large prime
+        let pq = try_factor64(pm1_base, cofactor);
+        match pq {
+            Some((p, q)) if p > maxlarge || q > maxlarge => None,
+            None if cofactor > maxlarge => None,
+            _ => pq,
+        }
+    } else {
+        // Must be prime
+        debug_assert!(!certainly_composite(cofactor));
+        if cofactor > maxlarge {
+            None
+        } else {
+            Some((cofactor, 1))
+        }
+    };
+    Some((pq?, factors))
 }
