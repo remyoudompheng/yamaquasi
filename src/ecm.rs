@@ -201,7 +201,16 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve) -> Option<(Uint, Uint)> {
             }
         }
     }
-    assert!(c.is_valid(&g));
+    assert!(
+        c.is_valid(&g),
+        "invalid point G=[{}:{}:{}] for d={} mod {}",
+        c.zn.to_int(g.0),
+        c.zn.to_int(g.1),
+        c.zn.to_int(g.2),
+        c.zn.to_int(c.d),
+        c.zn.n
+    );
+
     // ECM stage 2
     // The order of G (hopefully) no longer has small prime factors.
     // Look for a "large" prime order. Instead of computing [l]G
@@ -402,9 +411,9 @@ impl Curve {
         // Small primes must have been eliminated beforehand.
         fn to_uint(n: Uint, x: i64) -> Uint {
             if x >= 0 {
-                Uint::from(x as u64)
+                Uint::from(x as u64) % n
             } else {
-                n - Uint::from((-x) as u64)
+                n - Uint::from((-x) as u64) % n
             }
         }
         let x2inv = zn.from_int(arith::inv_mod(to_uint(zn.n, x2), zn.n).unwrap());
@@ -422,7 +431,10 @@ impl Curve {
         let c = Curve { zn, d, gx, gy };
         assert!(
             c.is_valid(&Point(gx, gy, one)),
-            "invalid point G=({x1}/{x2},{y1}/{y2}) for d={dnum}/{dden} mod {}",
+            "invalid point G=({x1}/{x2}={},{y1}/{y2}={}) for d={dnum}/{dden}={} mod {}",
+            c.zn.to_int(gx),
+            c.zn.to_int(gy),
+            c.zn.to_int(d),
             c.zn.n
         );
         c
@@ -436,8 +448,8 @@ impl Curve {
         let yinv = zn.from_int(arith::inv_mod(y, zn.n).unwrap());
         let gx = zn.from_int(x);
         let gy = zn.from_int(y);
-        let minus_1 = zn.from_int(zn.n - Uint::ONE);
-        let dn = zn.mul(gx, gx) + zn.mul(gy, gy) + minus_1;
+        // gx*gx + gy*gy - 1
+        let dn = zn.sub(zn.add(zn.mul(gx, gx), zn.mul(gy, gy)), zn.one());
         let dd = zn.mul(zn.mul(xinv, xinv), zn.mul(yinv, yinv));
         let d = zn.mul(dn, dd);
         Curve { zn, d, gx, gy }
@@ -561,17 +573,11 @@ pub struct ZmodN {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 struct MInt(Uint);
 
-impl std::ops::Add<MInt> for MInt {
-    type Output = MInt;
-    fn add(self, rhs: MInt) -> MInt {
-        MInt(self.0 + rhs.0)
-    }
-}
-
 impl ZmodN {
     fn new(n: Uint) -> Self {
         assert!(n.bits() < Uint::BITS / 2);
         let k = (n.bits() + 63) / 64;
+        assert!(n.bits() <= 64 * k);
         let rsqrt = Uint::ONE << (32 * k);
         let r = (rsqrt * rsqrt) % n;
         let r2 = (r * r) % n;
@@ -616,6 +622,8 @@ impl ZmodN {
 
     fn mul(&self, x: MInt, y: MInt) -> MInt {
         // all bit lengths MUST be < 512
+        debug_assert!(x.0 < self.n);
+        debug_assert!(y.0 < self.n);
         self.redc(uint_mul(&x.0, &y.0, self.k))
     }
 
@@ -626,7 +634,7 @@ impl ZmodN {
 
     fn add(&self, x: MInt, y: MInt) -> MInt {
         let mut sum = x.0 + y.0;
-        while sum > self.n {
+        while sum >= self.n {
             sum -= self.n;
         }
         MInt(sum)
@@ -644,6 +652,7 @@ impl ZmodN {
         while y.0 > x {
             x += self.n;
         }
+        debug_assert!(x - y.0 < self.n);
         MInt(x - y.0)
     }
 
@@ -659,11 +668,11 @@ impl ZmodN {
             mul_digits[i] = 0
         }
         let mul = Uint::from_digits(mul_digits);
-        // reduce
+        // reduce, mul <= R
         let m = uint_mul(&mul, &self.n, self.k);
         let x_plus_m = x + m;
         let xmd = x_plus_m.digits();
-        // Shift right by 64k bits: xmd may overflow by 1 word.
+        // Shift right by 64k bits (x+m can overflow by one bit)
         let mut res = [0_u64; Uint::BITS as usize / 64];
         for i in 0..=self.k as usize {
             res[i] = xmd[i + self.k as usize];
@@ -672,6 +681,7 @@ impl ZmodN {
         if res >= self.n {
             res -= self.n
         }
+        debug_assert!(res < self.n);
         MInt(res)
     }
 }
@@ -687,9 +697,13 @@ fn uint_mul(x: &Uint, y: &Uint, sz: u32) -> Uint {
     let mut z = [0_u64; Uint::BITS as usize / 64];
     for i in 0..sz {
         let mut carry = 0_u64;
+        let xi = unsafe { *xd.get_unchecked(i) };
+        if xi == 0 {
+            continue;
+        }
         for j in 0..sz {
             unsafe {
-                let xi = *xd.get_unchecked(i) as u128;
+                let xi = xi as u128;
                 let yj = *yd.get_unchecked(j) as u128;
                 let xy = xi * yj + (carry as u128);
                 let zlo = xy as u64;
