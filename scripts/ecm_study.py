@@ -1,89 +1,88 @@
+import random
 from random import getrandbits
-from sage.all import factor, primes, proof
+from sage.all import factor, primes, proof, GF, EllipticCurve, QQ
+from math import gcd
 
 proof.arithmetic(False)
 
-SIZES = [
-    # size, B1, B2
-    (32, 200, 5_000),
-    (40, 800, 25_000),
-    (48, 1_000, 200_000),
-    (56, 3_000, 500_000),
-    (64, 5_000, 1_000_000),
-    (72, 15_000, 3_000_000),
-    (80, 25_000, 7_500_000),
-]
+def analyze(primes, x, y, expect=1):
+    stats1, stats2 = [], []
+    exp2, exp3 = 0, 0
+    t1, t2 = 0, 0
+    for p in primes:
+        K = GF(p)
+        d = K(x * x + y * y - 1) / K(x * x * y * y)
+        c = (1 - d) / 4
+        E = EllipticCurve(GF(p), [0, 1 - 2 * c, 0, c * c, 0])
+        fs = factor(E.order())
+        assert E.order() % expect == 0
+        d1, d2, *_ = E.abelian_group().invariants() + (0,)
+        t1 = gcd(t1, d1)
+        t2 = gcd(t2, d2)
+        if len(fs) == 1:
+            max1, max2 = fs[0][0], fs[0][0]
+        else:
+            max1 = sorted(p**k for p, k in fs)[-2]
+            max2 = max(p for p, _ in fs)
+        stats1.append(max1)
+        stats2.append(max2)
+        exp2 += E.order().valuation(2)
+        exp3 += E.order().valuation(3)
 
-# Study the distribution of prime factors of random integers.
-for sz, B1, B2 in SIZES:
-    print(f"Factor size {sz} bits")
-    stats1 = []
-    stats2 = []
-    powers = 0
-    ecmok = 0
-    for _ in range(5000):
-        n = getrandbits(sz)
-        # Edwards curves can have torsion 12 or 16
-        n -= n % 4
-        for f, k in factor(n):
-            if k > 1 and f**k > B1:
-                # print(f"large factor {f}^{k} in prime {p}")
-                powers += 1
-        ps = [p for p, _ in factor(n)]
-        q1, q2 = sorted(ps)[-2:] if len(ps) > 1 else (ps[0], ps[0])
-        stats1.append(q1)
-        stats2.append(q2)
-        if q1 < B1 and q2 < B2:
-            ecmok += 1
-    l = len(stats1)
     stats1.sort()
     stats2.sort()
-    p50, p66, p75 = stats1[-l // 2], stats1[-l // 3], stats1[-l // 4]
-    p90, p99 = stats1[-l // 10], stats1[-l // 100]
-    print(f"2nd largest {p50=} {p66=} {p75=} {p90=} {p99=}")
-    p10, p25, p50, p66 = (
-        stats2[l // 10],
-        stats2[l // 4],
-        stats2[-l // 2],
-        stats2[-l // 3],
-    )
-    print(f"largest {p10=} {p25=} {p50=} {p66=}")
-    print(f"{powers/50:.2}% misses due to small prime powers")
-    print(f"{ecmok/50:.1f}% success with B1={B1} and B2={B2}")
+    print(f"Generic torsion: ({t1}, {t2})")
+    l = len(primes)
+    exp2, exp3 = float(exp2), float(exp3)
+    print(f"avg exponent of 2: {exp2/l:.3f}")
+    print(f"avg exponent of 3: {exp3/l:.3f}")
+    p25, p50 = stats1[l // 4], stats1[-l // 2]
+    p66, p75 = stats1[-l // 3], stats1[-l // 4]
+    print(f"needs B1 {p25=} {p50=} {p66=} {p75=}")
+    p25, p50 = stats2[l // 4], stats2[-l // 2]
+    p66, p75 = stats2[-l // 3], stats2[-l // 4]
+    print(f"needs B2 {p25=} {p50=} {p66=} {p75=}")
 
-# Study the gaps between primes
-ps = list(primes(1_000_000))
-gaps = set(q - p for p, q in zip(ps, ps[1:]))
-print(sorted(gaps))
+for size in (32, 48, 64):
+    print(f"=== ===")
+    print(f"=== Working with primes of size {size} ===")
+    print(f"=== ===")
+    p0 = getrandbits(size)
+    ps = random.sample(list(primes(p0, p0 + 1e6)), 2000)
 
-# Find a nice ECM curve for a given semiprime
-from sage.all import GF, Zmod, EllipticCurve
+    # Basic Edwards curves
+    # Average exp2 = 3 + 2/3
+    # Average exp3 = 2/3
+    for y in (3, 4, 5, 6):
+        print(f"=== Trying Edwards curve through (2, {y})")
+        analyze(ps, 2, y, expect=4)
 
-# 50-bit factors
-TESTS = [
-    # (p, q, B1, B2)
-    # 50-bit
-    (602768606663711, 957629686686973, 2_000, 400_000),
-    # 64-bit factors
-    (12811221319803074089, 12815927653690616723, 5_000, 1_000_000),
-    # 80-bit factors
-    (1174273970803390465747303, 607700066377545220515437, 25_000, 5_000_000),
-]
+    # Extra 2-torsion (Z/2 x Z/4) when d is a square
+    # (3a+5)² + (4a+5)² = 1 + (5a+7)²
+    # Average exp2 = 4 + 1/3
+    # Average exp3 = 2/3
+    for a in (1, 2, 3):
+        x, y = 3*a+5, 4*a+5
+        print(f"=== Trying Edwards curve Z/2 x Z/4 ({x}, {y})")
+        analyze(ps, x, y, expect=8)
 
-for p, q, B1, B2 in TESTS:
-    print(f"n={p*q} (p has {p.bit_length()} bits) B1={B1} B2={B2}")
-    Zn = Zmod(p * q)
-    x = 2
-    done = False
-    for y in range(3, 500):
-        d = Zn(x * x + y * y - 1) / Zn(x * x * y * y)
-        c = (1 - d) / 4
-        for prime in [p, q]:
-            E = EllipticCurve(GF(prime), [0, 1 - 2 * c, 0, c * c, 0])
-            fs = [f for f, _ in factor(E.order())]
-            q1, q2 = sorted(fs)[-2:] if len(fs) > 1 else (fs[0], fs[0])
-            if q1 < B1 and q2 < B2:
-                print(x, y, factor(E.order()), "at prime", prime)
-                done = True
-        if done:
-            break
+    # Good curve Z/12
+    # Average exp2 = 3 + 2/3
+    # Average exp3 = 1 + 2/3
+    x, y = QQ("5/23"), QQ("-1/7")
+    print(f"=== Trying Edwards curve Z/12 ({x}, {y})")
+    analyze(ps, x, y, expect=12)
+    x, y = QQ("8/17"), QQ("20/19")
+    print(f"=== Trying Edwards curve Z/12 ({x}, {y})")
+    analyze(ps, x, y, expect=12)
+
+    # Good curve 2x8
+    # Average exp2 = 5 + 1/3
+    # Average exp3 = 2/3
+    x, y = QQ("17/19"), QQ("17/33")
+    print(f"=== Trying Edwards curve Z/2 x Z/8 ({x}, {y})")
+    analyze(ps, x, y, expect=16)
+    x, y = QQ("125/91"), QQ("841/791")
+    print(f"=== Trying Edwards curve Z/2 x Z/8 ({x}, {y})")
+    analyze(ps, x, y, expect=16)
+

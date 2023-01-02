@@ -28,6 +28,10 @@ name = "arith"
 harness = false
 
 [[bench]]
+name = "ecm"
+harness = false
+
+[[bench]]
 name = "matrix"
 harness = false
 

@@ -11,6 +11,9 @@
 //! It includes a selection of Edwards "good curves" from
 //! https://eecm.cr.yp.to/goodcurves.html
 //!
+//! After good curves (Q-torsion Z/12 or Z/2 x Z/8) it iterates over
+//! a simple infinite family of curves with rational Z/2 x Z/4 torsion.
+//!
 //! It implements the "baby step giant step" optimization for stage 2
 //! as described in section 5.2 of https://eecm.cr.yp.to/eecm-20111008.pdf
 //! This is about 3x faster than the prime-by-prime approach.
@@ -36,74 +39,147 @@ use crate::Uint;
 // is not to completely factor numbers, but to detect cases where a number
 // has a relatively small prime factor (about size(n) / 5)
 pub fn ecm_auto(n: Uint) -> Option<(Uint, Uint)> {
-    // The CPU budget here is only a few seconds (less than 1% of SIQS time).
+    // The CPU budget here is only a few seconds (at most 1% of SIQS time).
     // So we intentionally use suboptimal parameters hoping to be very lucky.
     //
     // Sample parameters can be found at https://eecm.cr.yp.to/performance.html
     match n.bits() {
         0..=220 => {
-            // Try to find a factor of size ~40 bits (takes <100ms)
-            // B2 = D² = 44100
-            ecm(n, 10, 800, 210)
+            // Try to find a factor of size ~32 bits (budget <100ms)
+            // B2 = D² = 78400
+            ecm(n, GOOD_CURVES.len(), 120, 280, 1)
         }
         221..=250 => {
-            // Try to find a factor of size ~48 bits (takes <1s)
+            // Try to find a factor of size ~42 bits (budget 0.1-0.5s)
             // B2 = D² = 176400
-            ecm(n, 10, 1_000, 420)
+            ecm(n, 30, 500, 420, 1)
         }
         251..=280 => {
-            // Try to find a factor of size ~56 bits (takes ~1s)
-            // B2 = D² = 396900
-            ecm(n, 10, 3_000, 630)
+            // Try to find a factor of size ~50 bits (budget 2-3s)
+            // B2 = D² = 700k
+            ecm(n, 100, 2_000, 840, 1)
         }
         281..=310 => {
-            // Try to find a factor of size ~64 bits (takes ~2s)
-            // B2 = D² ~= 1 million
-            ecm(n, 20, 5_000, 1050)
+            // Try to find a factor of size ~56 bits (budget 5-10s)
+            // B2 = D² ~= 1.6M
+            ecm(n, 100, 4_000, 1260, 1)
         }
         311..=340 => {
-            // Try to find a factor of size ~72 bits (takes ~10s)
-            // B2 = D² = 5.3M
-            ecm(n, 20, 15_000, 2310)
+            // Try to find a factor of size ~62 bits (budget 20-30s)
+            // B2 = D² = 4M
+            ecm(n, 100, 8_000, 1980, 1)
         }
         341.. => {
-            // Try to find a factor of size ~80 bits (takes ~20s)
-            // B2 = D² = 7.5M
-            ecm(n, 20, 25_000, 2730)
+            // Try to find a factor of size ~68 bits (budget 1min)
+            // B2 = D² = 11.3M
+            ecm(n, 100, 15_000, 3360, 1)
+        }
+    }
+}
+
+// Factor number using purely ECM. This may never end, or fail.
+pub fn ecm_only(n: Uint) -> Option<(Uint, Uint)> {
+    match n.bits() {
+        0..=64 => {
+            // This is probably guaranteed to work.
+            ecm(n, 100, 128, 210, 2)
+        }
+        65..=80 => {
+            // Try to find a factor of size 36 bits
+            ecm(n, 300, 400, 420, 2)
+        }
+        81..=96 => {
+            // Try to find a factor of size 48 bits
+            ecm(n, 800, 1700, 840, 2)
+        }
+        97..=128 => {
+            // Try to find a factor of size 52 bits
+            ecm(n, 1000, 2500, 1050, 2)
+        }
+        129..=160 => {
+            // Try to find a factor of size 60 bits
+            // 1000 curves are often not enough for 80-bit factors.
+            ecm(n, 1000, 6000, 1470, 2)
+        }
+        161..=192 => {
+            // Try to find a factor of size >70 bits
+            // This will probably take a very long time.
+            // TODO: try smaller parameters first.
+            ecm(n, 5000, 15_000, 11550, 2)
+        }
+        193..=256 => {
+            // Try to find a factor of size ~80?? bits
+            // It may find factors of ~70 bits but not much more.
+            // It will take several seconds per curve.
+            // TODO: try smaller parameters first.
+            ecm(n, 15000, 25_000, 30030, 2)
+        }
+        257.. => {
+            // This is mostly to fill the table, but what we do?
+            // TODO: try smaller parameters first.
+            ecm(n, 40000, 40_000, 60060, 2)
         }
     }
 }
 
 // Run ECM for a given number of curves and bounds B1, B2.
-pub fn ecm(n: Uint, curves: usize, b1: usize, d: usize) -> Option<(Uint, Uint)> {
-    eprintln!(
-        "Attempting ECM with {curves} curves B1={b1} D={d} (B2={})",
-        d * d
-    );
+pub fn ecm(n: Uint, curves: usize, b1: usize, d: usize, verbose: usize) -> Option<(Uint, Uint)> {
+    if verbose > 0 {
+        eprintln!(
+            "Attempting ECM with {curves} curves B1={b1} D={d} (B2={})",
+            d * d
+        );
+    }
     let start = std::time::Instant::now();
     let zn = ZmodN::new(n);
     let sb = SmoothBase::new(b1, d);
     // Try good curves first. They have large torsion (extra factor 3 or 4)
     // so their order is more probably smooth.
-    for &(x1, x2, y1, y2) in GOOD_CURVES {
+    for (idx, &(x1, x2, y1, y2)) in GOOD_CURVES.iter().enumerate() {
+        if verbose > 1 {
+            eprintln!("Trying good Edwards curve G=({x1}/{x2},{y1}/{y2})");
+        }
         let c = Curve::from_fractional_point(zn.clone(), x1, x2, y1, y2);
         if let res @ Some((p, _)) = ecm_curve(&sb, &zn, &c) {
-            eprintln!("ECM success for special Edwards curve G=({x1}/{x2},{y1}/{y2}) p={p} elapsed={:.3}s",
+            if verbose > 0 {
+                eprintln!("ECM success {}/{curves} for special Edwards curve G=({x1}/{x2},{y1}/{y2}) p={p} elapsed={:.3}s",
+                idx + 1,
                 start.elapsed().as_secs_f64());
+            }
             return res;
         }
     }
-    // Choose curves through point (2,k > 1) such that d=(3+k²)/4k²
-    for k in 0..curves - GOOD_CURVES.len() {
-        let c = Curve::from_point(zn.clone(), Uint::from(2_u64), Uint::from(2 + k as u64));
-        if let res @ Some((p, _)) = ecm_curve(&sb, &zn, &c) {
+    // Choose curves with torsion Z/2 x Z/4. There is a very easy infinite supply
+    // of such curves because (3k+5)² + (4k+5)² = 1 + (5k+7)².
+    // They are slightly more smooth than general Edwards curves
+    // (exponent of 2 is 4.33 on average instead of 3.66).
+    for k in 0..curves {
+        if k + GOOD_CURVES.len() >= curves {
+            break;
+        }
+        let k = k as u64;
+        if verbose > 1 {
             eprintln!(
-                "ECM success for Edwards curve d={}/{} G=(2,{}) p={p} elapsed={:.3}s",
-                3 + (2 + k) * (2 + k),
-                4 * k * k,
-                2 + k,
-                start.elapsed().as_secs_f64()
+                "Trying Edwards curve with (2,4)-torsion d=({}/{})² G=({},{})",
+                5 * k + 7,
+                (3 * k + 8) * (4 * k + 9),
+                3 * k + 8,
+                4 * k + 9
             );
+        }
+        let c = Curve::from_point(zn.clone(), Uint::from(3 * k + 8), Uint::from(4 * k + 9));
+        if let res @ Some((p, _)) = ecm_curve(&sb, &zn, &c) {
+            if verbose > 0 {
+                eprintln!(
+                    "ECM success {}/{curves} for Edwards curve d=({}/{})² G=({},{}) p={p} elapsed={:.3}s",
+                    k as usize + GOOD_CURVES.len() + 1,
+                    5 * k + 7,
+                    (3 * k + 8) * (4 * k + 9),
+                    3 * k + 8,
+                    4 * k + 9,
+                    start.elapsed().as_secs_f64()
+                );
+            }
             return res;
         }
     }
@@ -115,7 +191,7 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve) -> Option<(Uint, Uint)> {
     let n = &zn.n;
     // ECM stage 1
     let mut g = c.gen();
-    for block in sb.factors.chunks(4) {
+    for block in sb.factors.chunks(8) {
         for &f in block {
             g = c.scalar32_mul(f, &g);
         }
@@ -125,6 +201,7 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve) -> Option<(Uint, Uint)> {
             }
         }
     }
+    assert!(c.is_valid(&g));
     // ECM stage 2
     // The order of G (hopefully) no longer has small prime factors.
     // Look for a "large" prime order. Instead of computing [l]G
@@ -145,7 +222,8 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve) -> Option<(Uint, Uint)> {
             bs.push(b);
         }
     }
-    // For our values of D the gap between successive values of b is less than 16.
+    // For our values of D the gap between successive values of b is less than 16,
+    // or up to 22 in the case of D > 10000
     let g2 = c.double(&g);
     let g4 = c.double(&g2);
     let g6 = c.add(&g2, &g4);
@@ -154,7 +232,10 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve) -> Option<(Uint, Uint)> {
     let g12 = c.double(&g6);
     let g14 = c.add(&g6, &g8);
     let g16 = c.double(&g8);
-    let gaps = [g2, g4, g6, g8, g10, g12, g14, g16];
+    let g18 = c.add(&g6, &g10);
+    let g20 = c.double(&g10);
+    let g22 = c.add(&g10, &g12);
+    let gaps = [g2, g4, g6, g8, g10, g12, g14, g16, g18, g20, g22];
     // Compute the baby steps
     let mut bsteps = Vec::with_capacity(sb.d / 4);
     let mut bg = g.clone();
@@ -175,27 +256,19 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve) -> Option<(Uint, Uint)> {
         gsteps.push(gg.clone());
         gg = c.add(&gg, &dg);
     }
-    // Normalize, O(d) modular inversions
-    // FIXME: it is theoretically useful to normalize coordinates
-    // but our inversion is too slow.
-    //for pg in gsteps.iter_mut() {
-    //    c.normalize(pg);
-    //}
-    //for pb in bsteps.iter_mut() {
-    //    c.normalize(pb);
-    //}
-    // Compute cross products, O(d²) products
+    // Normalize, 2 modular inversion using batch inversion.
+    batch_normalize(&zn, &mut bsteps);
+    batch_normalize(&zn, &mut gsteps);
+    // Compute O(d²) products
     let mut buffer = zn.one();
     for (idx, pg) in gsteps.iter().enumerate() {
         // Compute the gcd after each row for finer granularity.
         for pb in &bsteps {
-            // y(G) z(B) - y(B) z(G)
-            //let delta_y = zn.sub(pg.1, pb.1);
-            // When coordinates are not normalized, we have 2 extra multiplications.
-            let delta_y = zn.sub(zn.mul(pg.1, pb.2), zn.mul(pb.1, pg.2));
+            // y(G) - y(B)
+            let delta_y = zn.sub(pg.1, pb.1);
             buffer = zn.mul(buffer, delta_y);
         }
-        if idx % 4 == 0 || idx == gsteps.len() - 1 {
+        if idx % 8 == 0 || idx == gsteps.len() - 1 {
             let d = Integer::gcd(n, &buffer.0);
             if d > Uint::ONE && d < *n {
                 return Some((d, n / d));
@@ -203,6 +276,36 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve) -> Option<(Uint, Uint)> {
         }
     }
     None
+}
+
+// Normalize projective coordinates (z=1) for multiple points.
+fn batch_normalize(zn: &ZmodN, pts: &mut [Point]) -> Option<()> {
+    // Use Montgomery's batch inversion.
+    // Compute cumulative products.
+    let mut prod = zn.one();
+    let mut prods = Vec::with_capacity(pts.len());
+    for p in pts.iter() {
+        prod = zn.mul(prod, p.2);
+        prods.push(prod);
+    }
+    // Now prod is the product z0*...*z[n-1]
+    let mut prodinv = zn.inv(prod)?;
+    let one = zn.one();
+    // Loop backwards and multiply by inverses.
+    for i in 0..pts.len() {
+        let j = pts.len() - 1 - i;
+        // Invariant: prodinv is the product 1/z0 ... z[j]
+        let zinv = if j > 0 {
+            zn.mul(prodinv, prods[j - 1])
+        } else {
+            prodinv
+        };
+        let Point(x, y, z) = pts[j];
+        pts[j] = Point(zn.mul(x, zinv), zn.mul(y, zinv), one);
+        // Cancel z[j]
+        prodinv = zn.mul(prodinv, z);
+    }
+    Some(())
 }
 
 /// An exponent base for ECM.
@@ -217,8 +320,6 @@ pub struct SmoothBase {
 
 impl SmoothBase {
     pub fn new(b1: usize, d: usize) -> Self {
-        // Don't use large B2 here!
-        assert!(d < 5000);
         let primes = fbase::primes(b1 as u32 / 2);
         let mut factors = vec![];
         let mut buffer = 1_u64;
@@ -231,6 +332,12 @@ impl SmoothBase {
             let mut pow = p;
             while pow * p < b1 as u64 {
                 pow *= p;
+            }
+            if p == 2 {
+                pow *= 16;
+            }
+            if p == 3 {
+                pow *= 3;
             }
             if buffer * pow >= 1 << 32 {
                 factors.push(buffer as u32);
@@ -266,19 +373,26 @@ struct Point(MInt, MInt, MInt);
 
 // Special curves from https://eecm.cr.yp.to/goodcurves.html
 // We only need the coordinates of the generator (d can be computed).
-// We select only those with denominators < 200
+// We select only those with prime factors < 200
 const GOOD_CURVES: &[(i64, i64, i64, i64)] = &[
-    // Z/2 x Z/8 torsion
-    (13, 7, 289, 49),     // d 25921/83521
-    (1025, 158, 697, 25), // d 44182609/1766100625
-    // Z/12Z torsion
-    (5, 23, -1, 7),     // d -24167/25
-    (8, 17, -20, 19),   // d 1375/1024
-    (5, 4, -25, 89),    // d 81289/15625
-    (45, 19, -3, 1),    // d 4913/18225
-    (35, 109, -49, 1),  // d 1140625/117649
-    (49, 101, -21, 19), // d 560947/352947
-    (11, 53, -121, 4),  // d 41083561/1771561
+    // 8 curves with Z/2 x Z/8 torsion
+    (13, 7, 289, 49),       // d=25921/83521
+    (319, 403, 551, 901),   // d=1681/707281
+    (943, 979, 1271, 2329), // d=2307361/2825761
+    (623, 103, 979, 589),   // d=23804641/62742241
+    (125, 91, 841, 791),    // d=418079809/442050625
+    (1025, 158, 697, 25),   // d=44182609/1766100625
+    (1025, 1032, 41, 265),  // d=779135569/1766100625
+    // 8 curves with Z/12Z torsion
+    (5, 23, -1, 7),         // d=-24167/25
+    (81, 5699, -901, 2501), // d=-895973/27
+    (11, 589, -17, 107),    // d=-13391879/121
+    (8, 17, -20, 19),       // d=1375/1024
+    (5, 4, -25, 89),        // d=81289/15625
+    (45, 19, -3, 1),        // d=4913/18225
+    (35, 109, -49, 1),      // d=1140625/117649
+    (49, 101, -21, 19),     // d=560947/352947
+    (11, 53, -121, 4),      // d=41083561/1771561
 ];
 
 impl Curve {
@@ -306,7 +420,11 @@ impl Curve {
         );
         let one = zn.one();
         let c = Curve { zn, d, gx, gy };
-        assert!(c.is_valid(&Point(gx, gy, one)));
+        assert!(
+            c.is_valid(&Point(gx, gy, one)),
+            "invalid point G=({x1}/{x2},{y1}/{y2}) for d={dnum}/{dden} mod {}",
+            c.zn.n
+        );
         c
     }
 
@@ -492,7 +610,6 @@ impl ZmodN {
         self.mul(MInt(x), MInt(self.r2))
     }
 
-    #[cfg(test)]
     fn to_int(&self, x: MInt) -> Uint {
         self.redc(x.0).0
     }
@@ -500,6 +617,11 @@ impl ZmodN {
     fn mul(&self, x: MInt, y: MInt) -> MInt {
         // all bit lengths MUST be < 512
         self.redc(uint_mul(&x.0, &y.0, self.k))
+    }
+
+    fn inv(&self, x: MInt) -> Option<MInt> {
+        // No optimization, use ordinary modular inversion.
+        Some(self.from_int(arith::inv_mod(self.to_int(x), self.n)?))
     }
 
     fn add(&self, x: MInt, y: MInt) -> MInt {
@@ -526,7 +648,7 @@ impl ZmodN {
     }
 
     fn redc(&self, x: Uint) -> MInt {
-        assert!(x < (self.n << (64 * self.k)));
+        debug_assert!(x < (self.n << (64 * self.k)));
         // Montgomery reduction (x/R mod n).
         // compute -x/N mod R
         // Half precision is enough.
@@ -539,14 +661,12 @@ impl ZmodN {
         let mul = Uint::from_digits(mul_digits);
         // reduce
         let m = uint_mul(&mul, &self.n, self.k);
-        let mut res = (x + m).digits().clone();
-        // Shift right by 64k bits
-        for i in 0..res.len() {
-            res[i] = if i + (self.k as usize) < res.len() {
-                res[i + self.k as usize]
-            } else {
-                0
-            };
+        let x_plus_m = x + m;
+        let xmd = x_plus_m.digits();
+        // Shift right by 64k bits: xmd may overflow by 1 word.
+        let mut res = [0_u64; Uint::BITS as usize / 64];
+        for i in 0..=self.k as usize {
+            res[i] = xmd[i + self.k as usize];
         }
         let mut res = Uint::from_digits(res);
         if res >= self.n {
@@ -591,7 +711,9 @@ fn uint_mul(x: &Uint, y: &Uint, sz: u32) -> Uint {
 
 #[test]
 fn test_montgomery() {
+    use crate::arith::Num;
     use std::str::FromStr;
+
     let n = Uint::from_str("2953951639731214343967989360202131868064542471002037986749").unwrap();
     let p = Uint::from_str("17917317351877").unwrap();
     let pinv = Uint::from_str("42403041586861144438126400473690086613066961901031711489").unwrap();
@@ -603,6 +725,35 @@ fn test_montgomery() {
     assert_eq!(zn.to_int(y), pinv);
     assert_eq!(zn.to_int(one), Uint::ONE);
     assert_eq!(zn.mul(x, y), one);
+    assert_eq!(zn.inv(x), Some(y));
+    assert_eq!(zn.inv(y), Some(x));
+
+    // n = 107910248100432407082438802565921895527548119627537727229429245116458288637047
+    // n is very close to 2^256
+    // 551/901 mod n = 38924340324795263376018435997696577188072296203051899389083800957656985357426
+    let n = Uint::from_str(
+        "107910248100432407082438802565921895527548119627537727229429245116458288637047",
+    )
+    .unwrap();
+    let zn = ZmodN::new(n);
+    let x = zn.from_int(Uint::from(551_u64));
+    assert_eq!(zn.to_int(x).to_u64(), Some(551));
+    let y = zn.from_int(Uint::from(901_u64));
+    assert_eq!(zn.to_int(y).to_u64(), Some(901));
+    assert_eq!(
+        zn.to_int(zn.inv(y).unwrap()),
+        Uint::from_str(
+            "84675411106554619097984720770373784836821887432485208824868453160195349685230"
+        )
+        .unwrap()
+    );
+    assert_eq!(zn.mul(y, zn.inv(y).unwrap()), zn.one());
+    let x_y = zn.mul(x, zn.inv(y).unwrap());
+    let expect = Uint::from_str(
+        "38924340324795263376018435997696577188072296203051899389083800957656985357426",
+    )
+    .unwrap();
+    assert_eq!(zn.to_int(x_y), expect);
 }
 
 #[test]

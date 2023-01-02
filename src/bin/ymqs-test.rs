@@ -22,7 +22,7 @@ fn main() {
         eprintln!("");
         eprintln!("Options:");
         eprintln!("  --help                    show this help");
-        eprintln!("  --mode qs|qs64|mpqs|siqs: force algorithm selection");
+        eprintln!("  --mode ecm|qs|qs64|mpqs|siqs: force algorithm selection");
         eprintln!("  --bits B:                 input length");
         return;
     }

@@ -45,6 +45,7 @@ pub enum Algo {
     Auto,
     Squfof,
     Qs64,
+    Ecm,
     Qs,
     Mpqs,
     Siqs,
@@ -57,6 +58,7 @@ impl FromStr for Algo {
         match s {
             "auto" => Ok(Self::Auto),
             "squfof" => Ok(Self::Squfof),
+            "ecm" => Ok(Self::Ecm),
             "qs" => Ok(Self::Qs),
             "qs64" => Ok(Self::Qs64),
             "mpqs" => Ok(Self::Mpqs),
@@ -129,8 +131,9 @@ fn factor_impl(
         factors.push(n);
         return;
     }
-    if n.bits() > 200 {
-        if let Algo::Auto = alg {
+    // Do we need to try an ECM step?
+    match alg {
+        Algo::Auto if n.bits() > 200 => {
             // Only in automatic mode, for large inputs, ECM can be useful.
             if let Some((a, b)) = ecm::ecm_auto(n) {
                 factor_impl(a.into(), alg, prefs, factors, tpool);
@@ -139,6 +142,20 @@ fn factor_impl(
                 return;
             }
         }
+        Algo::Ecm => {
+            // Pure ECM is requested.
+            // However due to determinism the recursion will go through the
+            // same curves, which is not very useful.
+            if let Some((a, b)) = ecm::ecm_only(n) {
+                factor_impl(a.into(), alg, prefs, factors, tpool);
+                eprintln!("Recursively factor {b}");
+                factor_impl(b.into(), alg, prefs, factors, tpool);
+                return;
+            }
+            eprintln!("Factorization is incomplete.");
+            return;
+        }
+        _ => {}
     }
     // Select algorithm
     let alg_real = if let Algo::Auto = alg {
@@ -188,6 +205,7 @@ fn factor_impl(
         Algo::Auto => unreachable!("impossible"),
         Algo::Qs64 => unreachable!("impossible"),
         Algo::Squfof => unreachable!("impossible"),
+        Algo::Ecm => unreachable!("impossible"),
         Algo::Qs => qsieve::qsieve(nk, &prefs, tpool),
         Algo::Mpqs => mpqs::mpqs(nk, &prefs, tpool),
         Algo::Siqs => siqs::siqs(&nk, &prefs, tpool),
