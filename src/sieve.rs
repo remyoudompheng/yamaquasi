@@ -527,8 +527,8 @@ impl<'a> Sieve<'a> {
                         }
                         // Compensate for distance to root.
                         if let Some(r) = root {
-                            let x = (ij as i32)
-                                + (self.blk_no * BLOCK_SIZE - self.nblocks * BLOCK_SIZE / 2) as i32;
+                            let x = (ij as i32) + (self.blk_no * BLOCK_SIZE) as i32
+                                - (self.nblocks * BLOCK_SIZE / 2) as i32;
                             let dist = (x.abs() - r as i32).abs();
                             let zeros = u32::leading_zeros(dist as u32);
                             if zeros > mzeros {
