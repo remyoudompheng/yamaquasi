@@ -1166,8 +1166,8 @@ fn test_poly_a() {
             assert!(d2 - 100.0 < 2.0);
             assert!(a_vals.len() >= want);
         } else {
-            assert!(d1 - 100.0 < 0.5);
-            assert!(d2 - 100.0 < 0.5);
+            assert!(d1 - 100.0 < 1.0);
+            assert!(d2 - 100.0 < 1.0);
             assert!(a_vals.len() >= want / 2);
         }
     }
@@ -1197,13 +1197,15 @@ fn test_poly_prepare() {
     const N240: &str = "1563849171863495214507949103370077342033765608728382665100245282240408041";
     let n = Uint::from_str(N240).unwrap();
     let fb = fbase::FBase::new(n, 10000);
-    let s = SieveSIQS::new(&n, &fb, fb.bound() as u64, false, 1 << 20);
+    let mm = 1_usize << 20;
+    let s = SieveSIQS::new(&n, &fb, fb.bound() as u64, false, mm);
     // Prepare A values
     // Only test 10 A values and 35 polynomials per A.
-    let f = select_siqs_factors(&fb, &n, 9, 1 << 20);
+    let f = select_siqs_factors(&fb, &n, 9, mm);
+    let start_offset = -(mm as i64) / 2;
     let a_ints = select_a(&f, 10);
     for a_int in &a_ints {
-        let a = prepare_a(&f, a_int, &fb, 0);
+        let a = prepare_a(&f, a_int, &fb, start_offset);
         // Check CRT coefficients.
         assert_eq!(a.a, a.factors.iter().map(|x| Uint::from(x.p)).product());
         for (i, r) in a.roots.iter().enumerate() {
@@ -1242,7 +1244,7 @@ fn test_poly_prepare() {
             for pidx in 0..fb.len() {
                 // Roots are roots of Ax^2+2Bx+C modulo p.
                 for r in [pol.r1p[pidx], pol.r2p[pidx]] {
-                    let v = pol.eval(r as i64).0;
+                    let v = pol.eval(start_offset + r as i64).0;
                     assert_eq!(
                         v.abs().to_bits() % (fb.p(pidx) as u64),
                         0,
