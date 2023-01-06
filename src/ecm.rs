@@ -275,11 +275,11 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve) -> Option<(Uint, Uint)> {
         // Compute the gcd after each row for finer granularity.
         for pb in &bsteps {
             // y(G) - y(B)
-            let delta_y = zn.sub(pg.1, pb.1);
-            buffer = zn.mul(buffer, delta_y);
+            let delta_y = zn.sub(&pg.1, &pb.1);
+            buffer = zn.mul(&buffer, &delta_y);
         }
         if idx % 8 == 0 || idx == gsteps.len() - 1 {
-            let d = Integer::gcd(n, &buffer.0);
+            let d = Integer::gcd(n, &Uint::from(buffer));
             if d > Uint::ONE && d < *n {
                 return Some((d, n / d));
             }
@@ -547,7 +547,7 @@ impl Curve {
     }
 
     fn is_2_torsion(&self, p: &Point) -> Option<Uint> {
-        let d = Integer::gcd(&p.0 .0, &self.zn.n);
+        let d = Integer::gcd(&Uint::from(p.0), &self.zn.n);
         if d == Uint::ONE {
             None
         } else {
