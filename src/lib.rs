@@ -136,7 +136,7 @@ fn factor_impl(
     match alg {
         Algo::Auto if n.bits() >= 180 => {
             // Only in automatic mode, for large inputs, ECM can be useful.
-            if let Some((a, b)) = ecm::ecm_auto(n) {
+            if let Some((a, b)) = ecm::ecm_auto(n, tpool) {
                 factor_impl(a.into(), alg, prefs, factors, tpool);
                 eprintln!("Recursively factor {b}");
                 factor_impl(b.into(), alg, prefs, factors, tpool);
@@ -147,7 +147,7 @@ fn factor_impl(
             // Pure ECM is requested.
             // However due to determinism the recursion will go through the
             // same curves, which is not very useful.
-            if let Some((a, b)) = ecm::ecm_only(n) {
+            if let Some((a, b)) = ecm::ecm_only(n, tpool) {
                 factor_impl(a.into(), alg, prefs, factors, tpool);
                 eprintln!("Recursively factor {b}");
                 factor_impl(b.into(), alg, prefs, factors, tpool);

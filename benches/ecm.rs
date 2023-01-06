@@ -27,7 +27,7 @@ fn main() {
                 .with_timeout(Duration::from_secs(10))
                 .run_seeded((), |_| for &p in primes24 {
                     let n = Uint::from(p) * p256;
-                    ecm::ecm(n, 16, 120, 280, 0).unwrap();
+                    ecm::ecm(n, 16, 120, 280, 0, None).unwrap();
                 })
         },
     }
@@ -52,7 +52,7 @@ fn main() {
             }
             let start = std::time::Instant::now();
             // Use P256 so what ECM cannot work.
-            let res = ecm::ecm(p256, 1, b1, b2, 0);
+            let res = ecm::ecm(p256, 1, b1, b2, 0, None);
             assert!(res.is_none());
             eprintln!(
                 "ECM(B1={b1},B2={b2}) in {:.3}s",

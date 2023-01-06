@@ -29,7 +29,11 @@
 //! TODO: merge exponent base with Pollard P-1
 //! TODO: merge Montgomery arithmetic with arith library
 
+use std::cmp::min;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use num_integer::Integer;
+use rayon::prelude::*;
 
 use crate::arith;
 use crate::arith_montgomery::{MInt, ZmodN};
@@ -39,7 +43,7 @@ use crate::Uint;
 // Run ECM with automatically selected parameters. The goal of this function
 // is not to completely factor numbers, but to detect cases where a number
 // has a relatively small prime factor (about size(n) / 5)
-pub fn ecm_auto(n: Uint) -> Option<(Uint, Uint)> {
+pub fn ecm_auto(n: Uint, tpool: Option<&rayon::ThreadPool>) -> Option<(Uint, Uint)> {
     // The CPU budget here is only a few seconds (at most 1% of SIQS time).
     // So we intentionally use small parameters hoping to be very lucky.
     // Best D values have D/phi(D) > 4.3
@@ -49,88 +53,95 @@ pub fn ecm_auto(n: Uint) -> Option<(Uint, Uint)> {
         0..=190 => {
             // Will quite often find a 30-32 bit factor (budget 10-20ms)
             // B2 = D² = 44100
-            ecm(n, 16, 120, 210, 1)
+            ecm(n, 16, 120, 210, 1, tpool)
         }
         191..=220 => {
             // Will quite often find a 36 bit factor (budget <100ms)
             // B2 = D² = 78400
-            ecm(n, 16, 120, 280, 1)
+            ecm(n, 16, 120, 280, 1, tpool)
         }
         221..=250 => {
             // Will quite often find a factor of size 42-46 bits (budget 0.1-0.5s)
             // B2 = D² = 176400
-            ecm(n, 50, 500, 420, 1)
+            ecm(n, 50, 500, 420, 1, tpool)
         }
         251..=280 => {
             // Will quite often find a factor of size 52-56 bits (budget 2-3s)
             // B2 = D² = 700k
-            ecm(n, 120, 2_000, 840, 1)
+            ecm(n, 120, 2_000, 840, 1, tpool)
         }
         281..=310 => {
             // Will often find a factor of size 58-62 bits (budget 5-10s)
             // B2 = D² ~= 1.6M
-            ecm(n, 150, 4_000, 1260, 1)
+            ecm(n, 150, 4_000, 1260, 1, tpool)
         }
         311..=340 => {
             // Will often find a factor of size 64-70 bits (budget 20-30s)
             // B2 = D² = 4M
-            ecm(n, 150, 12_000, 2730, 1)
+            ecm(n, 150, 12_000, 2730, 1, tpool)
         }
         341.. => {
             // Try to find a factor of size 68-76 bits (budget 1min)
             // B2 = D² = 11.3M
-            ecm(n, 200, 30_000, 3570, 1)
+            ecm(n, 200, 30_000, 3570, 1, tpool)
         }
     }
 }
 
 // Factor number using purely ECM. This may never end, or fail.
-pub fn ecm_only(n: Uint) -> Option<(Uint, Uint)> {
+pub fn ecm_only(n: Uint, tpool: Option<&rayon::ThreadPool>) -> Option<(Uint, Uint)> {
     match n.bits() {
         0..=64 => {
             // This is probably guaranteed to work.
-            ecm(n, 100, 128, 210, 2)
+            ecm(n, 100, 128, 210, 2, tpool)
         }
         65..=80 => {
             // Try to find a factor of size 36 bits
-            ecm(n, 300, 400, 420, 2)
+            ecm(n, 300, 400, 420, 2, tpool)
         }
         81..=96 => {
             // Try to find a factor of size 48 bits
-            ecm(n, 800, 1700, 840, 2)
+            ecm(n, 800, 1700, 840, 2, tpool)
         }
         97..=128 => {
             // Try to find a factor of size 52 bits
-            ecm(n, 1000, 2500, 1050, 2)
+            ecm(n, 1000, 2500, 1050, 2, tpool)
         }
         129..=160 => {
             // Try to find a factor of size 60 bits
             // 1000 curves are often not enough for 80-bit factors.
-            ecm(n, 1000, 6000, 1470, 2)
+            ecm(n, 1000, 6000, 1470, 2, tpool)
         }
         161..=192 => {
             // Try to find a factor of size >70 bits
             // This will probably take a very long time.
             // TODO: try smaller parameters first.
-            ecm(n, 5000, 15_000, 11550, 2)
+            ecm(n, 5000, 15_000, 11550, 2, tpool)
         }
         193..=256 => {
             // Try to find a factor of size ~80?? bits
             // It may find factors of ~70 bits but not much more.
             // It will take several seconds per curve.
             // TODO: try smaller parameters first.
-            ecm(n, 15000, 25_000, 30030, 2)
+            ecm(n, 15000, 25_000, 30030, 2, tpool)
         }
         257.. => {
             // This is mostly to fill the table, but what we do?
             // TODO: try smaller parameters first.
-            ecm(n, 40000, 40_000, 60060, 2)
+            ecm(n, 40000, 40_000, 60060, 2, tpool)
         }
     }
 }
 
 // Run ECM for a given number of curves and bounds B1, B2.
-pub fn ecm(n: Uint, curves: usize, b1: usize, d: usize, verbose: usize) -> Option<(Uint, Uint)> {
+pub fn ecm(
+    n: Uint,
+    curves: usize,
+    b1: usize,
+    d: usize,
+    verbose: usize,
+    tpool: Option<&rayon::ThreadPool>,
+) -> Option<(Uint, Uint)> {
     if verbose > 0 {
         eprintln!(
             "Attempting ECM with {curves} curves B1={b1} D={d} (B2={})",
@@ -142,8 +153,9 @@ pub fn ecm(n: Uint, curves: usize, b1: usize, d: usize, verbose: usize) -> Optio
     let sb = SmoothBase::new(b1, d);
     // Try good curves first. They have large torsion (extra factor 3 or 4)
     // so their order is more probably smooth.
-    for (idx, &(x1, x2, y1, y2)) in GOOD_CURVES.iter().enumerate() {
-        if idx >= curves {
+    let done = AtomicBool::new(false);
+    let do_good_curve = |(idx, &(x1, x2, y1, y2))| {
+        if done.load(Ordering::Relaxed) {
             return None;
         }
         if verbose > 1 {
@@ -156,16 +168,41 @@ pub fn ecm(n: Uint, curves: usize, b1: usize, d: usize, verbose: usize) -> Optio
                 idx + 1,
                 start.elapsed().as_secs_f64());
             }
+            done.store(true, Ordering::Relaxed);
             return res;
+        }
+        None
+    };
+    if let Some(pool) = tpool {
+        let cs: Vec<_> = GOOD_CURVES[..min(curves, GOOD_CURVES.len())]
+            .iter()
+            .enumerate()
+            .collect();
+        let results: Vec<Option<_>> =
+            pool.install(|| cs.par_iter().map(|&t| do_good_curve(t)).collect());
+        for r in results {
+            if r.is_some() {
+                return r;
+            }
+        }
+    } else {
+        for (idx, gen) in GOOD_CURVES.iter().enumerate() {
+            if idx >= curves {
+                return None;
+            }
+            if let Some(res) = do_good_curve((idx, gen)) {
+                return Some(res);
+            }
         }
     }
     // Choose curves with torsion Z/2 x Z/4. There is a very easy infinite supply
     // of such curves because (3k+5)² + (4k+5)² = 1 + (5k+7)².
     // They are slightly more smooth than general Edwards curves
     // (exponent of 2 is 4.33 on average instead of 3.66).
-    for k in 0..curves {
-        if k + GOOD_CURVES.len() >= curves {
-            break;
+    let curves_k: Vec<_> = (GOOD_CURVES.len() as u32..curves as u32).collect();
+    let do_curve = |k: u32| {
+        if done.load(Ordering::Relaxed) {
+            return None;
         }
         let k = k as u64;
         if verbose > 1 {
@@ -188,9 +225,26 @@ pub fn ecm(n: Uint, curves: usize, b1: usize, d: usize, verbose: usize) -> Optio
                     3 * k + 8,
                     4 * k + 9,
                     start.elapsed().as_secs_f64()
-                );
+                    );
             }
+            done.store(true, Ordering::Relaxed);
             return res;
+        }
+        None
+    };
+    if let Some(pool) = tpool {
+        let results: Vec<Option<_>> =
+            pool.install(|| curves_k.par_iter().map(|&k| do_curve(k)).collect());
+        for r in results {
+            if r.is_some() {
+                return r;
+            }
+        }
+    } else {
+        for k in curves_k {
+            if let Some(res) = do_curve(k) {
+                return Some(res);
+            }
         }
     }
     if verbose > 0 {
