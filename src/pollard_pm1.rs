@@ -29,6 +29,7 @@
 
 use num_integer::Integer;
 
+use crate::arith_montgomery::{mg_2adic_inv, mg_mul, mg_redc};
 use crate::fbase;
 
 /// A factor base for Pollard P-1.
@@ -82,19 +83,7 @@ impl PM1Base {
         // We have a lot of modular reductions to compute,
         // so we use Montgomery forms.
         // Precompute opposite inverse of n mod R (R=2^64)
-        let ninv = {
-            // Invariant: nx = 1 + 2^k s, k increasing
-            let mut x = 1u64;
-            loop {
-                let rem = n.wrapping_mul(x) - 1;
-                if rem == 0 {
-                    break;
-                }
-                x += 1 << rem.trailing_zeros();
-            }
-            assert!(n.wrapping_mul(x) == 1);
-            1 + !x
-        };
+        let ninv = mg_2adic_inv(n);
 
         // Compute 2^K-1 mod n where K bit length is <= budget
         // 2R mod N,
@@ -176,28 +165,6 @@ impl PM1Base {
         } else {
             None
         }
-    }
-}
-
-// Montgomery form arithmetic
-
-#[inline(always)]
-fn mg_mul(n: u64, ninv: u64, x: u64, y: u64) -> u64 {
-    mg_redc(n, ninv, (x as u128) * (y as u128))
-}
-
-#[inline(always)]
-fn mg_redc(n: u64, ninv: u64, x: u128) -> u64 {
-    // Montgomery reduction (x/R mod n).
-    // compute -x/N mod R
-    let mul: u64 = (x as u64).wrapping_mul(ninv);
-    // reduce
-    let m = mul as u128 * n as u128;
-    let res = ((x + m) >> 64) as u64;
-    if res >= n {
-        res - n
-    } else {
-        res
     }
 }
 
