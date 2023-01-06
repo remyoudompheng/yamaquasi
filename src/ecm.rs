@@ -41,39 +41,45 @@ use crate::Uint;
 // has a relatively small prime factor (about size(n) / 5)
 pub fn ecm_auto(n: Uint) -> Option<(Uint, Uint)> {
     // The CPU budget here is only a few seconds (at most 1% of SIQS time).
-    // So we intentionally use suboptimal parameters hoping to be very lucky.
+    // So we intentionally use small parameters hoping to be very lucky.
+    // Best D values have D/phi(D) > 4.3
     //
     // Sample parameters can be found at https://eecm.cr.yp.to/performance.html
     match n.bits() {
-        0..=220 => {
-            // Try to find a factor of size ~32 bits (budget <100ms)
+        0..=190 => {
+            // Will quite often find a 30-32 bit factor (budget 10-20ms)
+            // B2 = D² = 44100
+            ecm(n, 16, 120, 210, 1)
+        }
+        191..=220 => {
+            // Will quite often find a 36 bit factor (budget <100ms)
             // B2 = D² = 78400
-            ecm(n, GOOD_CURVES.len(), 120, 280, 1)
+            ecm(n, 16, 120, 280, 1)
         }
         221..=250 => {
-            // Try to find a factor of size ~42 bits (budget 0.1-0.5s)
+            // Will quite often find a factor of size 42-46 bits (budget 0.1-0.5s)
             // B2 = D² = 176400
-            ecm(n, 30, 500, 420, 1)
+            ecm(n, 50, 500, 420, 1)
         }
         251..=280 => {
-            // Try to find a factor of size ~50 bits (budget 2-3s)
+            // Will quite often find a factor of size 52-56 bits (budget 2-3s)
             // B2 = D² = 700k
-            ecm(n, 100, 2_000, 840, 1)
+            ecm(n, 120, 2_000, 840, 1)
         }
         281..=310 => {
-            // Try to find a factor of size ~56 bits (budget 5-10s)
+            // Will often find a factor of size 58-62 bits (budget 5-10s)
             // B2 = D² ~= 1.6M
-            ecm(n, 100, 4_000, 1260, 1)
+            ecm(n, 150, 4_000, 1260, 1)
         }
         311..=340 => {
-            // Try to find a factor of size ~62 bits (budget 20-30s)
+            // Will often find a factor of size 64-70 bits (budget 20-30s)
             // B2 = D² = 4M
-            ecm(n, 100, 8_000, 1980, 1)
+            ecm(n, 150, 12_000, 2730, 1)
         }
         341.. => {
-            // Try to find a factor of size ~68 bits (budget 1min)
+            // Try to find a factor of size 68-76 bits (budget 1min)
             // B2 = D² = 11.3M
-            ecm(n, 100, 15_000, 3360, 1)
+            ecm(n, 200, 30_000, 3570, 1)
         }
     }
 }
@@ -137,6 +143,9 @@ pub fn ecm(n: Uint, curves: usize, b1: usize, d: usize, verbose: usize) -> Optio
     // Try good curves first. They have large torsion (extra factor 3 or 4)
     // so their order is more probably smooth.
     for (idx, &(x1, x2, y1, y2)) in GOOD_CURVES.iter().enumerate() {
+        if idx >= curves {
+            return None;
+        }
         if verbose > 1 {
             eprintln!("Trying good Edwards curve G=({x1}/{x2},{y1}/{y2})");
         }
@@ -184,7 +193,9 @@ pub fn ecm(n: Uint, curves: usize, b1: usize, d: usize, verbose: usize) -> Optio
             return res;
         }
     }
-    eprintln!("ECM failure after {:.3}s", start.elapsed().as_secs_f64());
+    if verbose > 0 {
+        eprintln!("ECM failure after {:.3}s", start.elapsed().as_secs_f64());
+    }
     None
 }
 

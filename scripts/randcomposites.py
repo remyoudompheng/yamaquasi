@@ -8,18 +8,13 @@ from random import randint
 from gmpy2 import mpz, next_prime, is_prime
 
 def main():
-    if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} N_BITS")
+    if len(sys.argv) < 2:
+        print(f"Usage: {sys.argv[0]} N_BITS [N_BITS...]")
         exit(1)
-    size = int(sys.argv[1])
+    sizes = [int(s) for s in sys.argv[1:]]
     primes = []
     prod = 1
-    while prod.bit_length() < size:
-        rem = size - prod.bit_length()
-        if rem < 64:
-            psize = rem + 1
-        else:
-            psize = randint(rem // 3, 3 * rem // 4)
+    for psize in sizes:
         seed = mpz(randint(2 ** (psize - 1), 2**psize))
         seed = next_prime(seed)
         prod *= seed

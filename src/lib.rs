@@ -134,7 +134,7 @@ fn factor_impl(
     }
     // Do we need to try an ECM step?
     match alg {
-        Algo::Auto if n.bits() > 200 => {
+        Algo::Auto if n.bits() >= 180 => {
             // Only in automatic mode, for large inputs, ECM can be useful.
             if let Some((a, b)) = ecm::ecm_auto(n) {
                 factor_impl(a.into(), alg, prefs, factors, tpool);

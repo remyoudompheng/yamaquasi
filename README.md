@@ -1,5 +1,6 @@
-Yamaquasi is a Rust implementation of several variants of the Quadratic sieve
-factorisation method. It attempts to balance efficiency and readability.
+Yamaquasi is a Rust implementation of several factoring algorithms with
+a focus on the Quadratic sieve factorisation method. It attempts to balance
+efficiency and readability.
 
 # Description
 
@@ -15,6 +16,33 @@ many factors), but most integers will be processed successfully.
 
 Utilities like YAFU (https://github.com/bbuhrow/yafu) can be used for more
 reliable or efficient factoring.
+
+# Usage
+
+To compile Yamaquasi, install Rust [https://rust-lang.org] and
+build command `ymqs` using:
+
+```
+cargo install --root . --path . --bin ymqs
+```
+
+To factor an integer:
+
+```
+$ bin/ymqs 803469022129495137770981046170581301261101496891396417650687
+[various logs to stderr]
+164504919713
+4884164093883941177660049098586324302977543600799
+```
+
+Factor an integer using only ECM:
+
+```
+$ bin/ymqs --mode ecm 803469022129495137770981046170581301261101496891396417650687
+[various logs to stderr]
+164504919713
+4884164093883941177660049098586324302977543600799
+```
 
 # Choices
 
@@ -81,7 +109,7 @@ On x86-64 architectures, several parts of the code can be accelerated
 by enabling AVX2 using `RUSTFLAGS='-C target-cpu=native'`
 or `RUSTFLAGS='-C target-feature=+avx2'`.
 
-# Implementation
+# Quadratic sieve implementation
 
 The implementation is a "textbook" implementation following the papers:
 
@@ -164,12 +192,38 @@ the optimized matrices `Di`, `Ei`, `Fi` from Montgomery's article that avoid
 several inner products of blocks.
 The implementation uses width 64 blocks with `u64` word type.
 
-## ECM implementation
+# ECM implementation
 
 To make it easier to factorize general numbers (not necessarily balanced
 products of 2 primes), a basic implementation of ECM using Edwards curves
 is provided. It partially follows the EECM paper (Bernstein-Birkner-Lange-Peters)
 available at https://eecm.cr.yp.to/index.html
 
-Because the quadratic sieve is the main focus, the ECM is run with very
-low parameters and usually catches several factors up to 12 digits.
+Relevant references include:
+
+[B. Dodson, P. Zimmermann, 20 Years of ECM](https://hal.archives-ouvertes.fr/inria-00070192)
+
+[G. Hanrot, M. Quercia, P. Zimmermann, The Middle Product Algorithm I](https://hal.inria.fr/inria-00071921)
+
+[D.J. Bernstein, P. Birkner, T. Lange, C. Peters, ECM Using Edwards curves](https://eecm.cr.yp.to/eecm-20111008.pdf)
+
+[R. Barbulescu, J.W. Bos, C. Bouvier, T. Kleinjung, P.L. Montgomery,
+Finding ECM-friendly curves through a study of Galois properties 
+](https://hal.archives-ouvertes.fr/hal-00671948)
+
+It uses several high-torsion curves from the EECM list (available at
+https://eecm.cr.yp.to/goodcurves.html) and a family of curves with
+rational Z/2 x Z/4 torsion which is not optimal but has a very simple
+definition.
+
+Integer arithmetic is performed using the Montgomery form.
+
+The ECM implementation is run when using the "automatic" factoring mode,
+with very low parameters (that can easily catch factors with 1/5th
+of input integer digits).
+
+## Limitations
+
+The ECM implementation assumes the same bounds as the rest of the program.
+In particular, only input integers below 512 bits are accepted.
+
