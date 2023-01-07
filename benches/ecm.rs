@@ -2,6 +2,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use brunch::Bench;
+use yamaquasi::arith_montgomery::ZmodN;
 use yamaquasi::{ecm, Uint};
 
 fn main() {
@@ -13,7 +14,42 @@ fn main() {
 
     brunch::benches! {
         inline:
-        // ECM runs
+        {
+            let zn = ZmodN::new(p256);
+            let c = ecm::Curve::from_point(zn, 8_u64.into(), 9_u64.into());
+            let g = c.gen();
+            let n: u64 = 1511 * 1523 * 1531;
+            Bench::new("scalar mul n32 x G (p256)")
+                .with_timeout(Duration::from_secs(3))
+                .run_seeded((), |_| c.scalar64_mul(n, &g))
+        },
+        {
+            let zn = ZmodN::new(p256);
+            let c = ecm::Curve::from_point(zn, 8_u64.into(), 9_u64.into());
+            let g = c.gen();
+            let n: u64 = 1511 * 1523 * 1531 * 1543 * 1549 * 1553;
+            Bench::new("scalar mul n64 x G (p256)")
+                .with_timeout(Duration::from_secs(3))
+                .run_seeded((), |_| c.scalar64_mul(n, &g))
+        },
+        {
+            let zn = ZmodN::new(p256);
+            let c = ecm::Curve::from_point(zn, 8_u64.into(), 9_u64.into());
+            let g = c.gen();
+            let n: u64 = 1511 * 1523 * 1531;
+            Bench::new("chain mul n32 x G (p256)")
+                .with_timeout(Duration::from_secs(3))
+                .run_seeded((), |_| c.scalar64_chainmul(n, &g))
+        },
+        {
+            let zn = ZmodN::new(p256);
+            let c = ecm::Curve::from_point(zn, 8_u64.into(), 9_u64.into());
+            let g = c.gen();
+            let n: u64 = 1511 * 1523 * 1531 * 1543 * 1549 * 1553;
+            Bench::new("chain mul n64 x G (p256)")
+                .with_timeout(Duration::from_secs(3))
+                .run_seeded((), |_| c.scalar64_chainmul(n, &g))
+        },
         {
             // 5 primes where the "good curves" often have non-smooth order.
             let primes24: &[u64] = &[
@@ -59,5 +95,16 @@ fn main() {
                 start.elapsed().as_secs_f64()
             );
         }
+    }
+    for b1 in [1000, 10_000, 100_000, 1_000_000] {
+        let b2 = 8820;
+        let start = std::time::Instant::now();
+        // Use P256 so what ECM cannot work.
+        let res = ecm::ecm(p256, 1, b1, b2, 0, None);
+        assert!(res.is_none());
+        eprintln!(
+            "ECM(B1={b1},B2={b2}) in {:.3}s",
+            start.elapsed().as_secs_f64()
+        );
     }
 }

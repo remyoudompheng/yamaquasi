@@ -257,9 +257,9 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve) -> Option<(Uint, Uint)> {
     let n = &zn.n;
     // ECM stage 1
     let mut g = c.gen();
-    for block in sb.factors.chunks(8) {
+    for block in sb.factors.chunks(4) {
         for &f in block {
-            g = c.scalar32_mul(f, &g);
+            g = c.scalar64_mul(f, &g);
         }
         if let Some(d) = c.is_2_torsion(&g) {
             if d > Uint::ONE && d < *n {
@@ -325,7 +325,7 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve) -> Option<(Uint, Uint)> {
     }
     // Compute the giant steps
     let mut gsteps = Vec::with_capacity(sb.d);
-    let dg = c.scalar32_mul(sb.d as u32, &g);
+    let dg = c.scalar64_mul(sb.d as u64, &g);
     let mut gg = dg.clone();
     for _ in 0..sb.d {
         gsteps.push(gg.clone());
@@ -386,7 +386,7 @@ fn batch_normalize(zn: &ZmodN, pts: &mut [Point]) -> Option<()> {
 /// An exponent base for ECM.
 /// Chunks of primes are multiplied into u32.
 pub struct SmoothBase {
-    factors: Box<[u32]>,
+    factors: Box<[u64]>,
     // A number d such that d² ~ B2
     // In BSGS to check that a point has order B2, we look for
     // q in [0,d) r in [-d/2,d/2] such that [qd]P = [-r]P
@@ -414,14 +414,14 @@ impl SmoothBase {
             if p == 3 {
                 pow *= 3;
             }
-            if buffer * pow >= 1 << 32 {
-                factors.push(buffer as u32);
+            if 1 << buffer.leading_zeros() <= pow {
+                factors.push(buffer);
                 buffer = 1;
             }
             buffer *= pow;
         }
         if buffer > 1 {
-            factors.push(buffer as u32)
+            factors.push(buffer)
         }
         SmoothBase {
             factors: factors.into_boxed_slice(),
@@ -443,8 +443,8 @@ pub struct Curve {
 }
 
 // A point in projective coordinates.
-#[derive(Clone)]
-struct Point(MInt, MInt, MInt);
+#[derive(Clone, Debug)]
+pub struct Point(MInt, MInt, MInt);
 
 // Special curves from https://eecm.cr.yp.to/goodcurves.html
 // We only need the coordinates of the generator (d can be computed).
@@ -508,7 +508,7 @@ impl Curve {
 
     // Construct the unique curve through a point with nonzero
     // coordinates.
-    fn from_point(zn: ZmodN, x: Uint, y: Uint) -> Curve {
+    pub fn from_point(zn: ZmodN, x: Uint, y: Uint) -> Curve {
         // Compute d = (x²+y²-1) / x²y²
         let xinv = zn.from_int(arith::inv_mod(x, zn.n).unwrap());
         let yinv = zn.from_int(arith::inv_mod(y, zn.n).unwrap());
@@ -521,7 +521,7 @@ impl Curve {
         Curve { zn, d, gx, gy }
     }
 
-    fn gen(&self) -> Point {
+    pub fn gen(&self) -> Point {
         Point(self.gx, self.gy, self.zn.from_int(Uint::ONE))
     }
 
@@ -531,22 +531,27 @@ impl Curve {
         // 12 multiplications are required.
         let zn = &self.zn;
         // Handle z
-        let a = zn.mul(p.2, q.2);
-        let b = zn.mul(a, a);
+        let a = zn.mul(&p.2, &q.2);
+        let b = zn.mul(&a, &a);
         // Karatsuba-like product
-        let c = zn.mul(p.0, q.0);
-        let d = zn.mul(p.1, q.1);
-        let cd = zn.mul(zn.add(p.0, p.1), zn.add(q.0, q.1));
-        let cross = zn.sub(cd, zn.add(c, d));
+        let c = zn.mul(&p.0, &q.0);
+        let d = zn.mul(&p.1, &q.1);
+        let cd = zn.mul(&zn.add(&p.0, &p.1), &zn.add(&q.0, &q.1));
+        let cross = zn.sub(&cd, &zn.add(&c, &d));
 
-        let e = zn.mul(self.d, zn.mul(c, d));
-        let f = zn.sub(b, e);
-        let g = zn.add(b, e);
+        let e = zn.mul(&self.d, &zn.mul(&c, &d));
+        let f = zn.sub(&b, &e);
+        let g = zn.add(&b, &e);
 
-        let x = zn.mul(zn.mul(a, f), cross);
-        let y = zn.mul(zn.mul(a, g), zn.sub(d, c));
-        let z = zn.mul(f, g);
+        let x = zn.mul(&zn.mul(&a, &f), &cross);
+        let y = zn.mul(zn.mul(&a, &g), zn.sub(&d, &c));
+        let z = zn.mul(&f, &g);
         Point(x, y, z)
+    }
+
+    fn sub(&self, p: &Point, q: &Point) -> Point {
+        let q = Point(self.zn.sub(&self.zn.zero(), &q.0), q.1, q.2);
+        self.add(p, &q)
     }
 
     // Doubling formula following dbl-2007-bl
@@ -555,21 +560,21 @@ impl Curve {
         // 7 multiplications are required.
         let zn = &self.zn;
         // Handle z
-        let x_plus_y = zn.add(p.0, p.1);
-        let b = zn.mul(x_plus_y, x_plus_y);
-        let c = zn.mul(p.0, p.0);
-        let d = zn.mul(p.1, p.1);
-        let e = zn.add(c, d);
-        let h = zn.mul(p.2, p.2);
-        let j = zn.sub(zn.sub(e, h), h);
+        let x_plus_y = zn.add(&p.0, &p.1);
+        let b = zn.mul(&x_plus_y, &x_plus_y);
+        let c = zn.mul(&p.0, &p.0);
+        let d = zn.mul(&p.1, &p.1);
+        let e = zn.add(&c, &d);
+        let h = zn.mul(&p.2, &p.2);
+        let j = zn.sub(&zn.sub(&e, &h), &h);
         // Final result
-        let x = zn.mul(zn.sub(b, e), j);
-        let y = zn.mul(e, zn.sub(c, d));
-        let z = zn.mul(e, j);
+        let x = zn.mul(&zn.sub(&b, &e), &j);
+        let y = zn.mul(&e, &zn.sub(&c, &d));
+        let z = zn.mul(&e, &j);
         Point(x, y, z)
     }
 
-    fn scalar32_mul(&self, k: u32, p: &Point) -> Point {
+    pub fn scalar64_mul(&self, k: u64, p: &Point) -> Point {
         let zn = &self.zn;
         let mut res = Point(zn.zero(), zn.one(), zn.one());
         let mut sq: Point = p.clone();
@@ -582,6 +587,87 @@ impl Curve {
             k >>= 1;
         }
         res
+    }
+
+    pub fn scalar64_chainmul(&self, k: u64, p: &Point) -> Point {
+        // Compute an addition chain for k as in
+        // https://eprint.iacr.org/2007/455.pdf
+        // We find that m=7 is optimal for 64-bit blocks (~14 adds instead of 28 for ~56-bit blocks)
+        // For 32-bit blocks, the optimal value is m=5 (7 adds instead of 12 for ~22-bit blocks)
+        let p2 = self.double(&p);
+        let p3 = self.add(&p, &p2);
+        let p5 = self.add(&p3, &p2);
+        let p7 = self.add(&p5, &p2);
+        let gaps = [p, &p3, &p5, &p7];
+        // Encode the chain as:
+        // 0 (doubling)
+        // ±k (add/sub kP)
+        let mut c = [0_i8; 128];
+        let l = Self::make_addition_chain(&mut c, k);
+        // Get initial element (chain[l-1] = 1 or 3 or 5 or 7)
+        let mut q = gaps[c[l - 1] as usize / 2].clone();
+        for idx in 1..l {
+            let op = c[l - 1 - idx];
+            if op == 0 {
+                q = self.double(&q);
+            } else if op > 0 {
+                q = self.add(&q, &gaps[op as usize / 2]);
+            } else if op < 0 {
+                q = self.sub(&q, &gaps[(-op) as usize / 2]);
+            }
+        }
+        q
+    }
+
+    fn make_addition_chain(chain: &mut [i8; 128], k: u64) -> usize {
+        // Build an addition chain as a reversed list of opcodes:
+        // - first opcode retrieves xP for x in (1, 3, 5, 7)
+        // - opcode 0 means double
+        // - opcode y means add yP
+        if k == 0 {
+            chain[0] = 0;
+            return 1;
+        }
+        const M: u64 = 7;
+        let mut l = 0;
+        let mut kk = k;
+        loop {
+            if kk % 2 == 0 {
+                // make K/2, double
+                chain[l] = 0;
+                kk /= 2;
+                l += 1;
+            } else if kk <= M {
+                chain[l] = kk as i8;
+                return l + 1;
+            } else if kk == M + 2 {
+                // make M, add 2
+                chain[l] = 2;
+                kk = M;
+                l += 1;
+            } else if M + 4 <= kk && kk < 3 * M {
+                // make 2x+1, double, add k-(4x+2) (<= M)
+                let x = kk / 6;
+                chain[l] = (kk - 4 * x - 2) as i8;
+                chain[l + 1] = 0;
+                l += 2;
+                kk = 2 * x + 1;
+            } else {
+                // select in window
+                let mut best = 1;
+                let mut best_tz = (kk - 1).trailing_zeros();
+                for x in [-7, -5, -3, -1, 1_i64, 3, 5, 7] {
+                    let tz = (kk as i64 - x).trailing_zeros();
+                    if tz > best_tz {
+                        best = x;
+                        best_tz = tz
+                    }
+                }
+                chain[l] = best as i8;
+                kk = ((kk as i64) - best) as u64;
+                l += 1;
+            }
+        }
     }
 
     #[cfg(test)]
@@ -619,7 +705,18 @@ impl Curve {
             Some(d)
         }
     }
+
+    #[cfg(test)]
+    fn equal(&self, p: &Point, q: &Point) -> bool {
+        let zn = &self.zn;
+        zn.mul(p.0, q.1) == zn.mul(p.1, q.0)
+            && zn.mul(p.1, q.2) == zn.mul(p.2, q.1)
+            && zn.mul(p.2, q.0) == zn.mul(p.0, q.2)
+    }
 }
+
+#[cfg(test)]
+use std::str::FromStr;
 
 #[test]
 fn test_curve() {
@@ -683,3 +780,55 @@ fn test_ecm_curve2() {
     eprintln!("{:?}", res);
     assert_eq!(res, Some((p, q)));
 }
+
+#[test]
+fn test_addition_chain() {
+    fn eval_chain(c: &[i8]) -> u64 {
+        let mut k = c[c.len() - 1] as u64;
+        for idx in 1..c.len() {
+            let op = c[c.len() - 1 - idx];
+            if op == 0 {
+                k = 2 * k;
+            } else {
+                k = ((k as i64) + (op as i64)) as u64;
+            }
+        }
+        k
+    }
+
+    for k in 1..1000_u64 {
+        let mut c = [0i8; 128];
+        let l = Curve::make_addition_chain(&mut c, k);
+        assert_eq!(k, eval_chain(&c[..l]), "chain={:?}", &c[..l]);
+    }
+
+    let mut adds = 0;
+    for i in 1..=1000_u64 {
+        let mut c = [0i8; 128];
+        let k = i.wrapping_mul(1_234_567_123_456_789);
+        let l = Curve::make_addition_chain(&mut c, k);
+        assert_eq!(k, eval_chain(&c[..l]), "chain={:?}", &c[..l]);
+        adds += 3;
+        for &op in &c[..l - 1] {
+            if op != 0 {
+                adds += 1;
+            }
+        }
+    }
+    eprintln!(
+        "average additions {:.2} for 64-bit integers",
+        adds as f64 / 1000.0
+    );
+
+    let n = Uint::from_str(MODULUS256).unwrap();
+    let zn = ZmodN::new(n);
+    let c = Curve::from_point(zn, Uint::from(2_u64), Uint::from(132_u64));
+    let k: u64 = 1511 * 1523 * 1531 * 1543 * 1549 * 1553;
+    let p1 = c.scalar64_mul(k, &c.gen());
+    let p2 = c.scalar64_chainmul(k, &c.gen());
+    assert!(c.equal(&p1, &p2));
+}
+
+#[cfg(test)]
+const MODULUS256: &'static str =
+    "107910248100432407082438802565921895527548119627537727229429245116458288637047";
