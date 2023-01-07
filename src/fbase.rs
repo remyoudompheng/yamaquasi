@@ -198,6 +198,65 @@ pub fn primes(n: u32) -> Vec<u32> {
     primes
 }
 
+// An iterator over blocks of prime numbers until 2^32.
+// It is initialized with 6542 primes under 2^16 and sieves intervals
+// of size 2^16 to keep low memory footprint.
+//
+// The main usage is Pollard P-1 with large B2.
+pub struct PrimeSieve {
+    smallprimes: Box<[u32]>,
+    block: Vec<u32>,
+    block_count: usize,
+    offsets: Vec<u32>,
+    sieve: [bool; 1 << 16],
+}
+
+impl PrimeSieve {
+    pub fn new() -> Self {
+        let smalls = primes(6542);
+        assert_eq!(smalls.last(), Some(&65521));
+        // If 65535%p = k, 65536 + (p-1-k) is a multiple of p
+        let offsets = smalls.iter().map(|&p| p - 1 - 65535 % p).collect();
+        Self {
+            smallprimes: smalls.into_boxed_slice(),
+            block: vec![],
+            block_count: 0,
+            offsets,
+            sieve: [false; 1 << 16],
+        }
+    }
+
+    pub fn next(&mut self) -> &[u32] {
+        if self.block_count == 65536 {
+            // The end
+            self.block.clear();
+            &self.block
+        } else if self.block_count == 0 {
+            self.block_count += 1;
+            &self.smallprimes
+        } else {
+            // sieve a block
+            self.sieve.fill(false);
+            for (&p, off) in self.smallprimes.iter().zip(self.offsets.iter_mut()) {
+                let mut o = *off as usize;
+                while o < self.sieve.len() {
+                    self.sieve[o] = true;
+                    o += p as usize;
+                }
+                *off = o as u32 - 65536;
+            }
+            self.block.clear();
+            for (idx, b) in self.sieve.iter().enumerate() {
+                if !b {
+                    self.block.push(((self.block_count << 16) + idx) as u32);
+                }
+            }
+            self.block_count += 1;
+            &self.block
+        }
+    }
+}
+
 fn prepare_factor_base(nk: &Uint, primes: &[u32]) -> Vec<(u64, u64, arith::Dividers)> {
     primes
         .iter()
@@ -303,4 +362,21 @@ pub fn cofactor(
         }
     };
     Some((pq?, factors))
+}
+
+#[test]
+fn test_primesieve() {
+    let mut s = PrimeSieve::new();
+    loop {
+        let block = s.next();
+        if block[0] >= 2 << 20 {
+            // There are 4533 primes between 2<<20 and 2<<20 + 65536
+            // from 2097169 to 2162681
+            assert_eq!(block.len(), 4533);
+            assert_eq!(block[0], 2097169);
+            assert_eq!(block[4532], 2162681);
+            eprintln!("{:?} .. {:?}", &block[..5], &block[block.len() - 5..]);
+            break;
+        }
+    }
 }
