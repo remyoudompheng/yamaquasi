@@ -46,6 +46,7 @@ pub enum Algo {
     Auto,
     Squfof,
     Qs64,
+    Pm1,
     Ecm,
     Qs,
     Mpqs,
@@ -59,6 +60,7 @@ impl FromStr for Algo {
         match s {
             "auto" => Ok(Self::Auto),
             "squfof" => Ok(Self::Squfof),
+            "pm1" => Ok(Self::Pm1),
             "ecm" => Ok(Self::Ecm),
             "qs" => Ok(Self::Qs),
             "qs64" => Ok(Self::Qs64),
@@ -134,14 +136,55 @@ fn factor_impl(
     }
     // Do we need to try an ECM step?
     match alg {
-        Algo::Auto if n.bits() >= 180 => {
-            // Only in automatic mode, for large inputs, ECM can be useful.
-            if let Some((a, b)) = ecm::ecm_auto(n, tpool) {
+        Algo::Auto => {
+            // Only in automatic mode, for large inputs, Pollard P-1 and ECM can be useful.
+            if n.bits() >= 150 {
+                let start_pm1 = std::time::Instant::now();
+                if let Some((a, b)) = pollard_pm1::pm1_quick(n) {
+                    eprintln!(
+                        "Pollard P-1 success with factor p={a} in {:.3}s",
+                        start_pm1.elapsed().as_secs_f64()
+                    );
+                    factor_impl(a.into(), alg, prefs, factors, tpool);
+                    eprintln!("Recursively factor {b}");
+                    factor_impl(b.into(), alg, prefs, factors, tpool);
+                    return;
+                } else {
+                    eprintln!(
+                        "Pollard P-1 failure in {:.3}s",
+                        start_pm1.elapsed().as_secs_f64()
+                    );
+                }
+            }
+            if n.bits() > 190 {
+                if let Some((a, b)) = ecm::ecm_auto(n, tpool) {
+                    factor_impl(a.into(), alg, prefs, factors, tpool);
+                    eprintln!("Recursively factor {b}");
+                    factor_impl(b.into(), alg, prefs, factors, tpool);
+                    return;
+                }
+            }
+        }
+        Algo::Pm1 => {
+            // Pure Pollard P-1
+            let start_pm1 = std::time::Instant::now();
+            if let Some((a, b)) = pollard_pm1::pm1_only(n) {
+                eprintln!(
+                    "Pollard P-1 success with factor p={a} in {:.3}s",
+                    start_pm1.elapsed().as_secs_f64()
+                );
                 factor_impl(a.into(), alg, prefs, factors, tpool);
                 eprintln!("Recursively factor {b}");
                 factor_impl(b.into(), alg, prefs, factors, tpool);
                 return;
+            } else {
+                eprintln!(
+                    "Pollard P-1 failure in {:.3}s",
+                    start_pm1.elapsed().as_secs_f64()
+                );
             }
+            factors.push(n);
+            return;
         }
         Algo::Ecm => {
             // Pure ECM is requested.
@@ -154,6 +197,7 @@ fn factor_impl(
                 return;
             }
             eprintln!("Factorization is incomplete.");
+            factors.push(n);
             return;
         }
         _ => {}
@@ -206,6 +250,7 @@ fn factor_impl(
         Algo::Auto => unreachable!("impossible"),
         Algo::Qs64 => unreachable!("impossible"),
         Algo::Squfof => unreachable!("impossible"),
+        Algo::Pm1 => unreachable!("impossible"),
         Algo::Ecm => unreachable!("impossible"),
         Algo::Qs => qsieve::qsieve(nk, &prefs, tpool),
         Algo::Mpqs => mpqs::mpqs(nk, &prefs, tpool),

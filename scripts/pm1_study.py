@@ -2,7 +2,7 @@ from random import getrandbits
 from sage.all import next_prime, factor
 
 # Study efficiency of Pollard P-1 for random large primes.
-for sz in range(22, 28):
+for sz in list(range(22, 28)) + [48, 60, 72, 84, 96]:
     print(f"Prime size {sz} bits")
     stats1 = []
     stats2 = []

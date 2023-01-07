@@ -1,4 +1,4 @@
-// Copyright 2022 Rémy Oudompheng. All rights reserved.
+// Copyright 2022, 2023 Rémy Oudompheng. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -29,8 +29,9 @@
 
 use num_integer::Integer;
 
-use crate::arith_montgomery::{mg_2adic_inv, mg_mul, mg_redc};
+use crate::arith_montgomery::{mg_2adic_inv, mg_mul, mg_redc, ZmodN};
 use crate::fbase;
+use crate::Uint;
 
 /// A factor base for Pollard P-1.
 /// Pairs of factors are multiplied into u32.
@@ -168,6 +169,149 @@ impl PM1Base {
     }
 }
 
+// Generic Pollard P-1 implementation for possibly large integers.
+// It doesn't use the multipoint evaluation model and really iterates over primes.
+// The standard stage 2 approach should be fine for B2 < 1e9 (51M primes).
+
+// Similarly to ECM implementation, run Pollard P-1 with small parameters
+// to possibly detect a small factor. The cost is 2 multiplications per large
+// prime and it should use a CPU budget similar to 1 ECM run.
+pub fn pm1_quick(n: Uint) -> Option<(Uint, Uint)> {
+    match n.bits() {
+        // Catches many 24-bit factors in 1-5ms.
+        0..=190 => pm1_impl(n, 256, 65536),
+        // Takes less than a few ms
+        191..=220 => pm1_impl(n, 512, 65536 * 2),
+        // Takes less than 0.01 second
+        221..=250 => pm1_impl(n, 1024, 65536 * 4),
+        // Takes less than 0.1 second
+        251..=280 => pm1_impl(n, 8192, 65536 * 32),
+        // Takes less than 0.5 second
+        281..=310 => pm1_impl(n, 65536, 65536 * 128),
+        // Takes about 1 second
+        311..=340 => pm1_impl(n, 256 << 10, 65536 * 512),
+        // Takes about 2-5 seconds
+        341.. => pm1_impl(n, 1 << 20, 65536 * 2048),
+    }
+}
+
+/// Perform Pollard P-1 with a large CPU budget.
+/// This is however unlikely to produce interesting results
+/// but should be faster than ECM with similar B1/B2.
+pub fn pm1_only(n: Uint) -> Option<(Uint, Uint)> {
+    match n.bits() {
+        0..=96 => pm1_impl(n, 1024, 65536),
+        97..=128 => pm1_impl(n, 4 << 10, 256 << 10),
+        129..=160 => pm1_impl(n, 16 << 10, 1 << 20),
+        161..=192 => pm1_impl(n, 64 << 10, 4 << 20),
+        193..=224 => pm1_impl(n, 256 << 10, 16 << 20),
+        225..=256 => pm1_impl(n, 1 << 20, 64 << 20),
+        257..=288 => pm1_impl(n, 4 << 20, 256 << 20),
+        289.. => pm1_impl(n, 16 << 20, 1 << 30),
+    }
+}
+
+pub fn pm1_impl(n: Uint, b1: u64, b2: u64) -> Option<(Uint, Uint)> {
+    assert!(b1 > 3);
+    let zn = ZmodN::new(n);
+    let mut sieve = fbase::PrimeSieve::new();
+    let mut block = sieve.next();
+    let mut expblock = 1u64;
+    // Stage 1
+    let mut g = zn.from_int(Uint::from(2_u64));
+    let mut p_prev: u32 = 3;
+    'stage1: loop {
+        for &p in block {
+            if p > b1 as u32 {
+                break 'stage1;
+            }
+            let p = p as u64;
+            let mut pow = p;
+            while pow * p < 1024 {
+                pow *= p;
+            }
+            if 1 << expblock.leading_zeros() <= pow {
+                // process exponent block
+                let mut res = zn.one();
+                let mut sq = g;
+                let mut exp = expblock;
+                while exp > 0 {
+                    if exp & 1 == 1 {
+                        res = zn.mul(&res, &sq);
+                    }
+                    sq = zn.mul(&sq, &sq);
+                    exp /= 2;
+                }
+                g = res;
+                expblock = 1;
+            }
+            expblock *= pow;
+            p_prev = p as u32;
+        }
+        // Check GCD after each prime block
+        let d = Integer::gcd(&n, &Uint::from(g));
+        if d > Uint::ONE && d < n {
+            return Some((d, n / d));
+        }
+        block = sieve.next();
+    }
+
+    // Stage 2
+    // g is 2^(product of small primes) mod n
+    // gaps[i] = g^2i+2
+    // The vector is grown dynamically during iteration.
+    let g2 = zn.mul(&g, &g);
+    let mut gaps = vec![g2];
+
+    let mut x = {
+        // Compute g^pprev
+        let mut res = zn.one();
+        let mut sq = g;
+        let mut exp = p_prev;
+        while exp > 0 {
+            if exp & 1 == 1 {
+                res = zn.mul(&res, &sq);
+            }
+            sq = zn.mul(&sq, &sq);
+            exp /= 2;
+        }
+        res
+    };
+    // Accumulate product of (g^p-1)
+    let one = zn.one();
+    let mut product = zn.sub(&x, &one);
+    'stage2: loop {
+        for &p in block {
+            if p > b2 as u32 {
+                break 'stage2;
+            }
+            if p <= p_prev {
+                continue;
+            }
+            let gap = (p - p_prev) as usize;
+            // Extend gaps if needed.
+            while gaps.len() <= gap / 2 {
+                gaps.push(zn.mul(gaps[gaps.len() - 1], g2));
+            }
+            assert!(gap > 0 && gap % 2 == 0, "gap={gap} p_prev={p_prev} p={p}");
+            x = zn.mul(x, gaps[gap / 2 - 1]);
+            product = zn.mul(&product, &zn.sub(&x, &one));
+            p_prev = p;
+        }
+        block = sieve.next();
+        // Check GCD after each prime block
+        let d = Integer::gcd(&n, &Uint::from(product));
+        if d > Uint::ONE && d < n {
+            return Some((d, n / d));
+        }
+    }
+    let d = Integer::gcd(&n, &Uint::from(product));
+    if d > Uint::ONE && d < n {
+        return Some((d, n / d));
+    }
+    None
+}
+
 #[test]
 fn test_pm1_basic() {
     let ns: &[u64] = &[
@@ -222,4 +366,23 @@ fn test_pm1_random() {
             );
         }
     }
+}
+
+#[test]
+fn test_pm1_uint() {
+    use std::str::FromStr;
+
+    // A 128-bit prime such that p-1 is smooth:
+    // p-1 = 2 * 5 * 29 * 89 * 211 * 433 * 823 * 1669 * 4013 * 7717 * 416873
+    let p128 = Uint::from_str("41815371135748981224332082131").unwrap();
+    // A 256-bit strong prime
+    let p256 = Uint::from_str(
+        "92504863121296400653652753711376140294298584431452956354291724864471735145079",
+    )
+    .unwrap();
+    let n = p128 * p256;
+    let Some((p, q)) = pm1_impl(n, 30000, 800_000)
+        else { panic!("failed Pollard P-1") };
+    assert_eq!(p, p128);
+    assert_eq!(q, p256);
 }
