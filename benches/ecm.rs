@@ -16,7 +16,7 @@ fn main() {
         inline:
         {
             let zn = ZmodN::new(p256);
-            let c = ecm::Curve::from_point(zn, 8_u64.into(), 9_u64.into());
+            let c = ecm::Curve::from_point(zn, 8, 9).unwrap();
             let g = c.gen();
             let n: u64 = 1511 * 1523 * 1531;
             Bench::new("scalar mul n32 x G (p256)")
@@ -25,7 +25,7 @@ fn main() {
         },
         {
             let zn = ZmodN::new(p256);
-            let c = ecm::Curve::from_point(zn, 8_u64.into(), 9_u64.into());
+            let c = ecm::Curve::from_point(zn, 8, 9).unwrap();
             let g = c.gen();
             let n: u64 = 1511 * 1523 * 1531 * 1543 * 1549 * 1553;
             Bench::new("scalar mul n64 x G (p256)")
@@ -34,7 +34,7 @@ fn main() {
         },
         {
             let zn = ZmodN::new(p256);
-            let c = ecm::Curve::from_point(zn, 8_u64.into(), 9_u64.into());
+            let c = ecm::Curve::from_point(zn, 8, 9).unwrap();
             let g = c.gen();
             let n: u64 = 1511 * 1523 * 1531;
             Bench::new("chain mul n32 x G (p256)")
@@ -43,7 +43,7 @@ fn main() {
         },
         {
             let zn = ZmodN::new(p256);
-            let c = ecm::Curve::from_point(zn, 8_u64.into(), 9_u64.into());
+            let c = ecm::Curve::from_point(zn, 8, 9).unwrap();
             let g = c.gen();
             let n: u64 = 1511 * 1523 * 1531 * 1543 * 1549 * 1553;
             Bench::new("chain mul n64 x G (p256)")

@@ -40,18 +40,22 @@ use crate::params::{self, BLOCK_SIZE};
 use crate::pollard_pm1;
 use crate::relations::{self, Relation, RelationSet};
 use crate::sieve;
-use crate::{Int, Uint, DEBUG};
+use crate::{Int, Uint, UnexpectedFactor, DEBUG};
 
 pub fn siqs(
     n: &Uint,
     prefs: &crate::Preferences,
     tpool: Option<&rayon::ThreadPool>,
-) -> Vec<Relation> {
+) -> Result<Vec<Relation>, UnexpectedFactor> {
     let use_double = prefs.use_double.unwrap_or(n.bits() > 256);
     // Choose factor base. Sieve twice the number of primes
     // (n will be a quadratic residue for only half of them)
     let fb = prefs.fb_size.unwrap_or(fb_size(n, use_double));
     let fbase = FBase::new(*n, fb);
+    if let Err(e) = fbase.check_divisors() {
+        eprintln!("Unexpected divisor {} in factor base", e.0);
+        return Err(e);
+    }
     eprintln!("Smoothness bound {}", fbase.bound());
     eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls(),);
 
@@ -128,7 +132,7 @@ pub fn siqs(
     if rels.len() > fbase.len() + relations::MIN_KERNEL_SIZE {
         rels.truncate(fbase.len() + relations::MIN_KERNEL_SIZE)
     }
-    rels.into_inner()
+    Ok(rels.into_inner())
 }
 
 fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {

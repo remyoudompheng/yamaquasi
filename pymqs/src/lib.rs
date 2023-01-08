@@ -37,7 +37,11 @@ fn factor(
         ..Preferences::default()
     };
     let alg = Algo::from_str(algo).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let n = Uint::from_str(&npy.to_string()).unwrap();
+    let n = Uint::from_str(&npy.to_string()).map_err(|e| {
+        PyValueError::new_err(format!(
+            "Yamaquasi only accepts positive integers with at most 150 decimal digits"
+        ))
+    })?;
     let factors = py.allow_threads(|| yamaquasi::factor(n, alg, &prefs));
     let l = PyList::empty(py);
     for f in factors {

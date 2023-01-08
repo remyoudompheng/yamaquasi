@@ -8,7 +8,7 @@
 use crate::arith;
 use crate::arith::Num;
 use crate::pollard_pm1;
-use crate::{Int, Uint};
+use crate::{Int, Uint, UnexpectedFactor};
 
 /// A factor base consisting of 24-bit primes related to an input number N,
 /// along with useful precomputed data.
@@ -70,6 +70,16 @@ impl FBase {
         }
     }
 
+    pub(crate) fn check_divisors(&self) -> Result<(), UnexpectedFactor> {
+        if let Some(idx) = self.sqrts.iter().rposition(|&r| r == 0) {
+            let p = self.primes[idx];
+            if p > MAX_MULTIPLIER {
+                return Err(UnexpectedFactor(p as u64));
+            }
+        }
+        Ok(())
+    }
+
     pub fn len(&self) -> usize {
         self.primes.len()
     }
@@ -112,15 +122,17 @@ pub const SMALL_PRIMES: &[u64] = &[
     101, 103, 107, 109, 113, 127, 131, 137, 139, 149, 151, 157, 163, 167, 173, 179, 181, 191, 193,
 ];
 
+const MAX_MULTIPLIER: u32 = 200;
+
 /// Selects k such kn is a quadratic residue modulo many small primes.
 /// The scoring system is the average bit length of the smooth factor
 /// of sieved numbers.
 /// It is usually possible to obtain a score close to 10 with
 /// a reasonably small multiplier.
 pub fn select_multiplier(n: Uint) -> (u32, f64) {
-    let mut best = 1;
+    let mut best: u32 = 1;
     let mut best_score = 0.0;
-    for k in 1..200 {
+    for k in 1..MAX_MULTIPLIER {
         let mag = expected_smooth_magnitude(&(n * Uint::from(k)));
         // A multiplier k increases the size of P(x) by sqrt(k)
         let mag = (mag - 0.5 * (k as f64).ln()) / std::f64::consts::LN_2;

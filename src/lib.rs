@@ -71,6 +71,12 @@ impl FromStr for Algo {
     }
 }
 
+/// An "error" describing a (small) factor encountered unexpectedly
+/// during algorithms. This includes factor bases containing a divisor
+/// of N or ECM generating a singular curve.
+#[derive(Debug)]
+pub struct UnexpectedFactor(u64);
+
 /// Factorizes an integer into a product of factors.
 pub fn factor(n: Uint, alg: Algo, prefs: &Preferences) -> Vec<Uint> {
     if n.is_zero() {
@@ -252,9 +258,17 @@ fn factor_impl(
         Algo::Squfof => unreachable!("impossible"),
         Algo::Pm1 => unreachable!("impossible"),
         Algo::Ecm => unreachable!("impossible"),
-        Algo::Qs => qsieve::qsieve(nk, &prefs, tpool),
-        Algo::Mpqs => mpqs::mpqs(nk, &prefs, tpool),
+        Algo::Qs => Ok(qsieve::qsieve(nk, &prefs, tpool)),
+        Algo::Mpqs => Ok(mpqs::mpqs(nk, &prefs, tpool)),
         Algo::Siqs => siqs::siqs(&nk, &prefs, tpool),
+    };
+    let rels = match rels {
+        Ok(rels) => rels,
+        Err(UnexpectedFactor(d)) => {
+            factor_impl(d.into(), alg, prefs, factors, tpool);
+            factor_impl(n / Uint::from(d), alg, prefs, factors, tpool);
+            return;
+        }
     };
     // Determine non trivial divisors.
     let divs = relations::final_step(&n, &rels, true);
@@ -346,13 +360,23 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     eprintln!("=> test semiprime");
     let n = Uint::from_str("404385851501206046375042621")?;
     factor(n, Algo::Auto, &Preferences::default());
-    // FAIL: small factor (2003 * 665199750163226410868760173)
-    //eprintln!("=> test small factor");
-    //let n = Uint::from_str("1332395099576942500970126626519")?;
-    //factor(n, Algo::Auto, &Preferences::default());
-    // FAIL: 2 small factors (443 * 1151 * 172633679917074861804179395686166722361211)
-    //let n = Uint::from_str("88024704953957052509918444604606608564924960423")?;
-    //factor(n, Algo::Auto, &Preferences::default());
+
+    // small factor (2003 * 665199750163226410868760173)
+    eprintln!("=> test small factor 1");
+    let n = Uint::from_str("1332395099576942500970126626519")?;
+    factor(n, Algo::Auto, &Preferences::default());
+
+    // 2 small factors (443 * 1151 * 172633679917074861804179395686166722361211)
+    let n = Uint::from_str("88024704953957052509918444604606608564924960423")?;
+    factor(n, Algo::Auto, &Preferences::default());
+
+    // Could trigger an infinite loop after failing to factor due to
+    // 223 being in the factor base.
+    // 223*28579484042221159639852413780078523
+    eprintln!("=> small factor 3");
+    let n = Uint::from_str("317546892790192732050746209")?;
+    factor(n, Algo::Siqs, &Preferences::default());
+
     // perfect square (17819845476047^2)
     eprintln!("=> test square");
     let n = Uint::from_str("317546892790192732050746209")?;

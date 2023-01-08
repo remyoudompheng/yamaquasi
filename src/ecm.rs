@@ -29,7 +29,7 @@
 //! TODO: merge exponent base with Pollard P-1
 //! TODO: merge Montgomery arithmetic with arith library
 
-use std::cmp::min;
+use std::cmp::{max, min};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use num_integer::Integer;
@@ -38,7 +38,7 @@ use rayon::prelude::*;
 use crate::arith;
 use crate::arith_montgomery::{MInt, ZmodN};
 use crate::fbase;
-use crate::Uint;
+use crate::{Uint, UnexpectedFactor};
 
 // Run ECM with automatically selected parameters. The goal of this function
 // is not to completely factor numbers, but to detect cases where a number
@@ -161,7 +161,16 @@ pub fn ecm(
         if verbose > 1 {
             eprintln!("Trying good Edwards curve G=({x1}/{x2},{y1}/{y2})");
         }
-        let c = Curve::from_fractional_point(zn.clone(), x1, x2, y1, y2);
+        let c = match Curve::from_fractional_point(zn.clone(), x1, x2, y1, y2) {
+            Ok(c) => c,
+            Err(UnexpectedFactor(p)) => {
+                if verbose > 1 {
+                    eprintln!("Unexpected factor {p}");
+                }
+                done.store(true, Ordering::Relaxed);
+                return Some((Uint::from(p), n / Uint::from(p)));
+            }
+        };
         if let res @ Some((p, _)) = ecm_curve(&sb, &zn, &c) {
             if verbose > 0 {
                 eprintln!("ECM success {}/{curves} for special Edwards curve G=({x1}/{x2},{y1}/{y2}) p={p} elapsed={:.3}s",
@@ -205,25 +214,33 @@ pub fn ecm(
             return None;
         }
         let k = k as u64;
+        let (gx, gy) = (3 * k + 8, 4 * k + 9);
         if verbose > 1 {
             eprintln!(
                 "Trying Edwards curve with (2,4)-torsion d=({}/{})² G=({},{})",
                 5 * k + 7,
-                (3 * k + 8) * (4 * k + 9),
-                3 * k + 8,
-                4 * k + 9
+                gx * gy,
+                gx,
+                gy,
             );
         }
-        let c = Curve::from_point(zn.clone(), Uint::from(3 * k + 8), Uint::from(4 * k + 9));
+        let c = match Curve::from_point(zn.clone(), gx, gy) {
+            Ok(c) => c,
+            Err(UnexpectedFactor(p)) => {
+                if verbose > 1 {
+                    eprintln!("Unexpected factor {p}");
+                }
+                done.store(true, Ordering::Relaxed);
+                return Some((Uint::from(p), n / Uint::from(p)));
+            }
+        };
         if let res @ Some((p, _)) = ecm_curve(&sb, &zn, &c) {
             if verbose > 0 {
                 eprintln!(
                     "ECM success {}/{curves} for Edwards curve d=({}/{})² G=({},{}) p={p} elapsed={:.3}s",
                     k as usize + GOOD_CURVES.len() + 1,
                     5 * k + 7,
-                    (3 * k + 8) * (4 * k + 9),
-                    3 * k + 8,
-                    4 * k + 9,
+                    gx*gy, gx, gy,
                     start.elapsed().as_secs_f64()
                     );
             }
@@ -471,10 +488,7 @@ const GOOD_CURVES: &[(i64, i64, i64, i64)] = &[
 ];
 
 impl Curve {
-    // Construct a curve from a Q-rational point (x1/x2, y1/y2).
-    fn from_fractional_point(zn: ZmodN, x1: i64, x2: i64, y1: i64, y2: i64) -> Curve {
-        // This assumes that the denominators are invertible mod n.
-        // Small primes must have been eliminated beforehand.
+    fn fraction_modn(zn: &ZmodN, a: i64, b: i64) -> Result<MInt, UnexpectedFactor> {
         fn to_uint(n: Uint, x: i64) -> Uint {
             if x >= 0 {
                 Uint::from(x as u64) % n
@@ -482,17 +496,31 @@ impl Curve {
                 n - Uint::from((-x) as u64) % n
             }
         }
-        let x2inv = zn.from_int(arith::inv_mod(to_uint(zn.n, x2), zn.n).unwrap());
-        let y2inv = zn.from_int(arith::inv_mod(to_uint(zn.n, y2), zn.n).unwrap());
-        let gx = zn.mul(zn.from_int(to_uint(zn.n, x1)), x2inv);
-        let gy = zn.mul(zn.from_int(to_uint(zn.n, y1)), y2inv);
+        let Some(binv) = arith::inv_mod(to_uint(zn.n, b), zn.n)
+            else {
+                let babs = b.abs() as u64;
+                return Err(UnexpectedFactor(Integer::gcd(&(zn.n % babs), &babs)));
+            };
+        Ok(zn.mul(zn.from_int(to_uint(zn.n, a)), zn.from_int(binv)))
+    }
+
+    // Construct a curve from a Q-rational point (x1/x2, y1/y2).
+    fn from_fractional_point(
+        zn: ZmodN,
+        x1: i64,
+        x2: i64,
+        y1: i64,
+        y2: i64,
+    ) -> Result<Curve, UnexpectedFactor> {
+        assert!(max(x1.abs(), x2.abs()) < 65536 && max(y1.abs(), y2.abs()) < 65536);
+        // This assumes that the denominators are invertible mod n.
+        // Small primes must have been eliminated beforehand.
+        let gx = Self::fraction_modn(&zn, x1, x2)?;
+        let gy = Self::fraction_modn(&zn, y1, y2)?;
         // Compute d = (x1²y2²+x2²y1²-x2²y2²) / (x1²y1²)
         let dnum: i64 = x1 * x1 * y2 * y2 + x2 * x2 * y1 * y1 - x2 * x2 * y2 * y2;
         let dden: i64 = x1 * x1 * y1 * y1;
-        let d = zn.mul(
-            zn.from_int(to_uint(zn.n, dnum)),
-            zn.from_int(arith::inv_mod(to_uint(zn.n, dden), zn.n).unwrap()),
-        );
+        let d = Self::fraction_modn(&zn, dnum, dden)?;
         let one = zn.one();
         let c = Curve { zn, d, gx, gy };
         assert!(
@@ -503,22 +531,21 @@ impl Curve {
             c.zn.to_int(d),
             c.zn.n
         );
-        c
+        Ok(c)
     }
 
     // Construct the unique curve through a point with nonzero
     // coordinates.
-    pub fn from_point(zn: ZmodN, x: Uint, y: Uint) -> Curve {
+    pub fn from_point(zn: ZmodN, x: u64, y: u64) -> Result<Curve, UnexpectedFactor> {
+        assert!(x < 1 << 31 && y < 1 << 31);
         // Compute d = (x²+y²-1) / x²y²
-        let xinv = zn.from_int(arith::inv_mod(x, zn.n).unwrap());
-        let yinv = zn.from_int(arith::inv_mod(y, zn.n).unwrap());
-        let gx = zn.from_int(x);
-        let gy = zn.from_int(y);
+        let gx = zn.from_int(Uint::from(x));
+        let gy = zn.from_int(Uint::from(y));
         // gx*gx + gy*gy - 1
-        let dn = zn.sub(zn.add(zn.mul(gx, gx), zn.mul(gy, gy)), zn.one());
-        let dd = zn.mul(zn.mul(xinv, xinv), zn.mul(yinv, yinv));
-        let d = zn.mul(dn, dd);
-        Curve { zn, d, gx, gy }
+        let dn = zn.from_int(Uint::from(x * x + y * y - 1));
+        let dd = Self::fraction_modn(&zn, 1, (x * y) as i64)?;
+        let d = zn.mul(zn.mul(dn, dd), dd);
+        Ok(Curve { zn, d, gx, gy })
     }
 
     pub fn gen(&self) -> Point {
@@ -722,7 +749,7 @@ use std::str::FromStr;
 fn test_curve() {
     use std::str::FromStr;
     let n = Uint::from_str("2953951639731214343967989360202131868064542471002037986749").unwrap();
-    let c = Curve::from_point(ZmodN::new(n), Uint::from(2_u64), Uint::from(3_u64));
+    let c = Curve::from_point(ZmodN::new(n), 2, 3).unwrap();
     eprintln!("d={}", c.zn.to_int(c.d));
     let g = c.gen();
     assert!(c.is_valid(&g));
@@ -758,7 +785,7 @@ fn test_ecm_curve() {
     let zn = ZmodN::new(n);
     // This curve has smooth order for prime 602768606663711
     // order: 2^2 * 7 * 19 * 29 * 347 * 503 * 223843
-    let c = Curve::from_point(zn.clone(), Uint::from(2_u64), Uint::from(10_u64));
+    let c = Curve::from_point(zn.clone(), 2, 10).unwrap();
     let sb = SmoothBase::new(1000, 630);
     let res = ecm_curve(&sb, &zn, &c);
     eprintln!("{:?}", res);
@@ -774,7 +801,7 @@ fn test_ecm_curve2() {
     let zn = ZmodN::new(n);
     // This curve has smooth order for prime 1174273970803390465747303
     // Order has largest prime factors 11329 and 802979
-    let c = Curve::from_point(zn.clone(), Uint::from(2_u64), Uint::from(132_u64));
+    let c = Curve::from_point(zn.clone(), 2, 132).unwrap();
     let sb = SmoothBase::new(15000, 1050);
     let res = ecm_curve(&sb, &zn, &c);
     eprintln!("{:?}", res);
@@ -822,7 +849,7 @@ fn test_addition_chain() {
 
     let n = Uint::from_str(MODULUS256).unwrap();
     let zn = ZmodN::new(n);
-    let c = Curve::from_point(zn, Uint::from(2_u64), Uint::from(132_u64));
+    let c = Curve::from_point(zn, 2, 132).unwrap();
     let k: u64 = 1511 * 1523 * 1531 * 1543 * 1549 * 1553;
     let p1 = c.scalar64_mul(k, &c.gen());
     let p2 = c.scalar64_chainmul(k, &c.gen());
