@@ -32,6 +32,10 @@ name = "arith_montgomery"
 harness = false
 
 [[bench]]
+name = "benchmatrix"
+harness = false
+
+[[bench]]
 name = "ecm"
 harness = false
 
