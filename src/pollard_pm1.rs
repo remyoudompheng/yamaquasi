@@ -192,14 +192,14 @@ fn test_pm1_basic() {
 
 #[test]
 fn test_pm1_random() {
+    let pb = PM1Base::new();
     for bits in [20, 22, 24, 26, 28] {
         for budget in [500, 2000, 5000, 10000, 20000, 35000, 65000] {
             let mut seed = 1234567_u32;
             let mut primes = vec![];
             let mut ok = 0;
             let mut attempts = 0;
-            let pb = PM1Base::new();
-            for _ in 0..10000 {
+            for _ in 0..1000 {
                 seed = seed.wrapping_mul(123456789);
                 let p = seed % (1 << bits);
                 if !fbase::certainly_composite(p as u64) {

@@ -1242,6 +1242,11 @@ fn test_poly_prepare() {
                 }
             }
             for pidx in 0..fb.len() {
+                // To prevent test runtime blowup, only test first 100 primes
+                // and then every 100th prime.
+                if pidx >= 100 && pidx % 100 != 0 {
+                    continue;
+                }
                 // Roots are roots of Ax^2+2Bx+C modulo p.
                 for r in [pol.r1p[pidx], pol.r2p[pidx]] {
                     let v = pol.eval(start_offset + r as i64).0;

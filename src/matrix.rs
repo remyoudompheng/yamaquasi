@@ -893,7 +893,8 @@ fn test_projection() {
 
 #[test]
 fn test_lanczos() {
-    const N: usize = 5_000;
+    // Avoid long running time in non-release mode.
+    const N: usize = 1_000;
     let mat = make_test_sparsemat(N, 10, 20);
     eprintln!("Matrix size {}x{}", mat.k, mat.cols.len());
     let ker = kernel_lanczos(&mat, true);
