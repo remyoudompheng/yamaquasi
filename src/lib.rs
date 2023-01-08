@@ -377,6 +377,13 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     let n = Uint::from_str("317546892790192732050746209")?;
     factor(n, Algo::Siqs, &Preferences::default());
 
+    // All small factors until MAX_MULTIPLIER must be properly tested
+    // to avoid QS failures.
+    // 199 * 18011383943879611828742161
+    eprintln!("=> small factor 199");
+    let n = Uint::from_str("3584265404832042753919690039")?;
+    factor(n, Algo::Siqs, &Preferences::default());
+
     // perfect square (17819845476047^2)
     eprintln!("=> test square");
     let n = Uint::from_str("317546892790192732050746209")?;
