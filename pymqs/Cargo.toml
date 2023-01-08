@@ -1,0 +1,15 @@
+[package]
+name = "pymqs"
+version = "0.1.0"
+edition = "2021"
+description = "Python bindings for yamaquasi"
+license = "BSD3"
+ 
+[lib]
+name = "pymqs"
+crate-type = ["cdylib"]
+ 
+[dependencies]
+pyo3 = { version = "0.17", features = ["extension-module"] }
+yamaquasi = { path = ".." }
+
