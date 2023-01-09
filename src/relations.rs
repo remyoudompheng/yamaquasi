@@ -25,7 +25,7 @@ use crate::{Int, Uint};
 ///
 /// We will find random elements of the order 2 subgroup of Z/nZ
 /// hoping that they will generate a large rank subgroup.
-pub const MIN_KERNEL_SIZE: usize = 20;
+pub const MIN_KERNEL_SIZE: usize = 48;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Relation {

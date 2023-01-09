@@ -12,6 +12,10 @@ def main():
         print(f"Usage: {sys.argv[0]} N_BITS [N_BITS...]")
         exit(1)
     sizes = [int(s) for s in sys.argv[1:]]
+    if len(sizes) == 1:
+        size = sizes[0]
+        print(randint(2**(size-1), 2**size))
+        return
     primes = []
     prod = 1
     for psize in sizes:

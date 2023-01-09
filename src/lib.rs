@@ -304,7 +304,10 @@ fn factor_impl(
         }
     }
     for f in facs {
-        if !pseudoprime(f) {
+        if f == n {
+            eprintln!("Factorization failure");
+            factors.push(f);
+        } else if !pseudoprime(f) {
             eprintln!("Recursively factor {f}");
             factor_impl(f, alg, prefs, factors, tpool);
         } else {
@@ -402,5 +405,32 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     eprintln!("=> test not squarefree");
     let n = Uint::from_str("496701596915056959994534861")?;
     factor(n, Algo::Auto, &Preferences::default());
+
+    // SIQS with a small number: A needs 3 factors.
+    // Used to fail due to selecting 2 factors or too many As.
+    eprintln!("=> SIQS 60-75 bits");
+    let n = Uint::from_str("1231055495188530589")?;
+    factor(n, Algo::Siqs, &Preferences::default());
+    let n = Uint::from_str("1939847356913363213")?;
+    factor(n, Algo::Siqs, &Preferences::default());
+    let n = Uint::from_str("9173516735614600627")?;
+    factor(n, Algo::Siqs, &Preferences::default());
+    let n = Uint::from_str("10847815350861015899809")?;
+    factor(n, Algo::Siqs, &Preferences::default());
+
+    // This number tends to generate a very sparse factor base:
+    // [2, 3, 7, 13, 19, 79, 89, 107, 131, ...]
+    let n = Uint::from_str("72231484786704818233")?;
+    factor(n, Algo::Siqs, &Preferences::default());
+    // Factor base gap between 47 and 97:
+    let n = Uint::from_str("232159658536337208497609")?;
+    factor(n, Algo::Siqs, &Preferences::default());
+
+    // SIQS with 90-100 bit numbers: A needs 4 factors (5 is too many)
+    let n = Uint::from_str("13819541643362998561057402169")?;
+    factor(n, Algo::Siqs, &Preferences::default());
+    let n = Uint::from_str("34084481733943226418420736441")?;
+    factor(n, Algo::Siqs, &Preferences::default());
+
     Ok(())
 }

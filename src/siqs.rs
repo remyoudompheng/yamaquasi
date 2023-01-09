@@ -323,17 +323,22 @@ fn fb_size(n: &Uint, use_double: bool) -> u32 {
 }
 
 // Number of polynomials: m * 2^(k-1)
-// 120..160 bits => k=7 (factors 8-10 bits)
-// 160..200 bits => k=8 (factors 10-11 bits)
-// 200..250 bits => k=9 (factors 11-13 bits)
-// 250..300 bits => k=10 (factors 13-15 bits)
 
+// The number of factors of A is chosen to avoid very small primes
+// (hurting ability to obtain a product in the correct range)
+// but it also needs to fit the factor base size.
+//
+// 64..80 bits need 3 factors (A is 16-24 bits, maxprime < 1000)
+//
+// For inputs over 80 bits, max prime is above 1000
+// k factors are fine for input size (15..20)*k + 30
+// for factors between 200..1000 (A = sqrt(N) / M)
 fn nfactors(n: &Uint) -> u32 {
     match n.bits() {
-        0..=69 => 2,
-        70..=79 => 3,
-        80..=89 => 4,
-        90..=149 => 5,
+        0..=64 => 2,
+        65..=89 => 3,
+        90..=109 => 4,
+        110..=149 => 5,
         150..=169 => 6,
         170..=189 => 7,
         190..=209 => 8,
@@ -351,7 +356,9 @@ fn a_value_count(n: &Uint) -> usize {
     // When sz=280 we need more than 1M polynomials
     let sz = n.bits() as usize;
     match sz {
-        0..=129 => 8 + sz / 10,        // 8..20
+        // Even one A value (2-4 polynomials) will give enough smooth values.
+        0..=71 => 4,
+        72..=129 => (sz - 32) / 5,     // 8..19
         130..=169 => sz - 60,          // 20..100
         170..=199 => 50 * (sz - 168),  // 100..1000
         200..=249 => 100 * (sz - 190), // 1000..5000
@@ -589,6 +596,40 @@ pub fn select_a(f: &Factors, want: usize) -> Vec<Uint> {
     let mut amin = f.target - f.target / div as u64;
     let mut amax = f.target + f.target / div as u64;
 
+    if f.nfacs <= 3 {
+        // Generate all products (quicker than random sampling)
+        assert!(f.target.bits() < 60);
+        let mut candidates: Vec<u64> = vec![];
+        for f1 in &f.factors {
+            let p1 = f1.p;
+            for f2 in &f.factors {
+                let p2 = f2.p;
+                if p2 >= p1 {
+                    break;
+                }
+                if f.nfacs == 2 {
+                    candidates.push(p1 as u64 * p2 as u64);
+                } else {
+                    for f3 in &f.factors {
+                        let p3 = f3.p;
+                        if p3 >= p2 {
+                            break;
+                        }
+                        candidates.push(p1 as u64 * p2 as u64 * p3 as u64);
+                    }
+                }
+            }
+        }
+        let target = f.target.low_u64();
+        candidates.sort_by_key(|&c| c.abs_diff(target));
+        candidates.dedup();
+        if candidates.len() > want {
+            candidates.truncate(want);
+        }
+        candidates.sort();
+        return candidates.into_iter().map(|c| Uint::from(c)).collect();
+    }
+
     let mut rng: u64 = 0xcafebeefcafebeef;
     let fb = f.factors.len();
     let mut gen = move || {
@@ -631,18 +672,21 @@ pub fn select_a(f: &Factors, want: usize) -> Vec<Uint> {
         if amin < product && product < amax {
             candidates.push(Uint::cast_from(product));
         }
-        if candidates.len() > want && iters % 10 == 0 {
-            candidates.sort();
+        if candidates.len() > 2 * want && iters % 10 == 0 {
+            candidates.sort_by_key(|&c| U256::cast_from(c).abs_diff(f.target));
             candidates.dedup();
-            let idx = candidates.partition_point(|&c| U256::cast_from(c) < f.target);
-            if idx > want && idx + want < candidates.len() {
-                return candidates[idx - want / 2..idx + want / 2].to_vec();
-            }
+            candidates.truncate(want);
+            candidates.sort();
+            return candidates;
         }
     }
     // Should not happen? return what we found so far
-    candidates.sort();
+    candidates.sort_by_key(|&c| U256::cast_from(c).abs_diff(f.target));
     candidates.dedup();
+    if candidates.len() > want {
+        candidates.truncate(want)
+    }
+    candidates.sort();
     candidates
 }
 
@@ -939,7 +983,16 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
     } else {
         (arith::isqrt(*n) / (a.a << 1) as Uint).low_u64()
     };
-    assert!((root as usize) < s.interval_size / 2);
+    if n.bits() > 80 {
+        // For small n, A factors are below 200 and can have huge gaps.
+        // Optimal A's break down for very small n.
+        assert!(
+            (root as usize) < s.interval_size / 2,
+            "A={} root={}",
+            a.a,
+            root
+        );
+    }
 
     // n has at most 512 bits, and b < sqrt(n)
     assert!(b.bits() < 256);
