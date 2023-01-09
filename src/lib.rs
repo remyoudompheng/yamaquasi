@@ -132,8 +132,10 @@ fn factor_impl(
     if n.is_one() {
         return;
     } else if let Some((p, k)) = arith::perfect_power(n) {
+        let mut facs = vec![];
+        factor_impl(p, alg, prefs, &mut facs, tpool);
         for _ in 0..k {
-            factors.push(p)
+            factors.extend_from_slice(&facs[..]);
         }
         return;
     } else if pseudoprime(n) {
@@ -302,11 +304,7 @@ fn factor_impl(
         }
     }
     for f in facs {
-        if let Some((p, k)) = arith::perfect_power(f) {
-            for _ in 0..k {
-                factors.push(p)
-            }
-        } else if !pseudoprime(f) {
+        if !pseudoprime(f) {
             eprintln!("Recursively factor {f}");
             factor_impl(f, alg, prefs, factors, tpool);
         } else {
@@ -387,6 +385,10 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     // perfect square (17819845476047^2)
     eprintln!("=> test square");
     let n = Uint::from_str("317546892790192732050746209")?;
+    factor(n, Algo::Auto, &Preferences::default());
+    // square of a composite number
+    // (211*499)^2 * 10271
+    let n = Uint::from_str("113861979834191")?;
     factor(n, Algo::Auto, &Preferences::default());
     // perfect cube
     eprintln!("=> test cube");
