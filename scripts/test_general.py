@@ -38,6 +38,7 @@ for i in range(1000):
         prod *= f
         if not gmpy2.is_prime(f):
             print(f"WARNING: factor {f} is composite")
+        assert gmpy2.is_prime(f)
     assert n == prod
     print(f"OK in {dt:.3}s {factors}")
 

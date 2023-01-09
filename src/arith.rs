@@ -419,6 +419,9 @@ where
     for k in [2, 3, 5, 7, 11, 13, 17, 19_u32] {
         let r = n.nth_root(k);
         if r.pow(k) == n {
+            if let Some((rr, kk)) = perfect_power(r) {
+                return Some((rr, k * kk));
+            }
             return Some((r, k));
         }
     }
@@ -745,5 +748,11 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_perfect_power() {
+        assert_eq!(perfect_power(6669042837601_u64), Some((1607, 4)));
+        assert_eq!(perfect_power(8650415919381337933_u64), Some((13, 17)));
     }
 }

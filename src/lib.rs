@@ -392,6 +392,10 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     eprintln!("=> test cube");
     let n = Uint::from_str("350521251909490182639506149")?;
     factor(n, Algo::Auto, &Preferences::default());
+    eprintln!("=> test 6th power");
+    let n = Uint::from_str("1000018000135000540001215001458000729")?;
+    assert_eq!(factor(n, Algo::Auto, &Preferences::default()).len(), 6);
+
     // not squarefree (839322217^2 * 705079549)
     eprintln!("=> test not squarefree");
     let n = Uint::from_str("496701596915056959994534861")?;
