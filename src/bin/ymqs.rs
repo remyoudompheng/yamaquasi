@@ -39,7 +39,7 @@ fn main() {
     let double = arg.get::<bool>("use-double");
     let number = &arg.orphans[0];
     let n = U1024::from_str(number).expect("could not read decimal number");
-    const MAXBITS: u32 = 2 * (256 - 30);
+    const MAXBITS: u32 = 512;
     if n.bits() > MAXBITS {
         panic!(
             "Number size ({} bits) exceeds {} bits limit",

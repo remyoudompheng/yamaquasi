@@ -22,7 +22,7 @@ pub struct FBase {
     pub divs: Vec<arith::Dividers>,
     // idx_by_log[i] is the index of the first prime
     // such that bit_length >= i.
-    pub idx_by_log: [usize; 24 + 1],
+    pub idx_by_log: [usize; 24 + 2],
 }
 
 impl FBase {
@@ -31,7 +31,7 @@ impl FBase {
         let mut primes = vec![];
         let mut sqrts = vec![];
         let mut divs = vec![];
-        let mut idx_by_log = [0; 24 + 1];
+        let mut idx_by_log = [0; 24 + 2];
         let mut log = 0;
         let mut prepared = prepare_factor_base(&n, &ps);
         // Align to a multiple of 8.
@@ -274,6 +274,10 @@ fn prepare_factor_base(nk: &Uint, primes: &[u32]) -> Vec<(u64, u64, arith::Divid
     primes
         .iter()
         .filter_map(|&p| {
+            // All factor base elements are required to fit in 24 bits.
+            if p >= 1 << 24 {
+                return None;
+            }
             let nk: u64 = *nk % (p as u64);
             let r = arith::sqrt_mod(nk, p as u64)?;
             Some((p as u64, r, arith::Dividers::new(p)))

@@ -191,7 +191,12 @@ pub fn pm1_quick(n: Uint) -> Option<(Uint, Uint)> {
         // Takes about 1 second
         311..=340 => pm1_impl(n, 256 << 10, 65536 * 512),
         // Takes about 2-5 seconds
-        341.. => pm1_impl(n, 1 << 20, 65536 * 2048),
+        341..=370 => pm1_impl(n, 1 << 20, 65536 * 2048),
+        // Above this size, quadratic sieve will be extremely
+        // long so allow a lot of CPU budget into Pollard P-1.
+        371..=420 => pm1_impl(n, 4 << 20, 512 << 20),
+        421..=470 => pm1_impl(n, 16 << 20, 1 << 30),
+        471.. => pm1_impl(n, 64 << 20, 2 << 30),
     }
 }
 

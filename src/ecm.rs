@@ -80,10 +80,20 @@ pub fn ecm_auto(n: Uint, tpool: Option<&rayon::ThreadPool>) -> Option<(Uint, Uin
             // B2 = D² = 4M
             ecm(n, 150, 12_000, 2730, 1, tpool)
         }
-        341.. => {
+        341..=370 => {
             // Try to find a factor of size 68-76 bits (budget 1min)
             // B2 = D² = 11.3M
             ecm(n, 200, 30_000, 3570, 1, tpool)
+        }
+        // For very large numbers, we don't expect quadratic sieve to complete
+        // in reasonable time, so all hope is on ECM.
+        371..=450 => {
+            // Budget is more than 10 minutes
+            ecm(n, 200, 60_000, 8820, 1, tpool)
+        }
+        451.. => {
+            // Budget is virtually unlimited (hours)
+            ecm(n, 500, 200_000, 38220, 2, tpool)
         }
     }
 }
