@@ -68,9 +68,9 @@ fn main() {
         },
     }
 
-    // ECM complexity (O(b1 log(b1)) + O(b2^2))
+    // ECM complexity (O(b1 log(b1)) + O(d^2))
     eprintln!("ECM timings");
-    // Ideal b2 are such that phi(b2)/2 is less than a power of two.
+    // Ideal d are such that phi(d)/2 is less than a power of two.
     // 120 => 32
     // 210 => 48
     // 462 => 120
@@ -81,29 +81,29 @@ fn main() {
     // 19110 => 4032
     // 38220 => 8064
     // 76440 => 16128
-    for b2 in [120, 210, 462, 1050, 2310, 4410, 8820, 19110, 38220, 76440] {
+    for d in [120, 210, 462, 1050, 2310, 4410, 8820, 19110, 38220, 76440] {
         for b1 in [100, 150, 200] {
-            if b1 != 200 && b2 > 1000 {
+            if b1 != 200 && d > 1000 {
                 continue;
             }
             let start = std::time::Instant::now();
             // Use P256 so what ECM cannot work.
-            let res = ecm::ecm(p256, 1, b1, b2, 0, None);
+            let res = ecm::ecm(p256, 1, b1, d, 0, None);
             assert!(res.is_none());
             eprintln!(
-                "ECM(B1={b1},B2={b2}) in {:.3}s",
+                "ECM(B1={b1},D={d}) in {:.3}s",
                 start.elapsed().as_secs_f64()
             );
         }
     }
     for b1 in [1000, 10_000, 100_000, 1_000_000] {
-        let b2 = 8820;
+        let d = 8820;
         let start = std::time::Instant::now();
         // Use P256 so what ECM cannot work.
-        let res = ecm::ecm(p256, 1, b1, b2, 0, None);
+        let res = ecm::ecm(p256, 1, b1, d, 0, None);
         assert!(res.is_none());
         eprintln!(
-            "ECM(B1={b1},B2={b2}) in {:.3}s",
+            "ECM(B1={b1},D={d}) in {:.3}s",
             start.elapsed().as_secs_f64()
         );
     }

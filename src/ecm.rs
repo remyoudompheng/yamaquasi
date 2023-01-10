@@ -37,6 +37,7 @@ use rayon::prelude::*;
 
 use crate::arith;
 use crate::arith_montgomery::{MInt, ZmodN};
+use crate::arith_poly::Poly;
 use crate::fbase;
 use crate::{Uint, UnexpectedFactor};
 
@@ -63,82 +64,80 @@ pub fn ecm_auto(n: Uint, tpool: Option<&rayon::ThreadPool>) -> Option<(Uint, Uin
         221..=250 => {
             // Will quite often find a factor of size 42-46 bits (budget 0.1-0.5s)
             // B2 = D² = 176400
-            ecm(n, 50, 500, 420, 1, tpool)
+            ecm(n, 30, 500, 462, 1, tpool)
         }
         251..=280 => {
             // Will quite often find a factor of size 52-56 bits (budget 2-3s)
             // B2 = D² = 700k
-            ecm(n, 120, 2_000, 840, 1, tpool)
+            ecm(n, 80, 2_000, 1050, 1, tpool)
         }
         281..=310 => {
             // Will often find a factor of size 58-62 bits (budget 5-10s)
             // B2 = D² ~= 1.6M
-            ecm(n, 150, 4_000, 1260, 1, tpool)
+            ecm(n, 40, 8_000, 2310, 1, tpool)
         }
         311..=340 => {
             // Will often find a factor of size 64-70 bits (budget 20-30s)
             // B2 = D² = 4M
-            ecm(n, 150, 12_000, 2730, 1, tpool)
+            ecm(n, 40, 25_000, 4410, 1, tpool)
         }
         341..=370 => {
             // Try to find a factor of size 68-76 bits (budget 1min)
             // B2 = D² = 11.3M
-            ecm(n, 200, 30_000, 3570, 1, tpool)
+            ecm(n, 100, 75_000, 8820, 1, tpool)
         }
         // For very large numbers, we don't expect quadratic sieve to complete
         // in reasonable time, so all hope is on ECM.
         371..=450 => {
             // Budget is more than 10 minutes
-            ecm(n, 200, 60_000, 8820, 1, tpool)
+            ecm(n, 200, 200_000, 19110, 1, tpool)
         }
         451.. => {
             // Budget is virtually unlimited (hours)
-            ecm(n, 500, 200_000, 38220, 2, tpool)
+            ecm(n, 500, 500_000, 38220, 2, tpool)
         }
     }
 }
 
 // Factor number using purely ECM. This may never end, or fail.
 pub fn ecm_only(n: Uint, tpool: Option<&rayon::ThreadPool>) -> Option<(Uint, Uint)> {
+    // B1 values should be such that step 1 takes about as much time as step 2.
+    // D values are only such that phi(D) is a bit less than a power of 2.
+    //
+    // Since we are using Karatsuba, we can make B1 grow as O(D^1.58)
     match n.bits() {
-        0..=64 => {
-            // This is probably guaranteed to work.
-            ecm(n, 100, 128, 210, 2, tpool)
+        // The following parameters work well even for balanced semiprimes.
+        0..=64 => ecm(n, 100, 128, 210, 2, tpool),
+        65..=80 => ecm(n, 100, 300, 210, 2, tpool),
+        81..=96 => ecm(n, 300, 1000, 462, 2, tpool),
+        97..=119 => ecm(n, 1000, 3_000, 1050, 2, tpool),
+        // May require 100-300 curves for 72-bit factors
+        120..=144 => ecm(n, 1000, 10_000, 2310, 2, tpool),
+        145..=168 => {
+            // Can find a 80 bit factor after a few dozen curves.
+            ecm(n, 1000, 30_000, 4410, 2, tpool)
         }
-        65..=80 => {
-            // Try to find a factor of size 36 bits
-            ecm(n, 300, 400, 420, 2, tpool)
+        169..=192 => {
+            // Can find a 90 bit factor after a few hundreds curves.
+            ecm(n, 2000, 100_000, 8820, 2, tpool)
         }
-        81..=96 => {
-            // Try to find a factor of size 48 bits
-            ecm(n, 800, 1700, 840, 2, tpool)
+        193..=224 => {
+            // Should be able to find 100 bit factors after
+            // a few hundred curves (B2=365M)
+            ecm(n, 5000, 300_000, 19110, 2, tpool)
         }
-        97..=128 => {
-            // Try to find a factor of size 52 bits
-            ecm(n, 1000, 2500, 1050, 2, tpool)
-        }
-        129..=160 => {
-            // Try to find a factor of size 60 bits
-            // 1000 curves are often not enough for 80-bit factors.
-            ecm(n, 1000, 6000, 1470, 2, tpool)
-        }
-        161..=192 => {
-            // Try to find a factor of size >70 bits
-            // This will probably take a very long time.
-            // TODO: try smaller parameters first.
-            ecm(n, 5000, 15_000, 11550, 2, tpool)
-        }
-        193..=256 => {
-            // Try to find a factor of size ~80?? bits
-            // It may find factors of ~70 bits but not much more.
-            // It will take several seconds per curve.
-            // TODO: try smaller parameters first.
-            ecm(n, 15000, 25_000, 30030, 2, tpool)
+        225..=256 => {
+            // May find 100-120 bit factors after ~1000 curves
+            // Similar to GMP-ECM recommended for 35 digit factors.
+            ecm(n, 20, 100_000, 8820, 0, tpool)
+                .or_else(|| ecm(n, 15000, 1_000_000, 38220, 2, tpool))
         }
         257.. => {
-            // This is mostly to fill the table, but what we do?
-            // TODO: try smaller parameters first.
-            ecm(n, 40000, 40_000, 60060, 2, tpool)
+            // May find 120-140 bit factors after a few thousand curves.
+            // B2 is about 5.8 billion.
+            // Similar to GMP-ECM recommended for 40 digit factors.
+            ecm(n, 50, 300_000, 19110, 0, tpool)
+                .or_else(|| ecm(n, 40000, 3_000_000, 76440, 2, tpool))
         }
     }
 }
@@ -361,19 +360,39 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve) -> Option<(Uint, Uint)> {
     // Normalize, 2 modular inversion using batch inversion.
     batch_normalize(&zn, &mut bsteps);
     batch_normalize(&zn, &mut gsteps);
-    // Compute O(d²) products
-    let mut buffer = zn.one();
-    for (idx, pg) in gsteps.iter().enumerate() {
-        // Compute the gcd after each row for finer granularity.
-        for pb in &bsteps {
-            // y(G) - y(B)
-            let delta_y = zn.sub(&pg.1, &pb.1);
-            buffer = zn.mul(&buffer, &delta_y);
+    if sb.d < 4000 {
+        // Compute O(d*phi(d)) products
+        let mut buffer = zn.one();
+        for (idx, pg) in gsteps.iter().enumerate() {
+            // Compute the gcd after each row for finer granularity.
+            for pb in &bsteps {
+                // y(G) - y(B)
+                let delta_y = zn.sub(&pg.1, &pb.1);
+                buffer = zn.mul(&buffer, &delta_y);
+            }
+            if idx % 8 == 0 || idx == gsteps.len() - 1 {
+                let d = Integer::gcd(n, &Uint::from(buffer));
+                if d > Uint::ONE && d < *n {
+                    return Some((d, n / d));
+                }
+            }
         }
-        if idx % 8 == 0 || idx == gsteps.len() - 1 {
-            let d = Integer::gcd(n, &Uint::from(buffer));
-            if d > Uint::ONE && d < *n {
-                return Some((d, n / d));
+    } else {
+        // Usually D > 4 phi(D) (phi(2*3*5*7) < N/4)
+        // And there are only phi(D)/2 baby steps
+        let pbs: Vec<MInt> = bsteps.iter().map(|p| p.1).collect();
+        let pgs: Vec<MInt> = gsteps.iter().map(|p| p.1).collect();
+        let pol = Poly::from_roots(zn, pbs);
+        let vals = pol.multi_eval(pgs);
+        let mut buffer = zn.one();
+        for (idx, &v) in vals.iter().enumerate() {
+            // Compute the gcd every few rows for finer granularity.
+            buffer = zn.mul(buffer, v);
+            if idx % 8 == 0 || idx == vals.len() - 1 {
+                let d = Integer::gcd(n, &Uint::from(buffer));
+                if d > Uint::ONE && d < *n {
+                    return Some((d, n / d));
+                }
             }
         }
     }
