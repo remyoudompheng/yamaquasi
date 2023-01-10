@@ -254,7 +254,7 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: u64) -> Option<(Uint, Uint)> {
             p_prev = p as u32;
         }
         // Check GCD after each prime block
-        let d = Integer::gcd(&n, &Uint::from(g));
+        let d = Integer::gcd(&n, &Uint::from(zn.sub(&g, &zn.one())));
         if d > Uint::ONE && d < n {
             return Some((d, n / d));
         }
