@@ -3,6 +3,7 @@
 // license that can be found in the LICENSE file.
 
 pub mod arith;
+pub mod arith_fft;
 pub mod arith_montgomery;
 pub mod arith_poly;
 pub mod fbase;

@@ -189,6 +189,21 @@ impl ZmodN {
         debug_assert!(Uint::from(res) < self.n);
         res
     }
+
+    /// Like redc but for numbers possibly exceeding n<<64k
+    pub fn redc_large(&self, x: &[u64; 2 * MINT_WORDS]) -> MInt {
+        let mut xhi = [0_u64; 2 * MINT_WORDS];
+        let mut x = *x;
+        let k = self.k as usize;
+        // Divide upper part by R.
+        for i in k..2 * MINT_WORDS {
+            xhi[i - k] = x[i];
+            x[i] = 0;
+        }
+        let m = self.redc(&x);
+        let mhi = self.redc(&xhi);
+        self.add(m, self.mul(mhi, self.r2))
+    }
 }
 
 fn uint_addmod(x: &[u64], y: &[u64], n: &Uint, sz: u32) -> [u64; MINT_WORDS] {
@@ -317,13 +332,12 @@ fn uint_mul(x: &[u64], y: &[u64], sz: u32) -> [u64; 2 * MINT_WORDS] {
             unsafe {
                 let xi = xi as u128;
                 let yj = *y.get_unchecked(j) as u128;
-                let xy = xi * yj + (carry as u128);
+                let zij = z[..].get_unchecked_mut(i + j);
+                let xy = xi * yj + (*zij as u128) + (carry as u128);
                 let zlo = xy as u64;
                 let zhi = (xy >> 64) as u64;
-                let zij = z[..].get_unchecked_mut(i + j);
-                let (zlo2, c) = zij.overflowing_add(zlo);
-                *zij = zlo2;
-                carry = zhi + (if c { 1 } else { 0 });
+                *zij = zlo;
+                carry = zhi;
             }
         }
         let (zlo2, c) = z[i + sz].overflowing_add(carry);
