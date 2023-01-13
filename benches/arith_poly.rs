@@ -102,18 +102,28 @@ fn main() {
             .map(|x: u64| zn.from_int(Uint::from(x * x * 56789 + x * 6789 + 789)))
             .collect();
         let start = std::time::Instant::now();
-        let _ = Poly::from_roots(&zn, roots.clone());
+        let pol1 = Poly::from_roots(&zn, roots.clone());
         eprintln!(
             "product tree {degree} in {:.4}s",
             start.elapsed().as_secs_f64()
         );
 
+        for i in 0..64 {
+            let r = roots[(i * roots.len()) / 64];
+            assert_eq!(pol1.eval(r), zn.zero());
+        }
+
         let start = std::time::Instant::now();
         let pol = Poly::from_roots(&zn, roots2);
-        pol.multi_eval(roots);
+        let vals = pol.multi_eval(roots.clone());
         eprintln!(
             "multieval {degree} in {:.4}s",
             start.elapsed().as_secs_f64()
         );
+
+        for i in 0..64 {
+            let idx = (i * roots.len()) / 64;
+            assert_eq!(pol.eval(roots[idx]), vals[idx]);
+        }
     }
 }

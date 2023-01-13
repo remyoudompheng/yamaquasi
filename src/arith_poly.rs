@@ -142,6 +142,16 @@ impl<'a> Poly<'a> {
         }
     }
 
+    pub fn eval(&self, a: MInt) -> MInt {
+        let deg = self.c.len() - 1;
+        let zn = &self.zn;
+        let mut v = zn.zero();
+        for i in 0..=deg {
+            v = zn.add(zn.mul(v, a), self.c[deg - i]);
+        }
+        v
+    }
+
     // Evaluate a polynomial at a set of points. The set of points
     // is usually larger (4x) than the polynomial degree.
     pub fn multi_eval(&self, a: Vec<MInt>) -> Vec<MInt> {

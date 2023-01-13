@@ -97,6 +97,7 @@ fn _convolve_modn<const N: usize>(
         }
         let vpq = mulfft(&vp, &vq);
         // Each output maps to N/16-1 coefficients (degree N/16-2)
+        res.fill(MInt::default());
         for i in 0..vpq.len() {
             for j in 0..N / 16 - 1 {
                 let idx = (i << logpack) + j;
