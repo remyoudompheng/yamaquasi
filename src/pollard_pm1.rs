@@ -29,7 +29,8 @@
 
 use num_integer::Integer;
 
-use crate::arith_montgomery::{mg_2adic_inv, mg_mul, mg_redc, ZmodN};
+use crate::arith_montgomery::{mg_2adic_inv, mg_mul, mg_redc, MInt, ZmodN};
+use crate::arith_poly::Poly;
 use crate::fbase;
 use crate::Uint;
 
@@ -170,8 +171,8 @@ impl PM1Base {
 }
 
 // Generic Pollard P-1 implementation for possibly large integers.
-// It doesn't use the multipoint evaluation model and really iterates over primes.
-// The standard stage 2 approach should be fine for B2 < 1e9 (51M primes).
+// It uses the multipoint evaluation model for large D=sqrt(B2)
+// where D is such that D ~= 5 φ(D).
 
 // Similarly to ECM implementation, run Pollard P-1 with small parameters
 // to possibly detect a small factor. The cost is 2 multiplications per large
@@ -179,24 +180,24 @@ impl PM1Base {
 pub fn pm1_quick(n: Uint) -> Option<(Uint, Uint)> {
     match n.bits() {
         // Catches many 24-bit factors in 1-5ms.
-        0..=190 => pm1_impl(n, 256, 65536),
+        0..=190 => pm1_impl(n, 256, 210),
         // Takes less than a few ms
-        191..=220 => pm1_impl(n, 512, 65536 * 2),
+        191..=220 => pm1_impl(n, 512, 462),
         // Takes less than 0.01 second
-        221..=250 => pm1_impl(n, 1024, 65536 * 4),
+        221..=250 => pm1_impl(n, 1024, 840),
         // Takes less than 0.1 second
-        251..=280 => pm1_impl(n, 8192, 65536 * 32),
+        251..=280 => pm1_impl(n, 8192, 2310),
         // Takes less than 0.5 second
-        281..=310 => pm1_impl(n, 65536, 65536 * 128),
+        281..=310 => pm1_impl(n, 256 << 10, 9240),
         // Takes about 1 second
-        311..=340 => pm1_impl(n, 256 << 10, 65536 * 512),
+        311..=340 => pm1_impl(n, 1 << 20, 19110),
         // Takes about 2-5 seconds
-        341..=370 => pm1_impl(n, 1 << 20, 65536 * 2048),
+        341..=370 => pm1_impl(n, 4 << 20, 39270),
         // Above this size, quadratic sieve will be extremely
         // long so allow a lot of CPU budget into Pollard P-1.
-        371..=420 => pm1_impl(n, 4 << 20, 512 << 20),
-        421..=470 => pm1_impl(n, 16 << 20, 1 << 30),
-        471.. => pm1_impl(n, 64 << 20, 2 << 30),
+        371..=420 => pm1_impl(n, 16 << 20, 79170),
+        421..=470 => pm1_impl(n, 64 << 20, 159390),
+        471.. => pm1_impl(n, 256 << 20, 324870),
     }
 }
 
@@ -205,18 +206,25 @@ pub fn pm1_quick(n: Uint) -> Option<(Uint, Uint)> {
 /// but should be faster than ECM with similar B1/B2.
 pub fn pm1_only(n: Uint) -> Option<(Uint, Uint)> {
     match n.bits() {
-        0..=96 => pm1_impl(n, 1024, 65536),
-        97..=128 => pm1_impl(n, 4 << 10, 256 << 10),
-        129..=160 => pm1_impl(n, 16 << 10, 1 << 20),
-        161..=192 => pm1_impl(n, 64 << 10, 4 << 20),
-        193..=224 => pm1_impl(n, 256 << 10, 16 << 20),
-        225..=256 => pm1_impl(n, 1 << 20, 64 << 20),
-        257..=288 => pm1_impl(n, 4 << 20, 256 << 20),
-        289.. => pm1_impl(n, 16 << 20, 1 << 30),
+        0..=80 => pm1_impl(n, 16 << 10, 462),
+        81..=120 => pm1_impl(n, 64 << 10, 1050),
+        121..=160 => pm1_impl(n, 256 << 10, 2310),
+        161..=200 => pm1_impl(n, 1 << 20, 4620),
+        201..=240 => pm1_impl(n, 4 << 20, 9240),
+        241..=280 => pm1_impl(n, 32 << 20, 19110),
+        281..=320 => pm1_impl(n, 64 << 20, 39270),
+        321..=370 => pm1_impl(n, 128 << 20, 79170),
+        // Below parameters can take several minutes.
+        371..=420 => pm1_impl(n, 256 << 20, 159390),
+        421..=470 => pm1_impl(n, 512 << 20, 324870),
+        471.. => pm1_impl(n, 1 << 30, 649740),
     }
 }
 
-pub fn pm1_impl(n: Uint, b1: u64, b2: u64) -> Option<(Uint, Uint)> {
+const MULTIEVAL_THRESHOLD: u64 = 2000;
+
+pub fn pm1_impl(n: Uint, b1: u64, sqrtb2: u64) -> Option<(Uint, Uint)> {
+    let b2 = sqrtb2 * sqrtb2;
     assert!(b1 > 3);
     let zn = ZmodN::new(n);
     let mut sieve = fbase::PrimeSieve::new();
@@ -237,17 +245,7 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: u64) -> Option<(Uint, Uint)> {
             }
             if 1 << expblock.leading_zeros() <= pow {
                 // process exponent block
-                let mut res = zn.one();
-                let mut sq = g;
-                let mut exp = expblock;
-                while exp > 0 {
-                    if exp & 1 == 1 {
-                        res = zn.mul(&res, &sq);
-                    }
-                    sq = zn.mul(&sq, &sq);
-                    exp /= 2;
-                }
-                g = res;
+                g = exp_modn(&zn, &g, expblock);
                 expblock = 1;
             }
             expblock *= pow;
@@ -265,23 +263,14 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: u64) -> Option<(Uint, Uint)> {
     // g is 2^(product of small primes) mod n
     // gaps[i] = g^2i+2
     // The vector is grown dynamically during iteration.
+    if sqrtb2 > MULTIEVAL_THRESHOLD {
+        return pm1_stage2_polyeval(&zn, sqrtb2 as usize, g);
+    }
     let g2 = zn.mul(&g, &g);
     let mut gaps = vec![g2];
 
-    let mut x = {
-        // Compute g^pprev
-        let mut res = zn.one();
-        let mut sq = g;
-        let mut exp = p_prev;
-        while exp > 0 {
-            if exp & 1 == 1 {
-                res = zn.mul(&res, &sq);
-            }
-            sq = zn.mul(&sq, &sq);
-            exp /= 2;
-        }
-        res
-    };
+    // Compute g^pprev
+    let mut x = exp_modn(&zn, &g, p_prev as u64);
     // Accumulate product of (g^p-1)
     let one = zn.one();
     let mut product = zn.sub(&x, &one);
@@ -313,6 +302,77 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: u64) -> Option<(Uint, Uint)> {
     let d = Integer::gcd(&n, &Uint::from(product));
     if d > Uint::ONE && d < n {
         return Some((d, n / d));
+    }
+    None
+}
+
+fn exp_modn(zn: &ZmodN, g: &MInt, exp: u64) -> MInt {
+    let mut res = zn.one();
+    let mut sq = g.clone();
+    let mut exp = exp;
+    while exp > 0 {
+        if exp & 1 == 1 {
+            res = zn.mul(&res, &sq);
+        }
+        sq = zn.mul(&sq, &sq);
+        exp /= 2;
+    }
+    res
+}
+
+fn pm1_stage2_polyeval(zn: &ZmodN, sqrtb2: usize, g: MInt) -> Option<(Uint, Uint)> {
+    // Instead of computing g^p for all primes p in [b1, b2]
+    // write the unknown p as qD - r where r < D and gcd(r,D)=1
+    // and look for (g^D)^q == g^r modulo some unknown factor.
+    let n = &zn.n;
+    let g2 = zn.mul(&g, &g);
+    let mut gaps = vec![g2];
+
+    let mut bs = Vec::with_capacity(sqrtb2 / 2);
+    for b in 1..sqrtb2 {
+        if Integer::gcd(&b, &sqrtb2) == 1 {
+            bs.push(b);
+        }
+    }
+    // Compute the baby steps
+    let mut bsteps = Vec::with_capacity(sqrtb2 / 2);
+    let mut bg = g.clone();
+    let mut bexp = 1;
+    assert_eq!(bs[0], 1);
+    bsteps.push(bg.clone());
+    for &b in &bs[1..] {
+        let gap = b - bexp;
+        while gaps.len() <= gap / 2 {
+            gaps.push(zn.mul(gaps[gaps.len() - 1], g2));
+        }
+        bg = zn.mul(&bg, &gaps[gap / 2 - 1]);
+        bsteps.push(bg.clone());
+        bexp = b;
+    }
+    // Compute the giant steps
+    let mut gsteps = Vec::with_capacity(sqrtb2);
+    let dg = exp_modn(zn, &g, sqrtb2 as u64);
+    let mut gg = dg.clone();
+    for _ in 0..sqrtb2 {
+        gsteps.push(gg.clone());
+        gg = zn.mul(&gg, &dg);
+    }
+
+    // Compute:
+    // P = product(X - bg[i])
+    // product P(gg[j])
+    let pol = Poly::from_roots(zn, bsteps);
+    let vals = pol.multi_eval(gsteps);
+    let mut buffer = zn.one();
+    for (idx, &v) in vals.iter().enumerate() {
+        // Compute the gcd every few rows for finer granularity.
+        buffer = zn.mul(buffer, v);
+        if idx % 8 == 0 || idx == vals.len() - 1 {
+            let d = Integer::gcd(n, &Uint::from(buffer));
+            if d > Uint::ONE && d < *n {
+                return Some((d, n / d));
+            }
+        }
     }
     None
 }
@@ -386,8 +446,16 @@ fn test_pm1_uint() {
     )
     .unwrap();
     let n = p128 * p256;
-    let Some((p, q)) = pm1_impl(n, 30000, 800_000)
+    let Some((p, q)) = pm1_impl(n, 30000, 1_050)
         else { panic!("failed Pollard P-1") };
     assert_eq!(p, p128);
+    assert_eq!(q, p256);
+
+    // 2^3 * 3 * 7 * 11 * 31 * 131 * 1109 * 1699 * 8317 * 5984903
+    let p = Uint::from_str("703855808397033138741049").unwrap();
+    let n = p * p256;
+    let Some((p, q)) = pm1_impl(n, 30000, 4_200)
+        else { panic!("failed Pollard P-1") };
+    assert_eq!(p, p);
     assert_eq!(q, p256);
 }
