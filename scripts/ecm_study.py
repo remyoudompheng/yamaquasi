@@ -1,9 +1,30 @@
 import random
 from random import getrandbits
-from sage.all import factor, primes, proof, GF, EllipticCurve, QQ
+from sage.all import euler_phi, factor, primes, proof, GF, EllipticCurve, QQ
 from math import gcd
 
 proof.arithmetic(False)
+
+# Ideal values of D/B2
+# We cannot reach D > 6 φ(D) (it requires D >= 223092870)
+for k in range(9, 22):
+    t = 1 << k
+    # 5 blocks of size 2^k (fixed CPU cost)
+    nbest = 0
+    for n in range(int(4.5 * t), 5 * t):
+        if 0.9 <= euler_phi(n) / t <= 1.0:
+            nbest = n
+    phi = euler_phi(nbest) // 2
+    print(f"D={nbest} B2={float(nbest**2):.3e} φ(D)/2={phi} (10 blocks size 2^{k-1})")
+    nbest = 0
+    for n in range(int(5.2 * t), int(5.5 * t)):
+        if 0.9 <= euler_phi(n) / t <= 1.0:
+            nbest = n
+    if not nbest:
+        continue
+    phi = euler_phi(nbest) // 2
+    print(f"D={nbest} B2={float(nbest**2):.3e} φ(D)/2={phi} (11 blocks size 2^{k-1})")
+
 
 def analyze(primes, x, y, expect=1):
     stats1, stats2 = [], []
@@ -43,6 +64,7 @@ def analyze(primes, x, y, expect=1):
     p66, p75 = stats2[-l // 3], stats2[-l // 4]
     print(f"needs B2 {p25=} {p50=} {p66=} {p75=}")
 
+
 for size in (32, 48, 64):
     print(f"=== ===")
     print(f"=== Working with primes of size {size} ===")
@@ -58,11 +80,11 @@ for size in (32, 48, 64):
         analyze(ps, 2, y, expect=4)
 
     # Extra 2-torsion (Z/2 x Z/4) when d is a square
-    # (3a+5)² + (4a+5)² = 1 + (5a+7)²
+    # (3a+5)² + (4a+5)² = 1 + (5a+7)²
     # Average exp2 = 4 + 1/3
     # Average exp3 = 2/3
     for a in (1, 2, 3):
-        x, y = 3*a+5, 4*a+5
+        x, y = 3 * a + 5, 4 * a + 5
         print(f"=== Trying Edwards curve Z/2 x Z/4 ({x}, {y})")
         analyze(ps, x, y, expect=8)
 
@@ -85,4 +107,3 @@ for size in (32, 48, 64):
     x, y = QQ("125/91"), QQ("841/791")
     print(f"=== Trying Edwards curve Z/2 x Z/8 ({x}, {y})")
     analyze(ps, x, y, expect=16)
-

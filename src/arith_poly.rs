@@ -17,6 +17,7 @@
 use std::cmp::max;
 use std::ops::{AddAssign, MulAssign, SubAssign};
 
+use crate::arith_fft::convolve_modn;
 use crate::arith_montgomery::{MInt, ZmodN};
 
 // Fast polynomial evaluation:
@@ -31,7 +32,7 @@ use crate::arith_montgomery::{MInt, ZmodN};
 #[derive(Clone)]
 pub struct Poly<'a> {
     zn: &'a ZmodN,
-    c: Vec<MInt>,
+    pub c: Vec<MInt>,
 }
 
 impl<'a> AddAssign<&Poly<'a>> for Poly<'a> {
@@ -61,6 +62,9 @@ impl<'a> MulAssign<&MInt> for Poly<'a> {
     }
 }
 
+const USE_FFT: bool = true;
+const FFT_THRESHOLD: usize = 64;
+
 impl<'a> Poly<'a> {
     pub fn new(zn: &'a ZmodN, coefs: Vec<MInt>) -> Self {
         Poly { zn, c: coefs }
@@ -68,13 +72,13 @@ impl<'a> Poly<'a> {
 
     // Computes polynomial product(x-r for r in roots)
     pub fn _product_tree(zn: &'a ZmodN, roots: &[MInt]) -> Vec<Vec<MInt>> {
-        // Smallest power of two smaller than len(roots).
+        // Smallest power of two >= len(roots).
         let logn = usize::BITS - usize::leading_zeros(roots.len() - 1);
         let n = 1_usize << logn;
         let mut layers = vec![];
-        let mut buf1 = vec![MInt::default(); 4 * n];
-        let mut buf2 = vec![MInt::default(); 4 * n];
-        for i in 0..2 * n {
+        let mut buf1 = vec![MInt::default(); 2 * n];
+        let mut buf2 = vec![MInt::default(); 2 * n];
+        for i in 0..n {
             if i < roots.len() {
                 // polynomial x-r
                 buf1[2 * i] = zn.sub(MInt::default(), roots[i]);
@@ -87,7 +91,7 @@ impl<'a> Poly<'a> {
         layers.push(buf1.clone());
         // Repeatedly multiply pairs of polynomials in buf1 into buf2.
         // To build layer i, multiply degree 2^{i-1} polynomials from previous layer.
-        let mut tmp = vec![MInt::default(); 12 * n];
+        let mut tmp = vec![MInt::default(); 6 * n];
         for i in 1..=logn {
             for j in 0..(1 << (logn - i)) {
                 // Indices from 0 to 2<<logn
@@ -97,7 +101,7 @@ impl<'a> Poly<'a> {
                 let idx1 = (2 * j) << i;
                 let idx2 = (2 * j + 1) << i;
                 //let idx3 = (2 * j + 2) << i;
-                Self::karatsuba(
+                Self::_longmul(
                     zn,
                     &mut buf2[idx1..idx1 + 2 * deg],
                     &buf1[idx1..idx1 + deg],
@@ -131,7 +135,7 @@ impl<'a> Poly<'a> {
         let layers = Self::_product_tree(zn, &roots);
         let product = layers.last().unwrap();
         // Last layer has degree n.
-        let n = product.len() / 4;
+        let n = product.len() / 2;
         Poly {
             zn,
             c: product[n - deg..n + 1].to_vec(),
@@ -165,7 +169,7 @@ impl<'a> Poly<'a> {
         //       assert!(self.c.len() <= 2 * n);
         // Compute the product tree of x - ai as above.
         let layers = Self::_product_tree(zn, a);
-        let n = layers[layers.len() - 1].len() / 4;
+        let n = layers[layers.len() - 1].len() / 2;
         let logn = n.trailing_zeros();
         assert_eq!(layers.len() as u32, logn + 1);
 
@@ -270,11 +274,50 @@ impl<'a> Poly<'a> {
     }
 
     fn _basic_mul(zn: &ZmodN, z: &mut [MInt], p: &[MInt], q: &[MInt]) {
-        z[..p.len() + q.len()].fill(MInt::default());
+        z[p.len() + q.len() - 1..].fill(MInt::default());
         for i in 0..p.len() {
             for j in 0..q.len() {
-                z[i + j] = zn.add(&z[i + j], &zn.mul(&p[i], &q[j]));
+                if i == 0 || j + 1 == q.len() {
+                    // first term
+                    z[i + j] = zn.mul(&p[i], &q[j]);
+                } else {
+                    z[i + j] = zn.add(&z[i + j], &zn.mul(&p[i], &q[j]));
+                }
             }
+        }
+    }
+
+    /// Multiply 2 polynomials into a double length polynomial.
+    /// The lengths of p,q are preferably both close to 2^k from below.
+    fn _fft_longmul(zn: &ZmodN, z: &mut [MInt], p: &[MInt], q: &[MInt]) {
+        // FIXME: reuse scratch buffer.
+        let degp = p.len() - 1;
+        let degq = q.len() - 1;
+        let logsize = usize::BITS - usize::leading_zeros(max(degp, degq));
+        convolve_modn(zn, 2 << logsize, p, q, z, 0);
+    }
+
+    /// Middle product of polynomials of degree 2N-2 and N-1
+    /// using a length 2N FFT.
+    /// The full product is:
+    /// (x^3n-2 + ... + x^2n-1) + (x^2n-2 + ... + x^n-1) + (x^n-2 + ... 1)
+    /// and low and high parts will wrap together during convolution.
+    fn _fft_midmul(zn: &ZmodN, z: &mut [MInt], p: &[MInt], q: &[MInt]) {
+        // FIXME: reuse scratch buffer.
+        let qlen = q.len();
+        assert!(qlen & (qlen - 1) == 0);
+        assert!(p.len() == 2 * qlen - 1);
+        let logsize = qlen.trailing_zeros();
+        // Compute convolution product and extract
+        // coefficients n-1 .. 2n-1
+        convolve_modn(zn, 2 << logsize, p, q, z, qlen - 1);
+    }
+
+    fn _longmul(zn: &ZmodN, z: &mut [MInt], p: &[MInt], q: &[MInt], tmp: &mut [MInt]) {
+        if USE_FFT && p.len() >= FFT_THRESHOLD {
+            Self::_fft_longmul(zn, z, p, q)
+        } else {
+            Self::karatsuba(zn, z, p, q, tmp)
         }
     }
 
@@ -282,28 +325,13 @@ impl<'a> Poly<'a> {
     // using tmp as scratch buffer.
     fn karatsuba(zn: &ZmodN, z: &mut [MInt], p: &[MInt], q: &[MInt], tmp: &mut [MInt]) {
         if p.len() <= 20 && q.len() <= 20 {
-            z[p.len() + q.len() - 1..].fill(MInt::default());
-            for i in 0..p.len() {
-                for j in 0..q.len() {
-                    if i == 0 || j + 1 == q.len() {
-                        // first term
-                        z[i + j] = zn.mul(p[i], q[j]);
-                    } else {
-                        z[i + j] = zn.add(z[i + j], zn.mul(p[i], q[j]));
-                    }
-                }
-            }
+            Self::_basic_mul(zn, z, p, q);
             return;
         }
         debug_assert!(z.len() >= p.len() + q.len());
         // Invariant: tmp has 3 times the length of p or q
         let half = (max(p.len(), q.len()) + 1) / 2;
         assert!(tmp.len() >= 4 * half);
-        // Ordinary multiplication
-        if p.len() <= 4 && q.len() <= 4 {
-            Self::_basic_mul(zn, z, p, q);
-            return;
-        }
         // Add:
         // plo*qlo
         //     (pl qh + ph ql)
@@ -348,7 +376,7 @@ impl<'a> Poly<'a> {
     /// https://hal.inria.fr/inria-00071921/document
     fn _middlemul(zn: &ZmodN, z: &mut [MInt], p: &[MInt], q: &[MInt], tmp: &mut [MInt]) {
         // Page 9 of [Hanrot-Quercia-Zimmerman]
-        // Karatsuba-like method to get coefficients [n..2n]
+        // Karatsuba-like method to get coefficients [n-1..2n-1]
         // from a product where deg p = 2n-2, deg q = n-1
         // P = P3 P2 P1 P0
         // Q =       Q1 Q0
@@ -369,6 +397,38 @@ impl<'a> Poly<'a> {
             z[0] = zn.add(&zn.mul(&p[1], &q[0]), &zn.mul(&p[0], &q[1]));
             z[1] = zn.add(&zn.mul(&p[2], &q[0]), &zn.mul(&p[1], &q[1]));
             return;
+        } else if USE_FFT && q.len() >= FFT_THRESHOLD {
+            if q.len() & (q.len() - 1) == 0 {
+                // exact power of 2
+                Self::_fft_midmul(zn, z, p, q);
+                return;
+            } else if (q.len() - 1) & (q.len() - 2) == 0 {
+                // Power series inversion creates inputs of size 2^k + 1
+                // P = p[2n] X^2n + ... + p[0]
+                // Q = q[n] X^n + ... + q[0]
+                // and we want MP(P,Q) = r[2n] + ... + r[n]
+                //
+                // Instead compute a 2^k FFT:
+                // P = p[2n] X^2n + P' X + p0
+                // Q = Q' X + q0
+                // PQ = ... + p[2n] q0 X^2n + P' Q' X^2 + q0 P' X + p0 Q' X + ...
+                //
+                // MP(P, Q) = MP(P', Q') X
+                //          + p[2n] q[0] X^n
+                //          + q0 P' X
+                //          + p0 Q' X => only p0 qn X^n in middle product
+                let n = q.len() - 1;
+                // z[k+1] = sum(p[i+1] q[j+1] where i+j = k+n-1)
+                Self::_fft_midmul(zn, &mut z[1..], &p[1..2 * n], &q[1..]);
+                for i in n..=2 * n {
+                    z[i - n] = zn.add(z[i - n], zn.mul(p[i], q[0]));
+                }
+                z[0] = zn.mul(p[0], q[n]);
+                for i in 1..=n {
+                    z[0] = zn.add(z[0], zn.mul(p[i], q[n - i]));
+                }
+                return;
+            }
         }
         assert!(tmp.len() >= 2 * p.len());
 
@@ -420,7 +480,8 @@ impl<'a> Poly<'a> {
         Poly { zn: &p.zn, c: z }
     }
 
-    pub fn mul(p: &'a Poly<'a>, q: &'a Poly<'a>) -> Poly<'a> {
+    /// Only intended for tests and benchmarks.
+    pub fn mul_karatsuba(p: &'a Poly<'a>, q: &'a Poly<'a>) -> Poly<'a> {
         let mut z = vec![];
         let mut tmp = vec![];
         // FIXME: fix unbalanced inputs.
@@ -431,9 +492,16 @@ impl<'a> Poly<'a> {
         Poly { zn: &p.zn, c: z }
     }
 
+    /// Only intended for tests and benchmarks.
+    pub fn mul_fft(p: &'a Poly<'a>, q: &'a Poly<'a>) -> Poly<'a> {
+        let mut pq = vec![MInt::default(); p.c.len() + q.c.len() - 1];
+        Self::_fft_longmul(&p.zn, &mut pq, &p.c, &q.c);
+        Poly { zn: &p.zn, c: pq }
+    }
+
     pub fn middlemul(p: &'a Poly<'a>, q: &Poly<'a>) -> Poly<'a> {
         let n = q.c.len();
-        assert!(n & (n - 1) == 0, "{n} must be a power of 2");
+        assert!(p.c.len() == 2 * n - 1);
         let mut vp = p.c.clone();
         vp.resize(2 * n - 1, MInt::default());
 
@@ -441,7 +509,7 @@ impl<'a> Poly<'a> {
         let mut tmp = vec![];
         // Assumes similar degrees (all degrees more than max(deg p, deg q)/2)
         z.resize(n, MInt::default());
-        tmp.resize(2 * vp.len(), MInt::default());
+        tmp.resize(2 * vp.len() + 16, MInt::default());
         Self::_middlemul(&p.zn, &mut z, &vp, &q.c, &mut tmp);
         Poly { zn: &p.zn, c: z }
     }
@@ -470,7 +538,7 @@ impl<'a> Poly<'a> {
         tmp_p[p.len() - 1..].fill(MInt::default());
         Self::_middlemul(zn, tmplo, &tmp_p[..2 * half_up - 1], &z[..half_up], tmp_mul);
         // Multiply again by inverse (but we need low words now)
-        Self::karatsuba(zn, tmp_p, tmplo, &z[..half], tmp_mul);
+        Self::_longmul(zn, tmp_p, tmplo, &z[..half], tmp_mul);
         // Take low words
         z[half_up..p.len()].fill(MInt::default());
         Self::_sub(zn, &mut z[half_up..p.len()], &tmp_p[0..half]);
@@ -493,7 +561,7 @@ impl<'a> Poly<'a> {
         // α in HQZ paper.
         Self::_inv_mod_xn(zn, alpha, &q[..half_up], tmphi);
         // β in HQZ paper.
-        Self::karatsuba(zn, tmpmul, &alpha[..half_up], &p[..half_up], tmphi);
+        Self::_longmul(zn, tmpmul, &alpha[..half_up], &p[..half_up], tmphi);
         z[..half_up].copy_from_slice(&tmpmul[..half_up]);
         // Hensel lift mod x^n
         // Get P1 / Q0^2 as a middle product
@@ -507,7 +575,7 @@ impl<'a> Poly<'a> {
             tmparg[i] = zn.sub(p[half_up + i], tmparg[i]);
         }
         // Multiply again by inverse (but we need low words now)
-        Self::karatsuba(zn, tmpmul, &alpha[..half], &tmparg, tmphi);
+        Self::_longmul(zn, tmpmul, &alpha[..half], &tmparg, tmphi);
         // Take low words
         z[half_up..p.len()].copy_from_slice(&tmpmul[..half]);
     }
@@ -532,36 +600,48 @@ fn test_polymul() {
     let n = Uint::from_str(MODULUS256).unwrap();
     let zn = ZmodN::new(n);
 
-    let p1: Vec<MInt> = (1..100)
-        .map(|x: u64| zn.from_int(Uint::from(x * x * 12345 + x * 1234 + 123)))
-        .collect();
-    let p2: Vec<MInt> = (1..100)
-        .map(|x: u64| zn.from_int(Uint::from(x * x * 56789 + x * 6789 + 789)))
-        .collect();
-    let pol1 = Poly { zn: &zn, c: p1 };
-    let pol2 = Poly { zn: &zn, c: p2 };
+    for width in [99, 512] {
+        let p1: Vec<MInt> = (1..=width)
+            .map(|x: u64| zn.from_int(Uint::from(x * x * 12345 + x * 1234 + 123)))
+            .collect();
+        let p2: Vec<MInt> = (1..=width)
+            .map(|x: u64| zn.from_int(Uint::from(x * x * 56789 + x * 6789 + 789)))
+            .collect();
+        let pol1 = Poly { zn: &zn, c: p1 };
+        let pol2 = Poly { zn: &zn, c: p2 };
 
-    let res = Poly::mul(&pol1, &pol2);
-    for i in 0..res.c.len() {
-        let mut z = zn.zero();
-        for k in 0..=i {
-            if k < pol1.c.len() && i - k < pol2.c.len() {
-                z = zn.add(z, zn.mul(pol1.c[k], pol2.c[i - k]))
+        let res = Poly::mul_karatsuba(&pol1, &pol2);
+        for i in 0..res.c.len() {
+            let mut z = zn.zero();
+            for k in 0..=i {
+                if k < pol1.c.len() && i - k < pol2.c.len() {
+                    z = zn.add(z, zn.mul(pol1.c[k], pol2.c[i - k]))
+                }
+            }
+            assert_eq!(z, res.c[i], "failure for coeff[{i}]");
+        }
+
+        // Test FFT
+        let res_fft = Poly::mul_fft(&pol1, &pol2);
+        for i in 0..res.c.len() {
+            if i < res_fft.c.len() {
+                assert_eq!(zn.to_int(res.c[i]), zn.to_int(res_fft.c[i]), "index={i}");
+            } else {
+                assert_eq!(res.c[i], zn.zero());
             }
         }
-        assert_eq!(z, res.c[i], "failure for coeff[{i}]");
-    }
 
-    // Test polynomial from roots
-    let roots = pol1.c.to_vec();
-    let pol = Poly::from_roots(&zn, roots.clone());
-    for &r in &roots {
-        let mut v = zn.zero();
-        for i in 0..pol.c.len() {
-            let idx = pol.c.len() - 1 - i;
-            v = zn.add(zn.mul(v, r), pol.c[idx]);
+        // Test polynomial from roots
+        let roots = pol1.c.to_vec();
+        let pol = Poly::from_roots(&zn, roots.clone());
+        for &r in &roots {
+            let mut v = zn.zero();
+            for i in 0..pol.c.len() {
+                let idx = pol.c.len() - 1 - i;
+                v = zn.add(zn.mul(v, r), pol.c[idx]);
+            }
+            assert_eq!(v, zn.zero());
         }
-        assert_eq!(v, zn.zero());
     }
 }
 
@@ -570,30 +650,46 @@ fn test_poly_middlemul() {
     let n = Uint::from_str(MODULUS256).unwrap();
     let zn = ZmodN::new(n);
 
-    let p1: Vec<MInt> = (1..256)
-        .map(|x: u64| zn.from_int(Uint::from(x * x * 12345 + x * 1234 + 123)))
-        .collect();
-    let p2: Vec<MInt> = (1..=128)
-        .map(|x: u64| zn.from_int(Uint::from(x * x * 56789 + x * 6789 + 789)))
-        .collect();
-    let pol1 = Poly { zn: &zn, c: p1 };
-    let mut pol2 = Poly { zn: &zn, c: p2 };
-    // Compute middle product
-    let res = Poly::middlemul(&pol1, &pol2);
-    let n = pol2.c.len();
-    // Compute full product
-    pol2.c.resize(pol1.c.len(), MInt::default());
-    let resfull = Poly::mul(&pol1, &pol2);
-    for i in 0..res.c.len() {
-        // Coefficient i is (pol1*pol2)[n-1+i] where n = len(pol2)
-        let z = resfull.c[n - 1 + i];
-        assert_eq!(
-            z,
-            res.c[i],
-            "failure for coeff[{i}] {} vs {}",
-            zn.to_int(z),
-            zn.to_int(res.c[i])
-        );
+    for width in [128_u64, 256, 512_u64, 513, 1024, 2048] {
+        let p1: Vec<MInt> = (1..2 * width)
+            .map(|x: u64| zn.from_int(Uint::from(x * x * 12345 + x * 1234 + 123)))
+            .collect();
+        let p2: Vec<MInt> = (1..=width)
+            .map(|x: u64| zn.from_int(Uint::from(x * x * 56789 + x * 6789 + 789)))
+            .collect();
+        let pol1 = Poly { zn: &zn, c: p1 };
+        let mut pol2 = Poly { zn: &zn, c: p2 };
+        // Compute middle product
+        let res = Poly::middlemul(&pol1, &pol2);
+        let width = width as usize;
+        // Compute full product
+        pol2.c.resize(pol1.c.len(), MInt::default());
+        let resfull = Poly::mul_karatsuba(&pol1, &pol2);
+        for i in 0..res.c.len() {
+            // Coefficient i is (pol1*pol2)[n-1+i] where n = len(pol2)
+            let z = resfull.c[width - 1 + i];
+            assert_eq!(
+                z,
+                res.c[i],
+                "failure for coeff[{i}] {} vs {}",
+                zn.to_int(z),
+                zn.to_int(res.c[i])
+            );
+        }
+        // FFT middle product
+        if width == 513 {
+            continue;
+        }
+        let mut z = vec![MInt::default(); width];
+        Poly::_fft_midmul(&zn, &mut z, &pol1.c, &pol2.c[..width]);
+        for i in 0..width {
+            assert_eq!(
+                zn.to_int(z[i]),
+                zn.to_int(resfull.c[width - 1 + i]),
+                "index {i}"
+            );
+        }
+        eprintln!("Middle product OK for width {width}");
     }
 }
 
