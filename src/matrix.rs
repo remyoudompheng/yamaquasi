@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//! Linear algebra algorithms for kernels of matrices modulo 2.
+//!
+
 // Note that crate bitvec 1.0 generates slow code for our purpose.
 
 use std::default::Default;
@@ -73,20 +76,16 @@ pub fn kernel_gauss(columns: Vec<BitVec>) -> Vec<BitVec> {
     vec![]
 }
 
-// Block Lanczos algorithm.
-//
-// A Block Lanczos Algorithm for Finding Dependencies over GF(2)
-// Peter L. Montgomery
-// https://doi.org/10.1007/3-540-49264-X_9
-//
-// Computation involves:
-// - Dot product of blocks of vectors (a few ms)
-// - Product of a small matrix by a block (a few ms)
-// - Product of a sparse matrix by a block (<1ms)
-// - Inverse of a small matrix
-
-/// Quadratic version of Block Lanczos.
-/// It follows the formulas from [Montgomery, Sections 4, 5, 6]
+/// Block Lanczos algorithm for kernel of sparse matrices.
+///
+/// A Block Lanczos Algorithm for Finding Dependencies over GF(2)
+/// Peter L. Montgomery, <https://doi.org/10.1007/3-540-49264-X_9>
+///
+/// Computation involves:
+/// - Dot product of blocks of vectors (a few ms)
+/// - Product of a small matrix by a block (a few ms)
+/// - Product of a sparse matrix by a block (<1ms)
+/// - Inverse of a small matrix
 pub fn kernel_lanczos(b: &SparseMat, verbose: bool) -> Vec<BitVec> {
     // Consider the quadratic form defined by A = b^T b
     // Decompose the entire space in blocks such that
@@ -479,11 +478,6 @@ fn reverse_lane(l: Lane) -> Lane {
     l.reverse_bits()
 }
 
-/// Pseudo inverse of a small symmetric matrix.
-///
-/// If M is a square matrix with null coefficients
-/// outside of set of indices I, return matrix N
-/// such that (MN)[i,i] = 1 for i in I
 impl SmallMat {
     fn identity() -> Self {
         let mut m = SmallMat::default();
@@ -574,8 +568,11 @@ impl SmallMat {
         (rank, mask)
     }
 
-    // Pseudoinverse for a submatrix restricted to #I=rank
-    // The pseudoinverse has same row/col indices as the original matrix.
+    /// Pseudo inverse of a small symmetric matrix.
+    ///
+    /// If M is a square matrix with null coefficients
+    /// outside of set of indices I, return matrix N
+    /// such that `(MN)[i,i] = 1` for i in I
     fn pseudoinverse(&self) -> SmallMat {
         let (rk, mask) = self.rank();
         // Augment with an identity matrix
@@ -702,6 +699,7 @@ fn test_kernel_small() {
     assert_eq!(v, vec![make_bitvec(&[1, 1, 1, 1])]);
 }
 
+#[doc(hidden)]
 pub fn make_test_matrix(n: usize) -> (Vec<BitVec>, BitVec) {
     // Generate 2 polynomials
     // P = random bits (degree n)
@@ -746,6 +744,7 @@ pub fn make_test_matrix(n: usize) -> (Vec<BitVec>, BitVec) {
 }
 
 #[allow(dead_code)]
+#[doc(hidden)]
 pub fn make_test_sparsemat(k: usize, corank: usize, ones: usize) -> SparseMat {
     let mut seed: Wrapping<u32> = Wrapping(0xcafe1337 + k as u32);
     let mut cols = vec![];
@@ -762,6 +761,7 @@ pub fn make_test_sparsemat(k: usize, corank: usize, ones: usize) -> SparseMat {
 }
 
 #[allow(dead_code)]
+#[doc(hidden)]
 pub fn make_test_matrix_sparse(n: usize, k: usize, ones: usize) -> Vec<BitVec> {
     let mut seed: Wrapping<u32> = Wrapping(0xcafe1337 + n as u32);
     let mut matrix = vec![];

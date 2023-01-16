@@ -45,7 +45,7 @@
 //! In the case of MPQS/SIQS
 //! ignoring these small primes may add 20 additional candidates.
 //!
-//! # Large primes
+//! # Large primes
 //!
 //! In constrast, large primes sieve hits are very sparse: they will
 //! typically divide less than half of interval elements. We can use

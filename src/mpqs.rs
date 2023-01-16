@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! Polynomial selection for Multiple Polynomial Quadratic Sieve
+//! Multiple Polynomial Quadratic Sieve with large prime A
 //!
 //! Bibliography:
 //! Robert D. Silverman, The multiple polynomial quadratic sieve
-//! Math. Comp. 48, 1987, https://doi.org/10.1090/S0025-5718-1987-0866119-8
+//! Math. Comp. 48, 1987, <https://doi.org/10.1090/S0025-5718-1987-0866119-8>
 
 use std::sync::RwLock;
 
@@ -21,6 +21,7 @@ use crate::relations::{self, Relation, RelationSet};
 use crate::sieve;
 use crate::{Int, Uint, DEBUG};
 
+/// Run MPQS to factor `n`
 pub fn mpqs(
     n: Uint,
     prefs: &crate::Preferences,
@@ -246,6 +247,7 @@ pub fn select_polys(fb: &FBase, n: &Uint, base: Uint, width: usize) -> Vec<Poly>
         .collect()
 }
 
+#[doc(hidden)]
 pub fn sieve_for_polys(fb: &FBase, n: &Uint, bmin: Uint, width: usize) -> Vec<(Uint, Uint)> {
     let mut composites = vec![false; width as usize];
     for &p in fbase::SMALL_PRIMES {

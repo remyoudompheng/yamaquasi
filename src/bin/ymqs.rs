@@ -2,16 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! Bibliography:
-//!
-//! Carl Pomerance, A Tale of Two Sieves
-//! https://www.ams.org/notices/199612/pomerance.pdf
-//!
-//! J. Gerver, Factoring Large Numbers with a Quadratic Sieve
-//! https://www.jstor.org/stable/2007781
-//!
-//! https://en.wikipedia.org/wiki/Quadratic_sieve
-
 use std::str::FromStr;
 
 use yamaquasi::arith::U1024;

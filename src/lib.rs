@@ -2,6 +2,19 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//! Yamaquasi is a library of integer factoring algorithms.
+//!
+//! Bibliography:
+//!
+//! Carl Pomerance, A Tale of Two Sieves
+//! <https://www.ams.org/notices/199612/pomerance.pdf>
+//!
+//! J. Gerver, Factoring Large Numbers with a Quadratic Sieve
+//! <https://www.jstor.org/stable/2007781>
+//!
+//! Wikipedia
+//! <https://en.wikipedia.org/wiki/Quadratic_sieve>
+
 pub mod arith;
 pub mod arith_fft;
 pub mod arith_montgomery;
@@ -326,8 +339,8 @@ fn check_factors(n: &Uint, factors: &[Uint]) {
     assert_eq!(*n, factors.iter().product::<Uint>());
 }
 
+/// Probabilistic primality test using a Miller test for small bases.
 pub fn pseudoprime(p: Uint) -> bool {
-    // A basic Miller test with small bases.
     let s = (p.low_u64() - 1).trailing_zeros();
     for &b in fbase::SMALL_PRIMES {
         if p.to_u64() == Some(b) {

@@ -2,14 +2,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//! Montgomery form arithmetic for 64-bit moduli.
+
 use std::borrow::Borrow;
 
 use crate::arith;
 use crate::Uint;
 
-// Montgomery form arithmetic for 64-bit moduli.
-
-// Returns ninv such that n*ninv = -1
+/// Returns ninv such that n*ninv = -1
 pub fn mg_2adic_inv(n: u64) -> u64 {
     // Invariant: nx = 1 + 2^k s, k increasing
     let mut x = 1u64;
@@ -29,9 +29,9 @@ pub fn mg_mul(n: u64, ninv: u64, x: u64, y: u64) -> u64 {
     mg_redc(n, ninv, (x as u128) * (y as u128))
 }
 
+/// Montgomery reduction (x/R mod n).
 #[inline(always)]
 pub fn mg_redc(n: u64, ninv: u64, x: u128) -> u64 {
-    // Montgomery reduction (x/R mod n).
     // compute -x/N mod R
     let mul: u64 = (x as u64).wrapping_mul(ninv);
     // reduce
@@ -44,8 +44,7 @@ pub fn mg_redc(n: u64, ninv: u64, x: u128) -> u64 {
     }
 }
 
-// Montgomery form arithmetic for large (512-bit) integers
-
+/// Context for modular Montgomery arithmetic for large (512-bit) moduli
 #[derive(Clone)]
 pub struct ZmodN {
     pub n: Uint,
@@ -164,9 +163,9 @@ impl ZmodN {
         MInt(sub)
     }
 
+    /// Montgomery reduction (x/R mod n).
     fn redc(&self, x: &[u64; 2 * MINT_WORDS]) -> MInt {
         debug_assert!(Uint::from_digits(*x) < (self.n << (64 * self.k)));
-        // Montgomery reduction (x/R mod n).
         // compute -x/N mod R
         let mul = uint_lowmul(&x[..], &self.ninv.0, self.k);
         // multiply by N again

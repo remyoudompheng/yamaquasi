@@ -4,7 +4,7 @@
 
 //! Implementation of Shanks's square forms factorization
 //!
-//! References: http://homes.cerias.purdue.edu/~ssw/squfof.pdf
+//! References: <http://homes.cerias.purdue.edu/~ssw/squfof.pdf>
 
 use num_integer::Integer;
 

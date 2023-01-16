@@ -27,6 +27,7 @@
 use crate::arith_montgomery::{MInt, ZmodN};
 
 /// Convolution product modulo n and X^size-1 where size <= 1M
+///
 /// The Kronecker substitution method can be used to pack multiple
 /// coefficients in each FFT input element. The result will be
 /// filled with (p1*p2)[offset..]
@@ -184,8 +185,9 @@ fn fft<const N: usize>(src: &[FInt<N>], dst: &mut [FInt<N>], depth: u32, k: u32,
 // Arithmetic modulo 2^64N+1
 
 /// An integer modulo 2^64N + 1.
-/// It is always assumed to be normalized either x[N] == 0
-/// or x[N] == 1 and x[i] == 0 for i < N.
+///
+/// It is always assumed to be normalized either `x[N] == 0`
+/// or `x[N] == 1` and `x[i] == 0` for i < N.
 ///
 /// Modulo 2^64N + 1, 2 is a 128N-th root of unity and
 /// ω = sqrt(2) is a 256N-th root of unity.

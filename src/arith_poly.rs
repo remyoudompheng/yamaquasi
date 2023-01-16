@@ -71,6 +71,7 @@ impl<'a> Poly<'a> {
     }
 
     // Computes polynomial product(x-r for r in roots)
+    #[doc(hidden)]
     pub fn _product_tree(zn: &'a ZmodN, roots: &[MInt]) -> Vec<Vec<MInt>> {
         // Smallest power of two >= len(roots).
         let logn = usize::BITS - usize::leading_zeros(roots.len() - 1);
@@ -170,6 +171,7 @@ impl<'a> Poly<'a> {
         vals
     }
 
+    #[doc(hidden)]
     pub fn _multi_eval(&self, a: &[MInt]) -> Vec<MInt> {
         // Compute P(x)/product(x-ai) as a power series in 1/x
         // assume that degree(P) <= len(a)

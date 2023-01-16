@@ -6,7 +6,7 @@
 //!
 //! Bibliography:
 //! J. Gerver, Factoring Large Numbers with a Quadratic Sieve
-//! https://www.jstor.org/stable/2007781
+//! <https://www.jstor.org/stable/2007781>
 
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::RwLock;

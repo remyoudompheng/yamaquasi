@@ -2,10 +2,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! A specialized version of Pollard P-1 for double large primes.
+//! Implementation of Pollard P-1
+//!
+//! # Small integers (64-bit)
+//!
+//! A specialized version of Pollard P-1 for double large primes is provided
+//! by [PM1Base].
+//!
 //! The target is to factor numbers of size 40-52 bits which are products
 //! of primes above the factor base, slightly biased so that one factor
-//! remains small.
+//! remains small. The factor base is precomputed and can be reused.
 //!
 //! For example, while factoring RSA-100 half of numbers to be factored
 //! have a factor such that p-1 is 5000-smooth.
@@ -26,6 +32,14 @@
 //! Stages 1 and 2 can be shrinked according to available CPU budget.
 //!
 //! Most 64-bit semiprimes that are not products of 2 strong primes can be factored in this way.
+//!
+//! # Large integers
+//!
+//! A generic Pollard P-1 implementation for possibly large integers
+//! is provided by functions [pm1_only] and [pm1_quick]
+//!
+//! It uses the multipoint evaluation model for large D=sqrt(B2)
+//! where D is such that D ~= 5 φ(D).
 
 use num_integer::Integer;
 
@@ -170,10 +184,6 @@ impl PM1Base {
     }
 }
 
-// Generic Pollard P-1 implementation for possibly large integers.
-// It uses the multipoint evaluation model for large D=sqrt(B2)
-// where D is such that D ~= 5 φ(D).
-
 // Similarly to ECM implementation, run Pollard P-1 with small parameters
 // to possibly detect a small factor. The cost is 2 multiplications per large
 // prime and it should use a CPU budget similar to 1 ECM run.
@@ -223,6 +233,7 @@ pub fn pm1_only(n: Uint) -> Option<(Uint, Uint)> {
 
 const MULTIEVAL_THRESHOLD: u64 = 2000;
 
+#[doc(hidden)]
 pub fn pm1_impl(n: Uint, b1: u64, sqrtb2: u64) -> Option<(Uint, Uint)> {
     let b2 = sqrtb2 * sqrtb2;
     assert!(b1 > 3);

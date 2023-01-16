@@ -5,17 +5,17 @@
 //! A basic/naive implementation of ECM using Edwards curves.
 //!
 //! References:
-//! https://gitlab.inria.fr/zimmerma/ecm
-//! https://eecm.cr.yp.to/index.html
+//! <https://gitlab.inria.fr/zimmerma/ecm>
+//! <https://eecm.cr.yp.to/index.html>
 //!
 //! It includes a selection of Edwards "good curves" from
-//! https://eecm.cr.yp.to/goodcurves.html
+//! <https://eecm.cr.yp.to/goodcurves.html>
 //!
 //! After good curves (Q-torsion Z/12 or Z/2 x Z/8) it iterates over
 //! a simple infinite family of curves with rational Z/2 x Z/4 torsion.
 //!
 //! It implements the "baby step giant step" optimization for stage 2
-//! as described in section 5.2 of https://eecm.cr.yp.to/eecm-20111008.pdf
+//! as described in section 5.2 of <https://eecm.cr.yp.to/eecm-20111008.pdf>
 //! This is about 3x faster than the prime-by-prime approach.
 //!
 //! Due to slow big integer arithmetic, we use projective coordinates without
@@ -27,7 +27,6 @@
 //! Curves are enumerated in a deterministic order.
 //!
 //! TODO: merge exponent base with Pollard P-1
-//! TODO: merge Montgomery arithmetic with arith library
 
 use std::cmp::{max, min};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,9 +40,11 @@ use crate::arith_poly::Poly;
 use crate::fbase;
 use crate::{Uint, UnexpectedFactor};
 
-// Run ECM with automatically selected parameters. The goal of this function
-// is not to completely factor numbers, but to detect cases where a number
-// has a relatively small prime factor (about size(n) / 5)
+/// Run ECM with automatically selected small parameters.
+///
+/// The goal of this function is not to completely factor numbers, but
+/// to detect cases where a number has a relatively small prime factor
+/// (about size(n) / 5)
 pub fn ecm_auto(n: Uint, tpool: Option<&rayon::ThreadPool>) -> Option<(Uint, Uint)> {
     // The CPU budget here is only a few seconds (at most 1% of SIQS time).
     // So we intentionally use small parameters hoping to be very lucky.
@@ -99,7 +100,7 @@ pub fn ecm_auto(n: Uint, tpool: Option<&rayon::ThreadPool>) -> Option<(Uint, Uin
     }
 }
 
-// Factor number using purely ECM. This may never end, or fail.
+/// Factor number using purely ECM. This may never end, or fail.
 pub fn ecm_only(n: Uint, tpool: Option<&rayon::ThreadPool>) -> Option<(Uint, Uint)> {
     // B1 values should be such that step 1 takes about as much time as step 2.
     // D values are only such that phi(D) is a bit less than a power of 2.
@@ -430,8 +431,8 @@ fn batch_normalize(zn: &ZmodN, pts: &mut [Point]) -> Option<()> {
 }
 
 /// An exponent base for ECM.
-/// Chunks of primes are multiplied into u32.
 pub struct SmoothBase {
+    /// Chunks of primes multiplied into u64 integers.
     factors: Box<[u64]>,
     // A number d such that d² ~ B2
     // In BSGS to check that a point has order B2, we look for

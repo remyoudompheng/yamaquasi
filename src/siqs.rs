@@ -6,7 +6,7 @@
 //!
 //! Bibliography:
 //! Alford, Pomerance, Implementing the self-initializing quadratic sieve
-//! https://math.dartmouth.edu/~carlp/implementing.pdf
+//! <https://math.dartmouth.edu/~carlp/implementing.pdf>
 //!
 //! This method accelerates polynomial switch costs by computing polynomials
 //! with easy roots.
@@ -16,7 +16,7 @@
 //! which can be computed from the factor base data through the Chinese remainder
 //! theorem.
 //!
-//! Just like MPQS (see [Silverman])
+//! Just like MPQS (see Silverman's article and [crate::mpqs])
 //! there are two types of polynomials:
 //! type 1 (Ax^2+2Bx+C) = (Ax+B)^2/A mod N where B^2-AC=N
 //! => always a valid choice, A=sqrt(2N)/M max value sqrt(N)M
@@ -478,9 +478,11 @@ impl<'a> Factors<'a> {
     }
 }
 
-// Select factors of generated A values. It is enough to select about
-// twice the number of expected factors in A, because the number of
-// combinations is large enough to generate values close to the target.
+/// Select factors of generated A values.
+///
+/// It is enough to select about twice the number of expected factors in
+/// A, because the number of combinations is large enough to generate
+/// values close to the target.
 pub fn select_siqs_factors<'a>(fb: &'a FBase, n: &'a Uint, nfacs: usize, mm: usize) -> Factors<'a> {
     // For interval [-M,M] the target is sqrt(2N) / M, see [Pomerance].
     // Note that if N=1 mod 4, the target can be sqrt(N/2)/M
@@ -538,12 +540,12 @@ pub fn select_siqs_factors<'a>(fb: &'a FBase, n: &'a Uint, nfacs: usize, mm: usi
 }
 
 /// Precomputed information to compute all square roots of N modulo A.
-/// The square roots are sum(CRT[j] b[j]) with 2 choices for each b[j].
-/// Precompute CRT[j] b[j] modulo the factor base (F vectors)
+///
+/// The square roots are `sum(CRT[j] b[j])` with 2 choices for each `b[j]`.
+/// Precompute `CRT[j] b[j]` modulo the factor base (F vectors)
 /// then combine them for each polynomial (faster than computing 2^F vectors).
 ///
-/// Beware: for type 2 polynomials (Ax^2+Bx+C)
-/// the roots are: (±r - B) / 2A
+/// Beware: for type 2 polynomials (Ax^2+Bx+C) the roots are `(±r - B) / 2A`
 pub struct A<'a> {
     a: Uint,
     factors: Vec<Prime<'a>>,

@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//! A collection of functions working on multi-precision
+//! and/or modular arithmetic.
+
 pub use num_integer::sqrt as isqrt;
 use num_integer::{Integer, Roots};
 use num_traits::{One, Pow, ToPrimitive};
@@ -11,8 +14,7 @@ use std::str::FromStr;
 pub use bnum::types::{I1024, U1024, U256, U512};
 use bnum::{BInt, BUint};
 
-// Multi-precision (fixed width) integer arithmetic
-
+/// Trait for types that can be used for integer-like arithmetic.
 pub trait Num:
     Integer
     + One
@@ -138,6 +140,7 @@ where
     }
 }
 
+/// Modular inversion for 64-bit moduli.
 pub fn inv_mod64(n: u64, p: u64) -> Option<u64> {
     let e = Integer::extended_gcd(&(n as i64), &(p as i64));
     if e.gcd == 1 {
@@ -149,6 +152,7 @@ pub fn inv_mod64(n: u64, p: u64) -> Option<u64> {
     }
 }
 
+/// Modular inversion for multiprecision integers.
 pub fn inv_mod<const N: usize>(n: BUint<N>, p: BUint<N>) -> Option<BUint<N>> {
     // Not generic, we need to switch to signed realm.
     let e = Integer::extended_gcd(&BInt::from_bits(n), &BInt::from_bits(p));
@@ -408,10 +412,10 @@ impl Dividers {
     }
 }
 
-// Tests whether n can be written as p^k for k <= 20.
-// This is enough to filter square factors before quadratic sieve,
-// because trial division by the factor base will already catch
-// the case where k > 20 (p < 2^20 if n has 400 bits).
+/// Tests whether n can be written as p^k for k <= 20.
+/// This is enough to filter square factors before quadratic sieve,
+/// because trial division by the factor base will already catch
+/// the case where k > 20 (p < 2^20 if n has 400 bits).
 pub fn perfect_power<N>(n: N) -> Option<(N, u32)>
 where
     N: Copy + Roots + Pow<u32, Output = N>,
@@ -428,8 +432,8 @@ where
     None
 }
 
-// A divider for 31-bit integers.
-// It uses a 32-bit mantissa.
+/// A divider for 31-bit integers.
+/// It uses a 32-bit mantissa.
 #[derive(Clone, Debug)]
 pub struct Divider31 {
     pub p: u32,
@@ -474,11 +478,13 @@ impl Divider31 {
 }
 
 /// A precomputed structure to compute faster modular inverses
-/// via "Montgomery modular inverse". The implementation follows
-/// the presentation by Lórencz (https://doi.org/10.1007/3-540-36400-5_6)
+/// via "Montgomery modular inverse".
+///
+/// The implementation follows the presentation by Lórencz
+/// <https://doi.org/10.1007/3-540-36400-5_6>
 /// and is attributed to Kaliski.
 pub struct Inverter {
-    // A fixed prime number assumed to be less than 30 bits.
+    /// A fixed prime number assumed to be less than 30 bits.
     pub p: u32,
     // Precomputed 2^-k mod p
     invpow2: [u32; 64],
