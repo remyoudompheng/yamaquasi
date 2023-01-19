@@ -13,7 +13,7 @@ use rand::{self, Rng};
 use yamaquasi::arith::{Num, U256};
 use yamaquasi::fbase;
 use yamaquasi::Uint;
-use yamaquasi::{factor, pseudoprime, Algo, Preferences};
+use yamaquasi::{factor, pseudoprime, Algo, Preferences, Verbosity};
 
 fn main() {
     let arg = arguments::parse(std::env::args()).unwrap();
@@ -49,7 +49,7 @@ fn main() {
             large_factor: None,
             use_double: None,
             threads: None,
-            verbose: false,
+            verbosity: Verbosity::Silent,
         };
         let alg = Algo::from_str(&mode).unwrap();
         let pq = factor(n, alg, &prefs);

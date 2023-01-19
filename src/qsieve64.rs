@@ -13,14 +13,12 @@ use std::collections::HashMap;
 use crate::arith::{self, Num};
 use crate::fbase::SMALL_PRIMES;
 use crate::relations::{self, Relation};
-use crate::Uint;
+use crate::{Uint, Verbosity};
 
-const DEBUG: bool = false;
-
-pub fn qsieve(n: u64) -> Option<(u64, u64)> {
+pub fn qsieve(n: u64, v: Verbosity) -> Option<(u64, u64)> {
     // Prepare factor base
     let (k, score) = select_multiplier(n);
-    if DEBUG {
+    if v >= Verbosity::Debug {
         eprintln!("Selected multiplier {} (score {:.2})", k, score);
     }
     // Handle perfect squares.
@@ -42,7 +40,7 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
             divs.push(arith::Dividers::new(p as u32));
         }
     }
-    if DEBUG {
+    if v >= Verbosity::Debug {
         eprintln!("Selected factor base {:?}", primes,);
     }
 
@@ -54,7 +52,7 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
     }
     // (nsqrt+x)^2 - n
     let (b, c) = (2 * nsqrt, nk - nsqrt * nsqrt);
-    if DEBUG {
+    if v >= Verbosity::Debug {
         eprintln!("Polynomial x^2 + {} x - {}", b, c);
     }
 
@@ -152,7 +150,7 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
         if rels.len() > primes.len() + 8 {
             break;
         }
-        if DEBUG {
+        if v >= Verbosity::Debug {
             eprintln!(
                 "Found {} smooths (cofactors: {} combined, {} pending)",
                 rels.len(),
@@ -163,7 +161,7 @@ pub fn qsieve(n: u64) -> Option<(u64, u64)> {
         interval.fill(0u8);
     }
 
-    let divs = relations::final_step(&Uint::from(n), &rels, false);
+    let divs = relations::final_step(&Uint::from(n), &rels, v);
     if let Some(p) = divs.first() {
         let p = p.low_u64();
         assert_eq!(n % p, 0);
@@ -222,11 +220,14 @@ fn expected_smooth_magnitude(n: u64) -> f64 {
 
 #[test]
 fn test_qsieve() {
-    assert_eq!(qsieve(781418872441), Some((883979, 883979)));
+    assert_eq!(
+        qsieve(781418872441, Verbosity::Silent),
+        Some((883979, 883979))
+    );
     let mut factored = 0;
     for n in 1 << 49..(1 << 49) + 2000 {
         if crate::fbase::certainly_composite(n) {
-            let Some((p, q)) = qsieve(n) else {
+            let Some((p, q)) = qsieve(n, Verbosity::Silent) else {
                 panic!("FAIL {}", n);
             };
             assert_eq!(p * q, n);

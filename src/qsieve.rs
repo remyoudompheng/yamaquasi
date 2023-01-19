@@ -16,13 +16,9 @@ use crate::fbase::{self, FBase, Prime};
 use crate::params::{self, large_prime_factor, BLOCK_SIZE};
 use crate::relations::{self, Relation, RelationSet};
 use crate::sieve::{Sieve, SievePrime};
-use crate::{Int, Uint};
+use crate::{Int, Preferences, Uint, Verbosity};
 
-pub fn qsieve(
-    n: Uint,
-    prefs: &crate::Preferences,
-    tpool: Option<&rayon::ThreadPool>,
-) -> Vec<Relation> {
+pub fn qsieve(n: Uint, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -> Vec<Relation> {
     let use_double = prefs.use_double.unwrap_or(n.bits() > 200);
 
     // Choose factor base among twice the number of needed primes
@@ -45,9 +41,10 @@ pub fn qsieve(
     // When using double large primes, use a smaller factor base.
     let fb = if use_double { fb / 2 } else { fb };
     let fbase = FBase::new(n, fb);
-    eprintln!("Smoothness bound {}", fbase.bound());
-    eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls());
-
+    if prefs.verbose(Verbosity::Info) {
+        eprintln!("Smoothness bound {}", fbase.bound());
+        eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls());
+    }
     // Naïve quadratic sieve with polynomial x²-n (x=-M..M)
     // Max value is X = sqrt(n) * M
     // Smooth bound Y = exp(1/2 sqrt(log X log log X))
@@ -67,17 +64,18 @@ pub fn qsieve(
 
     let maxlarge: u64 = fbase.bound() as u64 * prefs.large_factor.unwrap_or(large_prime_factor(&n));
     let qs = SieveQS::new(n, &fbase, maxlarge, use_double);
-    eprintln!("Max large prime {}", qs.maxlarge);
-    if use_double {
-        eprintln!(
-            "Max double large prime {}",
-            maxlarge * fbase.bound() as u64 * 2
-        );
+    if prefs.verbose(Verbosity::Info) {
+        eprintln!("Max large prime {}", qs.maxlarge);
+        if use_double {
+            eprintln!(
+                "Max double large prime {}",
+                maxlarge * fbase.bound() as u64 * 2
+            );
+        }
+        if qs.only_odds {
+            eprintln!("N is 1 mod 4, only odd numbers will be sieved");
+        }
     }
-    if qs.only_odds {
-        eprintln!("N is 1 mod 4, only odd numbers will be sieved");
-    }
-
     // These counters are actually not accessed concurrently.
     let fwd_offset = AtomicI64::new(0i64);
     let bck_offset = AtomicI64::new(0i64);

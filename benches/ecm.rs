@@ -4,7 +4,7 @@ use std::time::Duration;
 use brunch::Bench;
 use yamaquasi::arith_montgomery::ZmodN;
 use yamaquasi::pollard_pm1::pm1_impl;
-use yamaquasi::{ecm, Uint};
+use yamaquasi::{ecm, Preferences, Uint, Verbosity};
 
 fn main() {
     // A 256-bit prime.
@@ -17,6 +17,10 @@ fn main() {
         "1814274712676087950344811991522598371991048724422784825007845656050800905627423692122807639509275259938192211611976651772022623688843091923010451",
     )
     .unwrap();
+    let prefs = Preferences {
+        verbosity: Verbosity::Silent,
+        ..Default::default()
+    };
 
     let d_values = [
         120, 210, 462, 1050, 2310, 4620, 9240, 19110, 39270, 79170, 159390, 324870, 649740,
@@ -92,7 +96,7 @@ fn main() {
                 .with_timeout(Duration::from_secs(10))
                 .run_seeded((), |_| for &p in primes24 {
                     let n = Uint::from(p) * p256;
-                    ecm::ecm(n, 16, 120, 280, 0, None).unwrap();
+                    ecm::ecm(n, 16, 120, 280, &prefs, None).unwrap();
                 })
         },
     }
@@ -129,7 +133,7 @@ fn main() {
             }
             let start = std::time::Instant::now();
             // Use P256 so what ECM cannot work.
-            let res = ecm::ecm(p256, 1, b1, d, 0, None);
+            let res = ecm::ecm(p256, 1, b1, d, &prefs, None);
             assert!(res.is_none());
             eprintln!(
                 "p256 ECM(B1={b1},D={d}) in {:.3}s",
@@ -137,7 +141,7 @@ fn main() {
             );
 
             let start = std::time::Instant::now();
-            let res = ecm::ecm(p480, 1, b1, d, 0, None);
+            let res = ecm::ecm(p480, 1, b1, d, &prefs, None);
             assert!(res.is_none());
             eprintln!(
                 "p480 ECM(B1={b1},D={d}) in {:.3}s",
@@ -149,7 +153,7 @@ fn main() {
         let d = 8820;
         let start = std::time::Instant::now();
         // Use P256 so what ECM cannot work.
-        let res = ecm::ecm(p256, 1, b1, d, 0, None);
+        let res = ecm::ecm(p256, 1, b1, d, &prefs, None);
         assert!(res.is_none());
         eprintln!(
             "p256 ECM(B1={b1},D={d}) in {:.3}s",
@@ -157,7 +161,7 @@ fn main() {
         );
 
         let start = std::time::Instant::now();
-        let res = ecm::ecm(p480, 1, b1, d, 0, None);
+        let res = ecm::ecm(p480, 1, b1, d, &prefs, None);
         assert!(res.is_none());
         eprintln!(
             "p480 ECM(B1={b1},D={d}) in {:.3}s",

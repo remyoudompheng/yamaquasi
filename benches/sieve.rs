@@ -94,7 +94,7 @@ fn main() {
             let f = siqs::select_siqs_factors(&fb, &n, 9, 1 << 20);
             let a_ints = siqs::select_a(&f, 40);
             let a_s: Vec<_> = a_ints.iter().map(|a_int| siqs::prepare_a(&f, a_int, &fb, 0)).collect();
-            let s = siqs::SieveSIQS::new(&n, &fb , fb.bound() as u64, false, 1 << 20);
+            let s = siqs::SieveSIQS::new(&n, &fb , fb.bound() as u64, false, 1 << 20, None);
             Bench::new("prepare 1 SIQS polynomial (n = 256 bits)")
             .with_samples(20_000)
             .run_seeded((&n, &s, a_s.first().unwrap()), |(n, s, a)| {

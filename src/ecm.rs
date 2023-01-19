@@ -38,14 +38,18 @@ use crate::arith;
 use crate::arith_montgomery::{MInt, ZmodN};
 use crate::arith_poly::Poly;
 use crate::fbase;
-use crate::{Uint, UnexpectedFactor};
+use crate::{Preferences, Uint, UnexpectedFactor, Verbosity};
 
 /// Run ECM with automatically selected small parameters.
 ///
 /// The goal of this function is not to completely factor numbers, but
 /// to detect cases where a number has a relatively small prime factor
 /// (about size(n) / 5)
-pub fn ecm_auto(n: Uint, tpool: Option<&rayon::ThreadPool>) -> Option<(Uint, Uint)> {
+pub fn ecm_auto(
+    n: Uint,
+    prefs: &Preferences,
+    tpool: Option<&rayon::ThreadPool>,
+) -> Option<(Uint, Uint)> {
     // The CPU budget here is only a few seconds (at most 1% of SIQS time).
     // So we intentionally use small parameters hoping to be very lucky.
     // Best D values have D/phi(D) > 4.3
@@ -55,90 +59,94 @@ pub fn ecm_auto(n: Uint, tpool: Option<&rayon::ThreadPool>) -> Option<(Uint, Uin
         0..=190 => {
             // Will quite often find a 30-32 bit factor (budget 10-20ms)
             // B2 = D² = 44100
-            ecm(n, 16, 120, 210, 1, tpool)
+            ecm(n, 16, 120, 210, prefs, tpool)
         }
         191..=220 => {
             // Will quite often find a 36 bit factor (budget <100ms)
             // B2 = D² = 78400
-            ecm(n, 16, 120, 280, 1, tpool)
+            ecm(n, 16, 120, 280, prefs, tpool)
         }
         221..=250 => {
             // Will quite often find a factor of size 42-46 bits (budget 0.1-0.5s)
             // B2 = D² = 176400
-            ecm(n, 30, 500, 462, 1, tpool)
+            ecm(n, 30, 500, 462, prefs, tpool)
         }
         251..=280 => {
             // Will quite often find a factor of size 52-56 bits (budget 2-3s)
             // B2 = D² = 700k
-            ecm(n, 80, 2_000, 1050, 1, tpool)
+            ecm(n, 80, 2_000, 1050, prefs, tpool)
         }
         281..=310 => {
             // Will often find a factor of size 58-62 bits (budget 5-10s)
             // B2 = D² ~= 1.6M
-            ecm(n, 40, 8_000, 2310, 1, tpool)
+            ecm(n, 40, 8_000, 2310, prefs, tpool)
         }
         311..=340 => {
             // Will often find a factor of size 64-70 bits (budget 20-30s)
             // B2 = D² = 4M
-            ecm(n, 40, 25_000, 4410, 1, tpool)
+            ecm(n, 40, 25_000, 4410, prefs, tpool)
         }
         341..=370 => {
             // Try to find a factor of size 68-76 bits (budget 1min)
             // B2 = D² = 11.3M
-            ecm(n, 100, 75_000, 8820, 1, tpool)
+            ecm(n, 100, 75_000, 8820, prefs, tpool)
         }
         // For very large numbers, we don't expect quadratic sieve to complete
         // in reasonable time, so all hope is on ECM.
         371..=450 => {
             // Budget is more than 10 minutes
-            ecm(n, 200, 200_000, 19110, 1, tpool)
+            ecm(n, 200, 200_000, 19110, prefs, tpool)
         }
         451.. => {
             // Budget is virtually unlimited (hours)
-            ecm(n, 500, 500_000, 38220, 2, tpool)
+            ecm(n, 500, 500_000, 38220, prefs, tpool)
         }
     }
 }
 
 /// Factor number using purely ECM. This may never end, or fail.
-pub fn ecm_only(n: Uint, tpool: Option<&rayon::ThreadPool>) -> Option<(Uint, Uint)> {
+pub fn ecm_only(
+    n: Uint,
+    prefs: &Preferences,
+    tpool: Option<&rayon::ThreadPool>,
+) -> Option<(Uint, Uint)> {
     // B1 values should be such that step 1 takes about as much time as step 2.
     // D values are only such that phi(D) is a bit less than a power of 2.
     //
     // Since we are using Karatsuba, we can make B1 grow as O(D^1.58)
     match n.bits() {
         // The following parameters work well even for balanced semiprimes.
-        0..=64 => ecm(n, 100, 128, 210, 2, tpool),
-        65..=80 => ecm(n, 100, 300, 210, 2, tpool),
-        81..=96 => ecm(n, 300, 1000, 462, 2, tpool),
-        97..=119 => ecm(n, 1000, 3_000, 1050, 2, tpool),
+        0..=64 => ecm(n, 100, 128, 210, prefs, tpool),
+        65..=80 => ecm(n, 100, 300, 210, prefs, tpool),
+        81..=96 => ecm(n, 300, 1000, 462, prefs, tpool),
+        97..=119 => ecm(n, 1000, 3_000, 1050, prefs, tpool),
         // May require 100-300 curves for 72-bit factors
-        120..=144 => ecm(n, 1000, 10_000, 2310, 2, tpool),
+        120..=144 => ecm(n, 1000, 10_000, 2310, prefs, tpool),
         145..=168 => {
             // Can find a 80 bit factor after a few dozen curves.
-            ecm(n, 1000, 30_000, 4410, 2, tpool)
+            ecm(n, 1000, 30_000, 4410, prefs, tpool)
         }
         169..=192 => {
             // Can find a 90 bit factor after a few hundreds curves.
-            ecm(n, 2000, 100_000, 8820, 2, tpool)
+            ecm(n, 2000, 100_000, 8820, prefs, tpool)
         }
         193..=224 => {
             // Should be able to find 100 bit factors after
             // a few hundred curves (B2=365M)
-            ecm(n, 5000, 300_000, 19110, 2, tpool)
+            ecm(n, 5000, 300_000, 19110, prefs, tpool)
         }
         225..=256 => {
             // May find 100-120 bit factors after ~1000 curves
             // Similar to GMP-ECM recommended for 35 digit factors.
-            ecm(n, 20, 100_000, 8820, 0, tpool)
-                .or_else(|| ecm(n, 15000, 1_000_000, 38220, 2, tpool))
+            ecm(n, 20, 100_000, 8820, prefs, tpool)
+                .or_else(|| ecm(n, 15000, 1_000_000, 38220, prefs, tpool))
         }
         257.. => {
             // May find 120-140 bit factors after a few thousand curves.
             // B2 is about 5.8 billion.
             // Similar to GMP-ECM recommended for 40 digit factors.
-            ecm(n, 50, 300_000, 19110, 0, tpool)
-                .or_else(|| ecm(n, 40000, 3_000_000, 76440, 2, tpool))
+            ecm(n, 50, 300_000, 19110, prefs, tpool)
+                .or_else(|| ecm(n, 40000, 3_000_000, 76440, prefs, tpool))
         }
     }
 }
@@ -149,10 +157,10 @@ pub fn ecm(
     curves: usize,
     b1: usize,
     d: usize,
-    verbose: usize,
+    prefs: &Preferences,
     tpool: Option<&rayon::ThreadPool>,
 ) -> Option<(Uint, Uint)> {
-    if verbose > 0 {
+    if prefs.verbose(Verbosity::Info) {
         eprintln!(
             "Attempting ECM with {curves} curves B1={b1} D={d} (B2={})",
             d * d
@@ -168,13 +176,13 @@ pub fn ecm(
         if done.load(Ordering::Relaxed) {
             return None;
         }
-        if verbose > 1 {
+        if prefs.verbose(Verbosity::Verbose) {
             eprintln!("Trying good Edwards curve G=({x1}/{x2},{y1}/{y2})");
         }
         let c = match Curve::from_fractional_point(zn.clone(), x1, x2, y1, y2) {
             Ok(c) => c,
             Err(UnexpectedFactor(p)) => {
-                if verbose > 1 {
+                if prefs.verbose(Verbosity::Info) {
                     eprintln!("Unexpected factor {p}");
                 }
                 done.store(true, Ordering::Relaxed);
@@ -182,7 +190,7 @@ pub fn ecm(
             }
         };
         if let res @ Some((p, _)) = ecm_curve(&sb, &zn, &c) {
-            if verbose > 0 {
+            if prefs.verbose(Verbosity::Info) {
                 eprintln!("ECM success {}/{curves} for special Edwards curve G=({x1}/{x2},{y1}/{y2}) p={p} elapsed={:.3}s",
                 idx + 1,
                 start.elapsed().as_secs_f64());
@@ -225,7 +233,7 @@ pub fn ecm(
         }
         let k = k as u64;
         let (gx, gy) = (3 * k + 8, 4 * k + 9);
-        if verbose > 1 {
+        if prefs.verbose(Verbosity::Debug) {
             eprintln!(
                 "Trying Edwards curve with (2,4)-torsion d=({}/{})² G=({},{})",
                 5 * k + 7,
@@ -237,7 +245,7 @@ pub fn ecm(
         let c = match Curve::from_point(zn.clone(), gx, gy) {
             Ok(c) => c,
             Err(UnexpectedFactor(p)) => {
-                if verbose > 1 {
+                if prefs.verbose(Verbosity::Info) {
                     eprintln!("Unexpected factor {p}");
                 }
                 done.store(true, Ordering::Relaxed);
@@ -245,7 +253,7 @@ pub fn ecm(
             }
         };
         if let res @ Some((p, _)) = ecm_curve(&sb, &zn, &c) {
-            if verbose > 0 {
+            if prefs.verbose(Verbosity::Info) {
                 eprintln!(
                     "ECM success {}/{curves} for Edwards curve d=({}/{})² G=({},{}) p={p} elapsed={:.3}s",
                     k as usize + GOOD_CURVES.len() + 1,
@@ -274,7 +282,7 @@ pub fn ecm(
             }
         }
     }
-    if verbose > 0 {
+    if prefs.verbose(Verbosity::Info) {
         eprintln!("ECM failure after {:.3}s", start.elapsed().as_secs_f64());
     }
     None

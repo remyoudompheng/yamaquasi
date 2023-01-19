@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use brunch::Bench;
-use yamaquasi::{fbase, pollard_pm1, qsieve64, squfof};
+use yamaquasi::{fbase, pollard_pm1, qsieve64, squfof, Verbosity};
 
 brunch::benches! {
     {
@@ -15,7 +15,7 @@ brunch::benches! {
         Bench::new("5x qsieve64 n=42 bits")
             .with_timeout(Duration::from_secs(3))
             .run_seeded(n42, |ns| for &n in ns {
-                qsieve64::qsieve(n).unwrap();
+                qsieve64::qsieve(n, Verbosity::Silent).unwrap();
             })
     },
     {
@@ -29,7 +29,7 @@ brunch::benches! {
         Bench::new("5x qsieve64 n=48 bits")
             .with_timeout(Duration::from_secs(3))
             .run_seeded(n48, |ns| for &n in ns {
-                qsieve64::qsieve(n).unwrap();
+                qsieve64::qsieve(n, Verbosity::Silent).unwrap();
             })
     },
     {
@@ -43,7 +43,7 @@ brunch::benches! {
         Bench::new("5x qsieve64 n=56 bits")
             .with_timeout(Duration::from_secs(3))
             .run_seeded(n56, |ns| for &n in ns {
-                qsieve64::qsieve(n).unwrap();
+                qsieve64::qsieve(n, Verbosity::Silent).unwrap();
             })
     },
     {

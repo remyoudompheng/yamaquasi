@@ -40,11 +40,11 @@ use crate::params::{self, BLOCK_SIZE};
 use crate::pollard_pm1;
 use crate::relations::{self, Relation, RelationSet};
 use crate::sieve;
-use crate::{Int, Uint, UnexpectedFactor, DEBUG};
+use crate::{Int, Preferences, Uint, UnexpectedFactor, Verbosity};
 
 pub fn siqs(
     n: &Uint,
-    prefs: &crate::Preferences,
+    prefs: &Preferences,
     tpool: Option<&rayon::ThreadPool>,
 ) -> Result<Vec<Relation>, UnexpectedFactor> {
     let use_double = prefs.use_double.unwrap_or(n.bits() > 256);
@@ -56,18 +56,20 @@ pub fn siqs(
         eprintln!("Unexpected divisor {} in factor base", e.0);
         return Err(e);
     }
-    eprintln!("Smoothness bound {}", fbase.bound());
-    eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls(),);
-
     let mm = interval_size(n);
-    eprintln!("Sieving interval size {}k", mm >> 10);
+    if prefs.verbose(Verbosity::Info) {
+        eprintln!("Smoothness bound {}", fbase.bound());
+        eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls(),);
+        eprintln!("Sieving interval size {}k", mm >> 10);
+    }
 
     // Generate all values of A now.
     let nfacs = nfactors(n) as usize;
     let factors = select_siqs_factors(&fbase, n, nfacs, mm as usize);
     let a_ints = select_a(&factors, a_value_count(n));
     let polys_per_a = 1 << (nfacs - 1);
-    eprintln!(
+    if prefs.verbose(Verbosity::Verbose) {
+        eprintln!(
         "Generated {} values of A with {} factors in {}..{} ({} polynomials each, spread={:.2}%)",
         a_ints.len(),
         nfacs,
@@ -76,18 +78,21 @@ pub fn siqs(
         polys_per_a,
         a_quality(&a_ints) * 100.0
     );
+    }
 
     let maxprime = fbase.bound() as u64;
     let maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(n));
-    eprintln!("Max large prime {}", maxlarge);
-    if use_double {
-        eprintln!(
-            "Max double large prime {}",
-            maxlarge * maxprime * DOUBLE_LARGE_PRIME_FACTOR
-        );
+    if prefs.verbose(Verbosity::Info) {
+        eprintln!("Max large prime {}", maxlarge);
+        if use_double {
+            eprintln!(
+                "Max double large prime {}",
+                maxlarge * maxprime * DOUBLE_LARGE_PRIME_FACTOR
+            );
+        }
     }
 
-    let s = SieveSIQS::new(n, &fbase, maxlarge, use_double, mm as usize);
+    let s = SieveSIQS::new(n, &fbase, maxlarge, use_double, mm as usize, Some(prefs));
 
     // When using multiple threads, each thread will sieve a different A
     // to avoid breaking parallelism during 'prepare_a'.
@@ -124,11 +129,13 @@ pub fn siqs(
     let mut rels = s.rels.into_inner().unwrap();
     // Log final progress
     let pdone = s.polys_done.load(Ordering::Relaxed);
-    rels.log_progress(format!(
-        "Sieved {}M {} polys",
-        (pdone as u64 * mm as u64) >> 20,
-        pdone,
-    ));
+    if prefs.verbose(Verbosity::Info) {
+        rels.log_progress(format!(
+            "Sieved {}M {} polys",
+            (pdone as u64 * mm as u64) >> 20,
+            pdone,
+        ));
+    }
     if rels.len() > fbase.len() + relations::MIN_KERNEL_SIZE {
         rels.truncate(fbase.len() + relations::MIN_KERNEL_SIZE)
     }
@@ -138,7 +145,7 @@ pub fn siqs(
 fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {
     let mm = s.interval_size;
     let a = &prepare_a(&factors, a_int, &s.fbase, -(mm as i64) / 2);
-    if crate::DEBUG {
+    if s.prefs.verbose(Verbosity::Debug) {
         eprintln!(
             "Sieving A={} (factors {})",
             a.a,
@@ -175,11 +182,15 @@ fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {
             };
             s.gap.store(rgap, Ordering::Relaxed);
             if rgap == 0 {
-                eprintln!("Found enough relations");
+                if s.prefs.verbose(Verbosity::Info) {
+                    eprintln!("Found enough relations");
+                }
                 s.done.store(true, Ordering::Relaxed);
                 return;
             } else {
-                eprintln!("Need {} additional relations", rgap);
+                if s.prefs.verbose(Verbosity::Info) {
+                    eprintln!("Need {} additional relations", rgap);
+                }
                 s.target.store(
                     rlen + rgap + std::cmp::min(10, s.fbase.len() as usize / 4),
                     Ordering::SeqCst,
@@ -189,11 +200,13 @@ fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {
     }
     let pdone = s.polys_done.load(Ordering::Relaxed);
     let rels = s.rels.read().unwrap();
-    rels.log_progress(format!(
-        "Sieved {}M {} polys",
-        (pdone as u64 * mm as u64) >> 20,
-        pdone,
-    ));
+    if s.prefs.verbose(Verbosity::Verbose) {
+        rels.log_progress(format!(
+            "Sieved {}M {} polys",
+            (pdone as u64 * mm as u64) >> 20,
+            pdone,
+        ));
+    }
 }
 
 /// Helper function to study performance impact of parameters
@@ -245,7 +258,7 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
             eprintln!("Test set M={}k A={} npolys={}", mm / 2048, a0, polys_per_a);
             // sample polynomial
             let a = &prepare_a(&factors, &a0, &fbase0, -(mm as i64) / 2);
-            let s = SieveSIQS::new(n, &fbase0, 0, use_double, mm);
+            let s = SieveSIQS::new(n, &fbase0, 0, use_double, mm, None);
             let pol = make_polynomial(&s, n, a, 0);
             eprintln!("min(P) ~ {}", pol.eval(0).0);
             eprintln!("max(P) ~ {}", pol.eval(mm as i64 / 2).0);
@@ -267,7 +280,7 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
                     let factors = &factorss[idx];
                     let maxprime = fbase.bound() as u64;
                     let maxlarge: u64 = maxprime * lf as u64;
-                    let s = SieveSIQS::new(n, &fbase, maxlarge, use_double, mm);
+                    let s = SieveSIQS::new(n, &fbase, maxlarge, use_double, mm, None);
                     // Measure metrics
                     let t0 = std::time::Instant::now();
                     let a = &prepare_a(factors, &aint, &fbase, -(mm as i64) / 2);
@@ -1015,7 +1028,7 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
 fn siqs_sieve_poly(s: &SieveSIQS, a: &A, pol: &Poly) {
     let mm = s.interval_size as usize;
     let nblocks: usize = mm / BLOCK_SIZE;
-    if DEBUG {
+    if s.prefs.verbose(Verbosity::Debug) {
         eprintln!(
             "Sieving polynomial A={} B={} M={}k blocks={}",
             pol.a,
@@ -1064,6 +1077,7 @@ pub struct SieveSIQS<'a> {
     polys_done: AtomicUsize,
     gap: AtomicUsize,
     target: AtomicUsize,
+    prefs: Preferences,
 }
 
 impl<'a> SieveSIQS<'a> {
@@ -1073,6 +1087,7 @@ impl<'a> SieveSIQS<'a> {
         maxlarge: u64,
         use_double: bool,
         interval_size: usize,
+        prefs: Option<&Preferences>,
     ) -> Self {
         let start_offset = -(interval_size as i64 / 2);
         let mut offsets = vec![0u32; (fb.len() + 15) & !15].into_boxed_slice();
@@ -1099,6 +1114,7 @@ impl<'a> SieveSIQS<'a> {
             polys_done: AtomicUsize::new(0),
             gap: AtomicUsize::new(fb_size),
             target: AtomicUsize::new(fb_size * 8 / 10),
+            prefs: prefs.map(|p| p.clone()).unwrap_or_default(),
         }
     }
 }
@@ -1154,7 +1170,7 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
             }
         }
         let x = y.abs().to_bits() % n;
-        if DEBUG {
+        if s.prefs.verbose(Verbosity::Debug) {
             eprintln!("x={x} smooth {v} cofactor {cofactor}");
         }
         assert!(
@@ -1257,7 +1273,7 @@ fn test_poly_prepare() {
     let n = Uint::from_str(N240).unwrap();
     let fb = fbase::FBase::new(n, 10000);
     let mm = 1_usize << 20;
-    let s = SieveSIQS::new(&n, &fb, fb.bound() as u64, false, mm);
+    let s = SieveSIQS::new(&n, &fb, fb.bound() as u64, false, mm, None);
     // Prepare A values
     // Only test 10 A values and 35 polynomials per A.
     let f = select_siqs_factors(&fb, &n, 9, mm);

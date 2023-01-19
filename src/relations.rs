@@ -18,7 +18,7 @@ use num_traits::One;
 
 use crate::arith::{pow_mod, U512};
 use crate::matrix;
-use crate::{Int, Uint};
+use crate::{Int, Uint, Verbosity};
 
 /// Number of extra relations that must be collected for factoring.
 /// Block Lanczos cannot find more kernel vectors than its block size.
@@ -431,7 +431,7 @@ pub fn relation_gap(rels: &[Relation]) -> usize {
 
 /// Finds non trivial square roots of 1 modulo n and returns
 /// a list of non-trivial divisors of n.
-pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Vec<Uint> {
+pub fn final_step(n: &Uint, rels: &[Relation], verbose: Verbosity) -> Vec<Uint> {
     for r in rels {
         debug_assert!(r.verify(n));
     }
@@ -449,7 +449,7 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Vec<Uint> {
             }
         }
     }
-    if verbose {
+    if verbose >= Verbosity::Info {
         eprintln!("Input {} relations {} factors", rels.len(), occs.len());
     }
     // Sort factors by decreasing occurrences
@@ -488,7 +488,7 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Vec<Uint> {
         filt_rels.push(r);
         matrix.push(v);
     }
-    if verbose {
+    if verbose >= Verbosity::Info {
         eprintln!(
             "Filtered {} relations {} factors",
             filt_rels.len(),
@@ -508,7 +508,7 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Vec<Uint> {
             k: size,
             cols: matrix,
         };
-        matrix::kernel_lanczos(&mat, true)
+        matrix::kernel_lanczos(&mat, verbose)
     } else {
         let mut dense = vec![];
         for col in matrix {
@@ -520,7 +520,7 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Vec<Uint> {
         }
         matrix::kernel_gauss(dense)
     };
-    if verbose {
+    if verbose >= Verbosity::Info {
         let dt = start.elapsed();
         eprintln!(
             "Found kernel of dimension {} in {:.3}s",
@@ -547,11 +547,11 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Vec<Uint> {
             .filter(|&(_, exp)| exp > 0)
             .map(|(idx, exp)| (occs[idx].0, exp))
             .collect();
-        if crate::DEBUG {
+        if verbose >= Verbosity::Debug {
             eprintln!("Combine {} relations...", xs.len());
         }
         let (a, b) = combine(n, &xs, &factors);
-        if crate::DEBUG {
+        if verbose >= Verbosity::Debug {
             eprintln!("Same square mod N: {} {}", a, b);
         }
         let Some((p, q)) = try_factor(n, a, b) else { continue };
@@ -561,7 +561,7 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: bool) -> Vec<Uint> {
     }
     divisors.sort_unstable();
     divisors.dedup();
-    if verbose {
+    if verbose >= Verbosity::Info {
         eprintln!(
             "{} divisors from {} successful factorizations",
             divisors.len(),

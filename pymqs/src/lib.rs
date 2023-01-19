@@ -11,7 +11,7 @@ use pyo3::prelude::*;
 use pyo3::pyfunction;
 use pyo3::types::{PyList, PyLong};
 
-use yamaquasi::{self, Algo, Preferences, Uint};
+use yamaquasi::{self, Algo, Preferences, Uint, Verbosity};
 
 #[pymodule]
 fn pymqs(_: Python<'_>, m: &PyModule) -> PyResult<()> {
@@ -19,7 +19,7 @@ fn pymqs(_: Python<'_>, m: &PyModule) -> PyResult<()> {
     Ok(())
 }
 
-#[pyfunction(algo = "\"auto\"", threads = "None")]
+#[pyfunction(algo = "\"auto\"", verbose = "\"silent\"", threads = "None")]
 #[pyo3(text_signature = "(n: int, algo: str, threads: str) -> List[int]")]
 /// Factors an integer into prime factors. The result is a list
 /// whose product is the input argument.
@@ -30,10 +30,14 @@ fn factor(
     py: Python<'_>,
     npy: &PyLong,
     algo: &str,
+    verbose: &str,
     threads: Option<usize>,
 ) -> PyResult<Py<PyList>> {
+    let verbosity =
+        Verbosity::from_str(verbose).map_err(|e| PyValueError::new_err(e.to_string()))?;
     let prefs = Preferences {
         threads,
+        verbosity,
         ..Preferences::default()
     };
     let alg = Algo::from_str(algo).map_err(|e| PyValueError::new_err(e.to_string()))?;

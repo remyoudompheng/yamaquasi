@@ -47,13 +47,21 @@ use num_integer::Integer;
 
 const DEBUG: bool = false;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Preferences {
     pub fb_size: Option<u32>,
     pub large_factor: Option<u64>,
     pub use_double: Option<bool>,
     pub threads: Option<usize>,
-    pub verbose: bool,
+    pub verbosity: Verbosity,
+}
+
+impl Preferences {
+    /// Whether preferences specify at least `v` as verbosity level.
+    #[doc(hidden)]
+    pub fn verbose(&self, v: Verbosity) -> bool {
+        self.verbosity >= v
+    }
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -86,6 +94,35 @@ impl FromStr for Algo {
     }
 }
 
+#[derive(Default, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub enum Verbosity {
+    /// Must not print anything. Useful when using as a library.
+    Silent,
+    /// Prints general information about the factoring strategy and results.
+    /// Users should understand the outline of algorithms from the output.
+    /// Default option for interactive use.
+    #[default]
+    Info,
+    /// Detailed information about algorithm progress.
+    Verbose,
+    /// Debugging information.
+    Debug,
+}
+
+impl FromStr for Verbosity {
+    type Err = Box<dyn std::error::Error>;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "0" | "silent" => Ok(Self::Silent),
+            "1" | "info" => Ok(Self::Info),
+            "2" | "verbose" => Ok(Self::Verbose),
+            "3" | "debug" => Ok(Self::Debug),
+            _ => Err(format!("invalid verbosity level {}", s).into()),
+        }
+    }
+}
+
 /// An "error" describing a (small) factor encountered unexpectedly
 /// during algorithms. This includes factor bases containing a divisor
 /// of N or ECM generating a singular curve.
@@ -98,7 +135,7 @@ pub fn factor(n: Uint, alg: Algo, prefs: &Preferences) -> Vec<Uint> {
         return vec![n];
     }
     let mut factors = vec![];
-    if prefs.verbose {
+    if prefs.verbose(Verbosity::Info) {
         eprintln!("Testing small prime divisors");
     }
     let mut nred = n;
@@ -107,17 +144,17 @@ pub fn factor(n: Uint, alg: Algo, prefs: &Preferences) -> Vec<Uint> {
             let p = Uint::from(p);
             factors.push(p);
             nred /= p;
-            if prefs.verbose {
+            if prefs.verbose(Verbosity::Info) {
                 eprintln!("Found small factor {p}");
             }
         }
     }
-    if nred != n && prefs.verbose {
+    if nred != n && prefs.verbose(Verbosity::Info) {
         eprintln!("Factoring {nred}");
     }
     // Create thread pool
     let tpool: Option<rayon::ThreadPool> = prefs.threads.map(|t| {
-        if prefs.verbose {
+        if prefs.verbose(Verbosity::Verbose) {
             eprintln!("Using a pool of {t} threads");
         }
         rayon::ThreadPoolBuilder::new()
@@ -164,15 +201,19 @@ fn factor_impl(
             if n.bits() >= 150 {
                 let start_pm1 = std::time::Instant::now();
                 if let Some((a, b)) = pollard_pm1::pm1_quick(n) {
-                    eprintln!(
-                        "Pollard P-1 success with factor p={a} in {:.3}s",
-                        start_pm1.elapsed().as_secs_f64()
-                    );
+                    if prefs.verbose(Verbosity::Info) {
+                        eprintln!(
+                            "Pollard P-1 success with factor p={a} in {:.3}s",
+                            start_pm1.elapsed().as_secs_f64()
+                        );
+                    }
                     factor_impl(a.into(), alg, prefs, factors, tpool);
-                    eprintln!("Recursively factor {b}");
+                    if prefs.verbose(Verbosity::Info) {
+                        eprintln!("Recursively factor {b}");
+                    }
                     factor_impl(b.into(), alg, prefs, factors, tpool);
                     return;
-                } else {
+                } else if prefs.verbose(Verbosity::Info) {
                     eprintln!(
                         "Pollard P-1 failure in {:.3}s",
                         start_pm1.elapsed().as_secs_f64()
@@ -180,9 +221,11 @@ fn factor_impl(
                 }
             }
             if n.bits() > 190 {
-                if let Some((a, b)) = ecm::ecm_auto(n, tpool) {
+                if let Some((a, b)) = ecm::ecm_auto(n, prefs, tpool) {
                     factor_impl(a.into(), alg, prefs, factors, tpool);
-                    eprintln!("Recursively factor {b}");
+                    if prefs.verbose(Verbosity::Info) {
+                        eprintln!("Recursively factor {b}");
+                    }
                     factor_impl(b.into(), alg, prefs, factors, tpool);
                     return;
                 }
@@ -192,15 +235,19 @@ fn factor_impl(
             // Pure Pollard P-1
             let start_pm1 = std::time::Instant::now();
             if let Some((a, b)) = pollard_pm1::pm1_only(n) {
-                eprintln!(
-                    "Pollard P-1 success with factor p={a} in {:.3}s",
-                    start_pm1.elapsed().as_secs_f64()
-                );
+                if prefs.verbose(Verbosity::Info) {
+                    eprintln!(
+                        "Pollard P-1 success with factor p={a} in {:.3}s",
+                        start_pm1.elapsed().as_secs_f64()
+                    );
+                }
                 factor_impl(a.into(), alg, prefs, factors, tpool);
-                eprintln!("Recursively factor {b}");
+                if prefs.verbose(Verbosity::Info) {
+                    eprintln!("Recursively factor {b}");
+                }
                 factor_impl(b.into(), alg, prefs, factors, tpool);
                 return;
-            } else {
+            } else if prefs.verbose(Verbosity::Info) {
                 eprintln!(
                     "Pollard P-1 failure in {:.3}s",
                     start_pm1.elapsed().as_secs_f64()
@@ -213,13 +260,17 @@ fn factor_impl(
             // Pure ECM is requested.
             // However due to determinism the recursion will go through the
             // same curves, which is not very useful.
-            if let Some((a, b)) = ecm::ecm_only(n, tpool) {
+            if let Some((a, b)) = ecm::ecm_only(n, prefs, tpool) {
                 factor_impl(a.into(), alg, prefs, factors, tpool);
-                eprintln!("Recursively factor {b}");
+                if prefs.verbose(Verbosity::Info) {
+                    eprintln!("Recursively factor {b}");
+                }
                 factor_impl(b.into(), alg, prefs, factors, tpool);
                 return;
             }
-            eprintln!("Factorization is incomplete.");
+            if prefs.verbose(Verbosity::Info) {
+                eprintln!("Factorization is incomplete.");
+            }
             factors.push(n);
             return;
         }
@@ -238,12 +289,14 @@ fn factor_impl(
     match alg_real {
         Algo::Qs64 => {
             assert!(n.bits() <= 64);
-            if let Some((a, b)) = qsieve64::qsieve(n.low_u64()) {
+            if let Some((a, b)) = qsieve64::qsieve(n.low_u64(), prefs.verbosity) {
                 // Recurse
                 factor_impl(a.into(), alg, prefs, factors, tpool);
                 factor_impl(b.into(), alg, prefs, factors, tpool);
             } else {
-                eprintln!("qsieve64 failed");
+                if prefs.verbose(Verbosity::Info) {
+                    eprintln!("qsieve64 failed");
+                }
                 factors.push(n);
             }
             return;
@@ -254,7 +307,9 @@ fn factor_impl(
                 factor_impl(a.into(), alg, prefs, factors, tpool);
                 factor_impl(b.into(), alg, prefs, factors, tpool);
             } else {
-                eprintln!("SQUFOF failed");
+                if prefs.verbose(Verbosity::Info) {
+                    eprintln!("SQUFOF failed");
+                }
                 factors.push(n);
             }
             return;
@@ -263,7 +318,7 @@ fn factor_impl(
     }
 
     let (k, score) = fbase::select_multiplier(n);
-    if prefs.verbose {
+    if prefs.verbose(Verbosity::Verbose) {
         eprintln!("Selected multiplier {k} (score {score:.2}/10)");
     }
     let nk = n * Uint::from(k);
@@ -288,7 +343,7 @@ fn factor_impl(
         }
     };
     // Determine non trivial divisors.
-    let divs = relations::final_step(&n, &rels, true);
+    let divs = relations::final_step(&n, &rels, prefs.verbosity);
     // A factorization of n.
     let mut facs = vec![n];
     for d in divs {
@@ -320,10 +375,14 @@ fn factor_impl(
     }
     for f in facs {
         if f == n {
-            eprintln!("Factorization failure");
+            if prefs.verbose(Verbosity::Info) {
+                eprintln!("Factorization failure");
+            }
             factors.push(f);
         } else if !pseudoprime(f) {
-            eprintln!("Recursively factor {f}");
+            if prefs.verbose(Verbosity::Info) {
+                eprintln!("Recursively factor {f}");
+            }
             factor_impl(f, alg, prefs, factors, tpool);
         } else {
             factors.push(f);

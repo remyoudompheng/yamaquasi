@@ -15,6 +15,8 @@ use bitvec_simd::BitVec;
 use rand::{self, Fill};
 use wide;
 
+use crate::Verbosity;
+
 /// Gauss reduction and kernels of matrices modulo 2
 ///
 /// Matrices are represented as vectors of dense bit vectors
@@ -86,7 +88,7 @@ pub fn kernel_gauss(columns: Vec<BitVec>) -> Vec<BitVec> {
 /// - Product of a small matrix by a block (a few ms)
 /// - Product of a sparse matrix by a block (<1ms)
 /// - Inverse of a small matrix
-pub fn kernel_lanczos(b: &SparseMat, verbose: bool) -> Vec<BitVec> {
+pub fn kernel_lanczos(b: &SparseMat, verbose: Verbosity) -> Vec<BitVec> {
     // Consider the quadratic form defined by A = b^T b
     // Decompose the entire space in blocks such that
     // A is block-diagonal over these blocks.
@@ -124,7 +126,7 @@ pub fn kernel_lanczos(b: &SparseMat, verbose: bool) -> Vec<BitVec> {
         invgs.push(ginv);
         masks.push(!0);
     }
-    if verbose {
+    if verbose >= Verbosity::Info {
         eprintln!("[Lanczos] Selected block 1 with rank {}", LSIZE);
     }
     loop {
@@ -180,7 +182,7 @@ pub fn kernel_lanczos(b: &SparseMat, verbose: bool) -> Vec<BitVec> {
         };
         if rk == 0 {
             // Lanczos iterations are finished, return kernel.
-            if verbose {
+            if verbose >= Verbosity::Info {
                 eprintln!(
                     "[Lanczos] Space is exhausted after {} blocks of size {}",
                     vs.len(),
@@ -190,7 +192,7 @@ pub fn kernel_lanczos(b: &SparseMat, verbose: bool) -> Vec<BitVec> {
             break;
         } else {
             vs.push(next.clone());
-            if verbose && vs.len() % 16 == 0 {
+            if verbose >= Verbosity::Verbose && vs.len() % 16 == 0 {
                 eprintln!(
                     "[Lanczos] Found block {} rank {} ({} projections)",
                     vs.len(),
@@ -238,7 +240,7 @@ pub fn kernel_lanczos(b: &SparseMat, verbose: bool) -> Vec<BitVec> {
     }
     let ker = kernel_gauss(by_bits);
     let dimker = ker.len();
-    if verbose {
+    if verbose >= Verbosity::Info {
         eprintln!("[Lanczos] found kernel subspace of rank <= {}", ker.len());
     }
     // For each actual kernel basis, turn into a bit vector.
@@ -264,7 +266,7 @@ pub fn kernel_lanczos(b: &SparseMat, verbose: bool) -> Vec<BitVec> {
             basis.swap_remove(i);
         }
     }
-    if verbose {
+    if verbose >= Verbosity::Info {
         eprintln!("[Lanczos] final kernel rank <= {}", basis.len());
     }
     basis
@@ -897,7 +899,7 @@ fn test_lanczos() {
     const N: usize = 1_000;
     let mat = make_test_sparsemat(N, 10, 20);
     eprintln!("Matrix size {}x{}", mat.k, mat.cols.len());
-    let ker = kernel_lanczos(&mat, true);
+    let ker = kernel_lanczos(&mat, Verbosity::Silent);
     eprintln!("Kernel rank {}", ker.len());
     for (i, v) in ker.into_iter().enumerate() {
         // Vector is non zero and in kernel
