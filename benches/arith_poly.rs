@@ -92,38 +92,59 @@ fn main() {
         );
     }
     // Product tree from roots
+    // Multi evaluation of P (degree 10D) at D points.
     for degree in [
         30, 60, 120, 240, 480, 960, 1920, 4032, 8064, 16128, 32768, 65536, 131072,
     ] {
-        let roots: Vec<MInt> = (1..=degree)
+        let roots: Vec<MInt> = (1..=10 * degree)
             .map(|x: u64| zn.from_int(Uint::from(x * x * 12345 + x * 1234 + 123)))
             .collect();
-        let roots2: Vec<MInt> = (1..degree - 4)
+        let roots2: Vec<MInt> = (1..degree)
             .map(|x: u64| zn.from_int(Uint::from(x * x * 56789 + x * 6789 + 789)))
             .collect();
         let start = std::time::Instant::now();
-        let pol1 = Poly::from_roots(&zn, roots.clone());
+        let pol = Poly::from_roots(&zn, &roots2);
         eprintln!(
             "product tree {degree} in {:.4}s",
             start.elapsed().as_secs_f64()
         );
 
         for i in 0..64 {
-            let r = roots[(i * roots.len()) / 64];
-            assert_eq!(pol1.eval(r), zn.zero());
+            let r = roots2[(i * roots2.len()) / 64];
+            assert_eq!(pol.eval(r), zn.zero());
         }
 
+        // Benchmark blockwise remainder tree.
         let start = std::time::Instant::now();
-        let pol = Poly::from_roots(&zn, roots2);
-        let vals = pol.multi_eval(roots.clone());
+        let pol2 = Poly::from_roots(&zn, &roots2);
+        let vals = pol2.multi_eval(&roots);
         eprintln!(
-            "multieval {degree} in {:.4}s",
+            "block multieval {degree} over {} in {:.4}s",
+            roots.len(),
             start.elapsed().as_secs_f64()
         );
 
         for i in 0..64 {
             let idx = (i * roots.len()) / 64;
-            assert_eq!(pol.eval(roots[idx]), vals[idx]);
+            assert_eq!(pol2.eval(roots[idx]), vals[idx]);
+        }
+
+        // Benchmark reduction modulo smaller polynomial
+        // + remainder tree.
+        let start = std::time::Instant::now();
+        let vals = Poly::roots_eval(&zn, &roots, &roots2);
+        eprintln!(
+            "mulmod+multieval {} over {degree} in {:.4}s",
+            roots.len(),
+            start.elapsed().as_secs_f64()
+        );
+
+        if roots.len() <= 512 * 1024 {
+            let pol1 = Poly::from_roots(&zn, &roots);
+            for i in 0..64 {
+                let idx = (i * roots2.len()) / 64;
+                assert_eq!(pol1.eval(roots2[idx]), vals[idx]);
+            }
         }
     }
 }

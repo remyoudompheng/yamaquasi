@@ -408,10 +408,22 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve, verbosity: Verbosity) -> Op
     } else {
         // Usually D > 4 phi(D) (phi(2*3*5*7) < N/4)
         // And there are only phi(D)/2 baby steps
+        //
+        // If we split gsteps into blocks, each of them multieval'ed on bsteps.
+        // the complexity will be O(gsteps/bsteps * bsteps log(bsteps)^alpha)
+        //
+        // However, the multipoint evaluation is ~10x the complexity of
+        // a polynomial product.
+        // It is more efficient to compute the (large) polynomial
+        // PG=Product(X - pgs[i]) and reduce it modulo PB=Product(X - pbs[j])
+        // and compute a single remainder tree.
+        // (See "20 years of ECM" article)
+        //
+        // Efficiency is maximal if #bsteps is very close to a power of 2
+        // and if PG/PB can be computed efficiently.
         let pbs: Vec<MInt> = bsteps.iter().map(|p| p.1).collect();
         let pgs: Vec<MInt> = gsteps.iter().map(|p| p.1).collect();
-        let pol = Poly::from_roots(zn, pbs);
-        let vals = pol.multi_eval(pgs);
+        let vals = Poly::roots_eval(zn, &pgs, &pbs);
         let mut buffer = zn.one();
         for (idx, &v) in vals.iter().enumerate() {
             // Compute the gcd every few rows for finer granularity.

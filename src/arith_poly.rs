@@ -102,6 +102,28 @@ impl<'a> Poly<'a> {
                 let idx1 = (2 * j) << i;
                 let idx2 = (2 * j + 1) << i;
                 //let idx3 = (2 * j + 2) << i;
+                if i == 1 {
+                    // (x+a)(x+b) = x^2+(a+b)x+ab
+                    buf2[idx1] = zn.mul(&buf1[idx1], &buf1[idx2]);
+                    buf2[idx1 + 1] = zn.add(&buf1[idx1], &buf1[idx2]);
+                    buf2[idx1 + 2] = zn.one();
+                    continue;
+                } else if i == 2 {
+                    // (x2+ax+b)(x2+cx+d) =
+                    // x^4 + (a+c)x^3 + (b+d+ac)x^2 + (ad+bc)x + bd
+                    buf2[idx1] = zn.mul(&buf1[idx1], &buf1[idx2]);
+                    buf2[idx1 + 1] = zn.add(
+                        &zn.mul(&buf1[idx1], &buf1[idx2 + 1]),
+                        &zn.mul(&buf1[idx1 + 1], &buf1[idx2]),
+                    );
+                    buf2[idx1 + 2] = zn.add(
+                        &zn.add(&buf1[idx1], &buf1[idx2]),
+                        &zn.mul(&buf1[idx1 + 1], &buf1[idx2 + 1]),
+                    );
+                    buf2[idx1 + 3] = zn.add(&buf1[idx1 + 1], &buf1[idx2 + 1]);
+                    buf2[idx1 + 4] = zn.one();
+                    continue;
+                }
                 Self::_longmul(
                     zn,
                     &mut buf2[idx1..idx1 + 2 * deg],
@@ -131,9 +153,9 @@ impl<'a> Poly<'a> {
         layers
     }
 
-    pub fn from_roots(zn: &'a ZmodN, roots: Vec<MInt>) -> Self {
+    pub fn from_roots(zn: &'a ZmodN, roots: &[MInt]) -> Self {
         let deg = roots.len();
-        let layers = Self::_product_tree(zn, &roots);
+        let layers = Self::_product_tree(zn, roots);
         let product = layers.last().unwrap();
         // Last layer has degree n.
         let n = product.len() / 2;
@@ -155,32 +177,113 @@ impl<'a> Poly<'a> {
 
     // Evaluate a polynomial at a set of points. The set of points
     // is usually larger (4x) than the polynomial degree.
-    pub fn multi_eval(&self, a: Vec<MInt>) -> Vec<MInt> {
+    pub fn multi_eval(&self, a: &[MInt]) -> Vec<MInt> {
         let plen = self.c.len();
         let alen = a.len();
-        let logn = usize::BITS - usize::leading_zeros(plen + 1);
+        let logn = usize::BITS - usize::leading_zeros(plen - 1);
         let n = 1_usize << logn;
         let chunks = (alen - 1) / n + 1;
-        let chunklen = a.len() / chunks + 1;
+        let chunklen = (alen - 1) / chunks + 1;
+        assert!(a.len() <= chunks * chunklen);
         let mut vals = vec![];
         for chk in a.chunks(chunklen) {
-            //eprintln!("chunk size {}", chk.len());
-            vals.append(&mut self._multi_eval(chk));
+            let tree = Self::_product_tree(&self.zn, chk);
+            let mut vs = self._multi_eval(&tree);
+            vs.truncate(chk.len());
+            vals.append(&mut vs);
         }
         assert_eq!(vals.len(), alen);
         vals
     }
 
-    #[doc(hidden)]
-    pub fn _multi_eval(&self, a: &[MInt]) -> Vec<MInt> {
+    // Compute product(x-a[i]) evaluated as points b[j]
+    pub fn roots_eval(zn: &'a ZmodN, a: &[MInt], b: &[MInt]) -> Vec<MInt> {
+        let tree = Self::_product_tree(zn, &b);
+        let n = tree[tree.len() - 1].len() / 2;
+        let mut vals = if a.len() < n {
+            // Compute the full product of x - a[i]
+            let p = Self::from_roots(zn, a);
+            p._multi_eval(&tree)
+        } else {
+            // Compute the full product of x - a[i] modulo Q=product(x-b[j])
+            // Compute a pseudo inverse using power series:
+            // Qrev(t) = t^degq Q(1/t)
+            // Qinv = x^n (1/Qrev(t) mod x^(n+1))
+            // Same top n coefficients for P and Q * P * Qinv / x^(n+degq)
+            //
+            // Example:
+            // sage: P = 2*x^8 - x^7 + 5*x^6 - 4*x^5 + x^4 + 2*x^3 + x^2 - x - 7
+            // sage: Q = x^2 + 6*x - 2
+            // sage: _, Qinv, _ = Q.reverse().xgcd(x^(4+1))
+            // sage: Qinv = Qinv.reverse()
+            // sage: Q * ((P * Qinv) // x^6)
+            // 2*x^8 - x^7 + 5*x^6 - 4*x^5 + x^4 + 19154*x^3 - 15639*x^2 + 57146*x - 17134
+
+            // Prepare inverse of Q:
+            let q = &tree[tree.len() - 1][..1 + n];
+            let mut revq = vec![MInt::default(); 1 + n];
+            for i in 0..n {
+                revq[i] = q[n - i];
+            }
+            let mut qinv = vec![MInt::default(); 1 + n];
+            let mut tmp = vec![MInt::default(); 6 * n];
+            Self::_inv_mod_xn(zn, &mut qinv, &revq, &mut tmp);
+            assert!(revq[0] == zn.one());
+            qinv.reverse();
+
+            let mut achunks = a.chunks(n);
+            // Invariant: pmodq has degree < deg Q so length <= n
+            let mut pmodq = Self::from_roots(zn, achunks.next().unwrap());
+            pmodq.c.resize(1 + n, zn.zero());
+            if pmodq.c[n] != zn.zero() {
+                // Both P and Q are monic, degree n.
+                Self::_sub(zn, &mut pmodq.c, &q);
+                assert!(pmodq.c[n] == zn.zero());
+            }
+            pmodq.c.truncate(n);
+            // Preallocate buffers
+            let mut pp = vec![MInt::default(); 2 * n];
+            let mut quo = vec![MInt::default(); 2 * n];
+            let mut pq = vec![MInt::default(); 2 * n];
+            for chk in achunks {
+                let mut pi = Self::from_roots(zn, chk);
+                pi.c.resize(1 + n, zn.zero());
+                if pi.c[n] != zn.zero() {
+                    // Both Pi and Q are monic, degree n.
+                    Self::_sub(zn, &mut pi.c, &q);
+                    assert!(pi.c[n] == zn.zero());
+                }
+                // modular multiply: (pi * pmodq) % q
+                // top coefficient is pp[2n-2]
+                Self::_longmul(zn, &mut pp, &pi.c[..n], &pmodq.c[..n], &mut tmp);
+                // High words of pp/x^n * qinv (qinv has length n+1)
+                // leading coefficient is quo[2n-3]
+                Self::_longmul(zn, &mut quo, &pp[n..], &qinv[1..], &mut tmp);
+                // pp -= q * quo
+                Self::_longmul(zn, &mut pq, &quo[n - 1..2 * n - 2], &q, &mut tmp);
+                debug_assert!((n..pp.len()).all(|i| pp[i] == pq[i]));
+                // We only need the remainder (low words).
+                Self::_sub(zn, &mut pp[..n], &pq[..n]);
+                pmodq.c.copy_from_slice(&pp[..n]);
+            }
+            pmodq._multi_eval(&tree)
+        };
+        assert!(vals.len() >= b.len());
+        vals.truncate(b.len());
+        vals
+    }
+
+    // Computes a remainder tree over an existing product tree of moduli.
+    fn _multi_eval(&self, tree: &[Vec<MInt>]) -> Vec<MInt> {
         // Compute P(x)/product(x-ai) as a power series in 1/x
         // assume that degree(P) <= len(a)
         // Let t = 1/x
         // P(x)/product(x-ai) = revP(t) / product(1-ai t) has residue P(ai) at ai
+        // Reducing P modulo product(x-ai) does not modify the result.
         let zn = &self.zn;
-        //       assert!(self.c.len() <= 2 * n);
+        // assert!(self.c.len() <= 2 * n);
         // Compute the product tree of x - ai as above.
-        let layers = Self::_product_tree(zn, a);
+        let layers = tree;
         let n = layers[layers.len() - 1].len() / 2;
         let logn = n.trailing_zeros();
         assert_eq!(layers.len() as u32, logn + 1);
@@ -210,11 +313,11 @@ impl<'a> Poly<'a> {
         // Q = x^dq (1 + ... t + ... t^dq = revQ)
         // We have computed rev(P)/rev(Q) so
         // P/Q = t^(n-degp) revP/revQ mod t^n
-        //     = t^n-degp + ... + F[degp] t^n
+        //     = F[0]/t^(degp-n) + ... 1/t + F[degp-n] + .. t + ... + F[degp] t^n
         // Rewrite the power series:
-        // P/Q = (F[0] X^degp + ... + F[degp]) / x^n
+        // P/Q = (F[degp-n] X^n + ... + F[degp]) / x^n
         for i in 0..=degp {
-            node[degp - i] = dst[i];
+            node[i] = dst[degp - i];
         }
         // For each layer:
         // express P/Q1Q2 as polynomial / 2^(k+1)
@@ -265,7 +368,7 @@ impl<'a> Poly<'a> {
         }
         // Now each leaf contains the results
         let mut vals = vec![];
-        for i in 0..a.len() {
+        for i in 0..n {
             // a + b/x => residue=b
             vals.push(node[2 * i]);
         }
@@ -302,12 +405,13 @@ impl<'a> Poly<'a> {
 
     /// Multiply 2 polynomials into a double length polynomial.
     /// The lengths of p,q are preferably both close to 2^k from below.
+    /// The target slice z must not be larger than the expected result length.
     fn _fft_longmul(zn: &ZmodN, z: &mut [MInt], p: &[MInt], q: &[MInt]) {
         // FIXME: reuse scratch buffer.
         let degp = p.len() - 1;
         let degq = q.len() - 1;
-        let logsize = usize::BITS - usize::leading_zeros(max(degp, degq));
-        convolve_modn(zn, 2 << logsize, p, q, z, 0);
+        let logsize = usize::BITS - usize::leading_zeros(degp + degq);
+        convolve_modn(zn, 1 << logsize, p, q, z, 0);
     }
 
     /// Middle product of polynomials of degree 2N-2 and N-1
@@ -672,7 +776,13 @@ impl<'a> Poly<'a> {
             tmparg[i] = zn.sub(p[half_up + i], tmparg[i]);
         }
         // Multiply again by inverse (but we need low words now)
-        Self::_longmul(zn, tmpmul, &alpha[..half], &tmparg, tmphi);
+        Self::_longmul(
+            zn,
+            &mut tmpmul[..2 * half],
+            &alpha[..half],
+            &tmparg[..half],
+            tmphi,
+        );
         // Take low words
         z[half_up..p.len()].copy_from_slice(&tmpmul[..half]);
     }
@@ -730,7 +840,7 @@ fn test_polymul() {
 
         // Test polynomial from roots
         let roots = pol1.c.to_vec();
-        let pol = Poly::from_roots(&zn, roots.clone());
+        let pol = Poly::from_roots(&zn, &roots);
         for &r in &roots {
             let mut v = zn.zero();
             for i in 0..pol.c.len() {
@@ -845,6 +955,7 @@ fn test_polyeval() {
     let p = Poly {
         zn: &zn,
         c: vec![
+            zn.from_int(Uint::from(9_u64)),
             zn.from_int(Uint::from(7_u64)),
             zn.from_int(Uint::from(5_u64)),
             zn.from_int(Uint::from(3_u64)),
@@ -852,13 +963,13 @@ fn test_polyeval() {
         ],
     };
 
-    let vals = p._multi_eval(&[
+    let vals = p.multi_eval(&[
         zn.from_int(Uint::from(10_u64)),
         zn.from_int(Uint::from(100_u64)),
         zn.from_int(Uint::from(1000_u64)),
         //zn.from_int(Uint::from(10000_u64)),
     ]);
-    assert_eq!(zn.to_int(vals[0]).digits()[0], 1357);
-    assert_eq!(zn.to_int(vals[1]).digits()[0], 1030507);
-    assert_eq!(zn.to_int(vals[2]).digits()[0], 1003005007);
+    assert_eq!(zn.to_int(vals[0]).digits()[0], 13579);
+    assert_eq!(zn.to_int(vals[1]).digits()[0], 103050709);
+    assert_eq!(zn.to_int(vals[2]).digits()[0], 1_003_005_007_009);
 }

@@ -372,8 +372,7 @@ fn pm1_stage2_polyeval(zn: &ZmodN, sqrtb2: usize, g: MInt) -> Option<(Uint, Uint
     // Compute:
     // P = product(X - bg[i])
     // product P(gg[j])
-    let pol = Poly::from_roots(zn, bsteps);
-    let vals = pol.multi_eval(gsteps);
+    let vals = Poly::roots_eval(zn, &gsteps, &bsteps);
     let mut buffer = zn.one();
     for (idx, &v) in vals.iter().enumerate() {
         // Compute the gcd every few rows for finer granularity.
