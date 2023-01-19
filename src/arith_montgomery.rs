@@ -3,6 +3,10 @@
 // license that can be found in the LICENSE file.
 
 //! Montgomery form arithmetic for 64-bit moduli.
+//!
+//! Reference:
+//! Peter L. Montgomery, Modular Multiplication Without Trial Division
+//! <https://www.ams.org/journals/mcom/1985-44-170/S0025-5718-1985-0777282-X/S0025-5718-1985-0777282-X.pdf>
 
 use std::borrow::Borrow;
 
@@ -48,8 +52,8 @@ pub fn mg_redc(n: u64, ninv: u64, x: u128) -> u64 {
 #[derive(Clone)]
 pub struct ZmodN {
     pub n: Uint,
-    // Minus n^-1 mod R
-    ninv: MInt,
+    // Minus n^-1 mod 2^64
+    ninv64: u64,
     // Auxiliary base R=2^64k
     k: u32,
     // R mod n
@@ -88,29 +92,24 @@ impl ZmodN {
         let rsqrt = Uint::ONE << (32 * k);
         let r = (rsqrt * rsqrt) % n;
         let r2 = (r * r) % n;
-        let ninv = {
+        let ninv64 = {
             // Invariant: nx = 1 + 2^k s, k increasing
-            let mut x = Uint::ONE;
+            let mut x = 1_u64;
+            let n64 = n.digits()[0];
             loop {
-                let rem = n.wrapping_mul(x) - Uint::ONE;
-                if rem == Uint::ZERO {
+                let rem = n64.wrapping_mul(x) - 1;
+                if rem == 0 {
                     break;
                 }
-                x += Uint::ONE << rem.trailing_zeros();
+                x += 1 << rem.trailing_zeros();
             }
-            assert!((n.wrapping_mul(x) - Uint::ONE).trailing_zeros() >= 64 * k);
+            assert!(n64.wrapping_mul(x) == 1);
             // Now compute R-x
-            if 64 * k == Uint::BITS {
-                !x + Uint::ONE
-            } else {
-                // clear top bits
-                let x = x - ((x >> (64 * k)) << (64 * k));
-                (Uint::ONE << (64 * k)) - x
-            }
+            !x + 1
         };
         ZmodN {
             n,
-            ninv: MInt::from_uint(ninv),
+            ninv64,
             k,
             r: MInt::from_uint(r),
             r2: MInt::from_uint(r2),
@@ -139,213 +138,256 @@ impl ZmodN {
         // all bit lengths MUST be < 512
         debug_assert!(Uint::from(*x.borrow()) < self.n);
         debug_assert!(Uint::from(*y.borrow()) < self.n);
-        self.redc(&uint_mul(&x.borrow().0, &y.borrow().0, self.k))
+        let mut m = MInt::default();
+        mint_mulmod(&self, &mut m.0, &x.borrow().0, &y.borrow().0, self.k);
+        // FIXME: remove
+        let nd = self.n.digits();
+        if !mint_lt(&m.0, nd, self.k) {
+            mint_sub(&mut m.0, nd, self.k);
+        }
+        debug_assert!(Uint::from(m) < self.n);
+        m
     }
 
     pub fn inv(&self, x: MInt) -> Option<MInt> {
         // No optimization, use ordinary modular inversion.
-        Some(self.from_int(arith::inv_mod(self.to_int(x), self.n)?))
+        let i = arith::inv_mod(self.to_int(x), self.n)?;
+        Some(self.from_int(i))
     }
 
     pub fn add<M: Borrow<MInt>>(&self, x: M, y: M) -> MInt {
         debug_assert!(Uint::from(*x.borrow()) < self.n);
         debug_assert!(Uint::from(*y.borrow()) < self.n);
-        let sum = uint_addmod(&x.borrow().0, &y.borrow().0, &self.n, self.k);
-        debug_assert!(Uint::from(MInt(sum)) < self.n);
-        MInt(sum)
+        let mut m = *x.borrow();
+        mint_add(&mut m.0, &y.borrow().0, self.k);
+        if !mint_lt(&m.0, self.n.digits(), self.k) {
+            mint_sub(&mut m.0, self.n.digits(), self.k);
+        }
+        debug_assert!(Uint::from(m) < self.n);
+        m
     }
 
     pub fn sub<M: Borrow<MInt>>(&self, x: M, y: M) -> MInt {
         debug_assert!(Uint::from(*x.borrow()) < self.n);
         debug_assert!(Uint::from(*y.borrow()) < self.n);
-        let sub = uint_submod(&x.borrow().0, &y.borrow().0, &self.n, self.k);
-        debug_assert!(Uint::from(MInt(sub)) < self.n);
-        MInt(sub)
+        let yp = &y.borrow().0;
+        let mut s = *x.borrow();
+        if mint_lt(&s.0, yp, self.k) {
+            mint_add(&mut s.0, self.n.digits(), self.k)
+        };
+        mint_sub(&mut s.0, yp, self.k);
+        debug_assert!(Uint::from(s) < self.n);
+        s
     }
 
-    /// Montgomery reduction (x/R mod n).
-    fn redc(&self, x: &[u64; 2 * MINT_WORDS]) -> MInt {
+    /// Multiprecision Montgomery reduction (x/R mod n).
+    #[doc(hidden)]
+    pub fn redc(&self, x: &[u64; 2 * MINT_WORDS]) -> MInt {
         debug_assert!(Uint::from_digits(*x) < (self.n << (64 * self.k)));
-        // compute -x/N mod R
-        let mul = uint_lowmul(&x[..], &self.ninv.0, self.k);
-        // multiply by N again
-        let mut m = uint_mul(&mul, self.n.digits(), self.k);
-        // now x+mul*N is divisible by M
-        // it is enough to add the high words
-        // the carry is always equal to 1 iff x_low != 0
-        let k = self.k as usize;
-        if x[..k].iter().any(|&w| w != 0) {
-            for i in k..2 * k {
-                if m[i] == !0 {
-                    m[i] = 0;
-                } else {
-                    m[i] += 1;
-                    break;
+        // This is N times a division by 2^64.
+        // Repeatedly add N * (-x[0]/N mod 2^64) and divide by 2^64
+        let mut m = x.clone();
+        let n = self.n.digits();
+        let sz = self.k as usize;
+        let ninv64 = self.ninv64;
+        for i in 0..sz {
+            let m_ninv = m[i].wrapping_mul(ninv64);
+            let mut carryn = 0;
+            for j in 0..sz {
+                unsafe {
+                    let nj = *n.get_unchecked(j) as u128;
+                    let mij = m[..].get_unchecked_mut(i + j);
+                    let mut mn = (m_ninv as u128) * nj;
+                    mn += *mij as u128;
+                    mn += carryn as u128;
+                    *mij = mn as u64;
+                    carryn = (mn >> 64) as u64;
                 }
             }
+            let (mi, c) = m[i + sz].overflowing_add(carryn);
+            m[i + sz] = mi;
+            if c {
+                assert!(i + sz + 1 < m.len());
+                // FIXME: overflow
+                m[i + sz + 1] += u64::from(c);
+            }
         }
-        let res = MInt(uint_addmod(&m[k..], &x[k..], &self.n, self.k));
-        debug_assert!(Uint::from(res) < self.n);
-        res
+        let mut m: [u64; MINT_WORDS] = m[sz..sz + MINT_WORDS].try_into().unwrap();
+        if !mint_lt(&m, self.n.digits(), self.k) {
+            mint_sub(&mut m, self.n.digits(), self.k);
+        }
+        MInt(m)
     }
 
     /// Like redc but for numbers possibly exceeding n<<64k
-    pub fn redc_large(&self, x: &[u64; 2 * MINT_WORDS]) -> MInt {
+    /// It is assumed that x.len() <= 3 * MINT_WORDS (24)
+    /// which is enough to accomodate FFT convolution outputs.
+    pub fn redc_large(&self, x: &[u64]) -> MInt {
+        debug_assert!(x.len() < 3 * MINT_WORDS);
+        let mut xlo = [0_u64; 2 * MINT_WORDS];
         let mut xhi = [0_u64; 2 * MINT_WORDS];
-        let mut x = *x;
         let k = self.k as usize;
         // Divide upper part by R.
-        for i in k..2 * MINT_WORDS {
-            xhi[i - k] = x[i];
-            x[i] = 0;
+        for i in 0..k {
+            xlo[i] = x[i]
         }
-        let m = self.redc(&x);
+        for i in k..x.len() {
+            xhi[i - k] = x[i];
+        }
+        let m = self.redc(&xlo);
         let mhi = self.redc(&xhi);
         self.add(m, self.mul(mhi, self.r2))
     }
 }
 
-fn uint_addmod(x: &[u64], y: &[u64], n: &Uint, sz: u32) -> [u64; MINT_WORDS] {
-    // Add 2 integers spanning at most sz words.
-    let nd = n.digits();
+// Returns whether x < n, where x is stored on at most sz+1 words.
+fn mint_lt(x: &[u64], n: &[u64], sz: u32) -> bool {
     let sz = sz as usize;
-    // Store x+y
-    let mut z = [0_u64; MINT_WORDS];
-    // Store x+y-n
-    let mut z2 = [0_u64; MINT_WORDS];
-    let mut carry = 0_u64;
-    let mut subcarry = 1_u64;
+    debug_assert!((sz + 1..x.len()).all(|idx| x[idx] == 0));
+    debug_assert!((sz..n.len()).all(|idx| n[idx] == 0));
+    if x.len() > sz && x[sz] > 0 {
+        return false;
+    }
     for i in 0..sz {
-        unsafe {
-            let xi = *x.get_unchecked(i) as u128;
-            let yi = *y.get_unchecked(i) as u128;
-            let ni = *nd.get_unchecked(i);
-            let sum = xi + yi;
-            let zw = sum + (carry as u128);
-            *z.get_unchecked_mut(i) = zw as u64;
-            carry = (zw >> 64) as u64;
-            // Add 1<<64w - n = !n + 1 to subtract n
-            let z2w = sum + ((!ni) as u128) + (subcarry as u128);
-            *z2.get_unchecked_mut(i) = z2w as u64;
-            subcarry = (z2w >> 64) as u64;
-        }
-    }
-    if subcarry == 0 {
-        // x+y-n < 0
-        assert!(carry == 0);
-        debug_assert!(
-            Uint::from(MInt(z.try_into().unwrap()))
-                == Uint::from(MInt(x[..MINT_WORDS].try_into().unwrap()))
-                    + Uint::from(MInt(y[..MINT_WORDS].try_into().unwrap()))
-        );
-        z
-    } else {
-        debug_assert!(
-            Uint::from(MInt(z2.try_into().unwrap()))
-                == Uint::from(MInt(x[..MINT_WORDS].try_into().unwrap()))
-                    + Uint::from(MInt(y[..MINT_WORDS].try_into().unwrap()))
-                    - n
-        );
-        z2
-    }
-}
-
-fn uint_submod(
-    x: &[u64; MINT_WORDS],
-    y: &[u64; MINT_WORDS],
-    n: &Uint,
-    sz: u32,
-) -> [u64; MINT_WORDS] {
-    // Subtract 2 integers spanning at most sz words.
-    let nd = n.digits();
-    let sz = sz as usize;
-    // Store x-y (actually x + NOT y + 1)
-    let mut z = [0_u64; MINT_WORDS];
-    // Store x-y+n (actually x + NOT y + n + 1)
-    let mut z2 = [0_u64; MINT_WORDS];
-    let mut carry1 = 1_u64;
-    let mut carry2 = 1_u64;
-    for i in 0..sz {
-        unsafe {
-            let xi = *x.get_unchecked(i) as u128;
-            let yi = *y.get_unchecked(i);
-            let ni = *nd.get_unchecked(i) as u128;
-            let sum = xi + ((!yi) as u128);
-            let zw = sum + (carry1 as u128);
-            *z.get_unchecked_mut(i) = zw as u64;
-            carry1 = (zw >> 64) as u64;
-            let z2w = sum + ni + (carry2 as u128);
-            *z2.get_unchecked_mut(i) = z2w as u64;
-            carry2 = (z2w >> 64) as u64;
-        }
-    }
-    if carry1 == 0 {
-        // x-y < 0
-        debug_assert!(Uint::from(MInt(z2)) == Uint::from(MInt(*x)) + n - Uint::from(MInt(*y)));
-        z2
-    } else {
-        debug_assert!(Uint::from(MInt(z)) == Uint::from(MInt(*x)) - Uint::from(MInt(*y)));
-        z
-    }
-}
-
-fn uint_lowmul(x: &[u64], y: &[u64; MINT_WORDS], sz: u32) -> [u64; MINT_WORDS] {
-    // Lower words of product.
-    let sz = sz as usize;
-    debug_assert!(sz <= MINT_WORDS);
-    let mut z = [0_u64; MINT_WORDS];
-    for i in 0..sz {
-        let mut carry = 0_u64;
-        let xi = unsafe { *x.get_unchecked(i) };
-        if xi == 0 {
+        let idx = sz - 1 - i;
+        let (xi, ni) = unsafe { (*x.get_unchecked(idx), *n.get_unchecked(idx)) };
+        if xi == ni {
             continue;
         }
-        for j in 0..sz - i {
-            unsafe {
-                let xi = xi as u128;
-                let yj = *y.get_unchecked(j) as u128;
-                let xy = xi * yj + (carry as u128);
-                let zlo = xy as u64;
-                let zhi = (xy >> 64) as u64;
-                let zij = z[..].get_unchecked_mut(i + j);
-                let (zlo2, c) = zij.overflowing_add(zlo);
-                *zij = zlo2;
-                carry = zhi + (if c { 1 } else { 0 });
-            }
-        }
+        return xi < ni;
     }
-    z
+    return false;
 }
 
-fn uint_mul(x: &[u64], y: &[u64], sz: u32) -> [u64; 2 * MINT_WORDS] {
-    let sz = sz as usize;
-    debug_assert!(sz <= MINT_WORDS);
+// Combined multiplication and multiprecision REDC.
+// <https://www.microsoft.com/en-us/research/wp-content/uploads/1996/01/j37acmon.pdf>
+fn mint_mulmod(zn: &ZmodN, res: &mut [u64], x: &[u64], y: &[u64], sz: u32) {
+    match sz {
+        // Dispatch to unrolled implementations
+        1 => _mint_mulmod::<1>(zn, res, x, y),
+        2 => _mint_mulmod::<2>(zn, res, x, y),
+        3 => _mint_mulmod::<3>(zn, res, x, y),
+        4 => _mint_mulmod::<4>(zn, res, x, y),
+        5 => _mint_mulmod::<5>(zn, res, x, y),
+        6 => _mint_mulmod::<6>(zn, res, x, y),
+        7 => _mint_mulmod::<7>(zn, res, x, y),
+        8 => _mint_mulmod::<8>(zn, res, x, y),
+        _ => unreachable!("impossible"),
+    }
+}
+
+fn _mint_mulmod<const SIZE: usize>(zn: &ZmodN, res: &mut [u64], x: &[u64], y: &[u64]) {
+    // SIZE times, multiply by a word of y,
+    // multiply by lower*ninv64*N to cancel 1 word.
+    let ninv64 = zn.ninv64;
+    let n = &zn.n.digits();
+    debug_assert!(SIZE <= MINT_WORDS);
     let mut z = [0_u64; 2 * MINT_WORDS];
-    for i in 0..sz {
+    let mut overflow = false;
+    for i in 0..SIZE {
+        // Accumulate x[i] * y in z.
         let mut carry = 0_u64;
         let xi = unsafe { *x.get_unchecked(i) };
-        if xi == 0 {
-            continue;
-        }
-        for j in 0..sz {
+        for j in 0..SIZE {
             unsafe {
                 let xi = xi as u128;
                 let yj = *y.get_unchecked(j) as u128;
                 let zij = z[..].get_unchecked_mut(i + j);
-                let xy = xi * yj + (*zij as u128) + (carry as u128);
-                let zlo = xy as u64;
-                let zhi = (xy >> 64) as u64;
-                *zij = zlo;
-                carry = zhi;
+                let mut xy = xi * yj;
+                xy += *zij as u128;
+                xy += carry as u128;
+                *zij = xy as u64;
+                carry = (xy >> 64) as u64;
             }
         }
-        let (zlo2, c) = z[i + sz].overflowing_add(carry);
-        z[i + sz] = zlo2;
-        if c && i + sz + 1 < z.len() {
-            z[i + sz + 1] += 1;
+        // Add m * N to cancel the lower word.
+        let m = z[i].wrapping_mul(ninv64);
+        let mut carryn = 0;
+        for j in 0..SIZE {
+            unsafe {
+                let nj = *n.get_unchecked(j) as u128;
+                let zij = z[..].get_unchecked_mut(i + j);
+                let mut xy = (m as u128) * nj;
+                xy += *zij as u128;
+                xy += carryn as u128;
+                *zij = xy as u64;
+                carryn = (xy >> 64) as u64;
+            }
+        }
+        debug_assert!(z[i] == 0);
+        let (zi, c1) = z[i + SIZE].overflowing_add(carry);
+        let (zin, c2) = zi.overflowing_add(carryn);
+        z[i + SIZE] = zin;
+        if c1 || c2 {
+            if i + 1 < SIZE {
+                z[i + SIZE + 1] = u64::from(c1) + u64::from(c2);
+            } else {
+                overflow = true;
+            }
         }
     }
-    z
+    for i in 0..SIZE {
+        res[i] = z[i + SIZE]
+    }
+    if overflow {
+        // Add 2^64W - n = not(n)+1
+        let mut carry = 1;
+        for i in 0..SIZE {
+            let s = res[i] as u128 + !n[i] as u128 + carry as u128;
+            res[i] = s as u64;
+            carry = (s >> 64) as u64;
+        }
+        if carry > 0 {
+            // FIXME: can it happen?
+            res[SIZE] = 1
+        }
+    }
+}
+
+fn mint_add(x: &mut [u64], y: &[u64], sz: u32) {
+    // Add 2 integers spanning at most sz words.
+    let sz = sz as usize;
+    let mut carry = 0_u64;
+    for i in 0..sz {
+        unsafe {
+            let xi = x.get_unchecked_mut(i);
+            let yi = *y.get_unchecked(i) as u128;
+            let sum = (*xi as u128) + yi;
+            let zw = sum + (carry as u128);
+            *xi = zw as u64;
+            carry = (zw >> 64) as u64;
+        }
+    }
+    if sz < x.len() {
+        x[sz] += carry;
+    } else {
+        debug_assert!(carry == 0);
+    }
+}
+
+/// Subtract 2 integers x > y spanning at most sz words.
+fn mint_sub(x: &mut [u64; MINT_WORDS], y: &[u64], sz: u32) {
+    debug_assert!(Uint::from(MInt(*x)) >= Uint::from(MInt(y[..MINT_WORDS].try_into().unwrap())));
+    // Store x-y (actually x + NOT y + 1)
+    // The carry must propagate until the end unless x[sz]==0.
+    let sz = sz as usize;
+    let mut carry = 1_u64;
+    for i in 0..sz {
+        unsafe {
+            let xi = x.get_unchecked_mut(i);
+            let yi = *y.get_unchecked(i);
+            let sum = (*xi as u128) + ((!yi) as u128);
+            let zw = sum + (carry as u128);
+            *xi = zw as u64;
+            carry = (zw >> 64) as u64;
+        }
+    }
+    if sz < MINT_WORDS {
+        debug_assert!(x[sz] == 1 - carry);
+        x[sz] = 0;
+    } else {
+        debug_assert!(carry == 1);
+    }
 }
 
 #[test]
