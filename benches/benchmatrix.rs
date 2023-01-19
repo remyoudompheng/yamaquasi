@@ -9,6 +9,7 @@ use bitvec_simd::BitVec;
 use rand::{self, Rng};
 
 use yamaquasi::matrix;
+use yamaquasi::Verbosity;
 
 fn main() {
     for size in [
@@ -20,7 +21,7 @@ fn main() {
         let mat = qs_like_matrix(size, 30, density as usize);
         if size > 250 {
             let start = Instant::now();
-            let ker = matrix::kernel_lanczos(&mat, true);
+            let ker = matrix::kernel_lanczos(&mat, Verbosity::Info);
             eprintln!(
                 "size={} Lanczos {:.3}s",
                 size,

@@ -1,6 +1,6 @@
 use brunch::Bench;
 use rand::{self, Fill};
-use yamaquasi::matrix;
+use yamaquasi::{matrix, Verbosity};
 
 fn main() {
     let mut rng = rand::thread_rng();
@@ -64,12 +64,12 @@ fn main() {
               {
             let mat = matrix::make_test_sparsemat(500, 10, 20);
             Bench::new("lanczos(size 500, 20/row)")
-            .run_seeded(&mat, |mat| matrix::kernel_lanczos(mat, false).pop().unwrap())
+            .run_seeded(&mat, |mat| matrix::kernel_lanczos(mat, Verbosity::Silent).pop().unwrap())
         },
         {
             let mat = matrix::make_test_sparsemat(1000, 10, 20);
             Bench::new("lanczos(size 1000, 20/row)")
-            .run_seeded(&mat, |mat| matrix::kernel_lanczos(mat, false).pop().unwrap())
+            .run_seeded(&mat, |mat| matrix::kernel_lanczos(mat, Verbosity::Silent).pop().unwrap())
         },
         // Gauss elimination
         {
