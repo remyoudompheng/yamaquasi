@@ -20,6 +20,8 @@ jobs:
       run: cargo build --verbose
     - name: Check
       run: cargo check --benches
+    - name: Check pymqs
+      run: cargo check --manifest-path pymqs/Cargo.toml
     - name: Run tests
       run: cargo test --verbose
     - name: Run tests (AVX2)
