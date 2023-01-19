@@ -39,15 +39,44 @@ pub fn convolve_modn(
     res: &mut [MInt],
     offset: usize,
 ) {
-    // Convolution coefficients (size * n²) must not exceed 1024 bits.
+    // If coefficients are small, they can fit in a size 2^S FFT array element
+    // as A base 2^B digits
+    // If (2A-1)(2B+S) < 64N (convolution result must fit)
+    //    size / A < 2^S
+    let (fsize, logpack, stride) = match (zn.n.bits(), size) {
+        // Fit in F1024, max FFT size 4096
+        // A=2 (3x 5 words, bits < 150)
+        (0..=150, 0..=8192) => (1024, 1, 5),
+        // A=1
+        (0..=500, 0..=4096) => (1024, 0, 0),
+        // Fit in F2048, max FFT size 8192
+        // A=2 (3x 10 words, bits < 310)
+        (0..=310, 0..=16384) => (2048, 1, 10),
+        // A=1 actually not interesting.
+        //(0..=512, 0..=8192) => (2048, 0),
+        // Fit in F4096, max FFT size 16384
+        // A=4 (7x 9 words, bits < 280)
+        (0..=280, 0..=65536) => (4096, 2, 9),
+        // A=2 (3x 20 words)
+        (0..=512, 0..=32768) => (4096, 1, 17),
+        // Fit in F8192, max FFT size 32768
+        // A=8 (15x 8 words)
+        (0..=245, 0..=262144) => (8192, 3, 8),
+        // A=4 (7x 18 words)
+        (0..=512, 0..=131072) => (8192, 2, 17),
+        // Fit in F16384, max FFT size 65536
+        // A=8 (15x 17 words)
+        (0..=512, 0..=524288) => (16384, 3, 17),
+        (nbits, _) => panic!("cannot fit size {size} convolution with {nbits} bit coefficients"),
+    };
     assert!(zn.n.bits() <= 500);
-    match size {
-        ..=4096 => _convolve_modn::<16>(zn, size, p1, p2, res, offset),
-        // Don't use F2048 because we cannot fit 2 coeffs per element.
-        4097..=32768 => _convolve_modn::<64>(zn, size, p1, p2, res, offset),
-        32769..=131072 => _convolve_modn::<128>(zn, size, p1, p2, res, offset),
-        131073..=524288 => _convolve_modn::<256>(zn, size, p1, p2, res, offset),
-        _ => panic!("unsupported"),
+    match fsize {
+        1024 => _convolve_modn::<16>(zn, size, logpack, stride, p1, p2, res, offset),
+        2048 => _convolve_modn::<32>(zn, size, logpack, stride, p1, p2, res, offset),
+        4096 => _convolve_modn::<64>(zn, size, logpack, stride, p1, p2, res, offset),
+        8192 => _convolve_modn::<128>(zn, size, logpack, stride, p1, p2, res, offset),
+        16384 => _convolve_modn::<256>(zn, size, logpack, stride, p1, p2, res, offset),
+        _ => unreachable!("impossible"),
     }
 }
 
@@ -55,6 +84,8 @@ pub fn convolve_modn(
 fn _convolve_modn<const N: usize>(
     zn: &ZmodN,
     size: usize,
+    logpack: u32,
+    stride: usize,
     p: &[MInt],
     q: &[MInt],
     res: &mut [MInt],
@@ -66,7 +97,7 @@ fn _convolve_modn<const N: usize>(
     // N=64 can contain 2 MInts (0..8, 17..25)
     // N=128 can contain 4 MInts (0..8, 17..25, 34..42, 51..59)
     // N=256 can contain 8 MInts (0..8, 17..25, ... 119..127)
-    if N < 64 {
+    if stride == 0 {
         // Inputs map 1-to-1 to FFT inputs.
         let mut vp = vec![FInt::<N>::default(); size];
         let mut vq = vec![FInt::<N>::default(); size];
@@ -84,34 +115,31 @@ fn _convolve_modn<const N: usize>(
         }
     } else {
         // N/32 inputs map to 1 input (degree N/32-1 polynomial)
-        let logpack = N.trailing_zeros() - 5;
+        let mask = (1 << logpack) - 1;
         let mut vp = vec![FInt::<N>::default(); size >> logpack];
         let mut vq = vec![FInt::<N>::default(); size >> logpack];
         // Inputs map 1-to-1 to FFT inputs.
         for i in 0..p.len() {
-            let j = i & (N / 32 - 1);
-            vp[i >> logpack].0[17 * j..17 * j + msize].copy_from_slice(&p[i].0[..]);
+            let j = i & mask;
+            vp[i >> logpack].0[stride * j..stride * j + msize].copy_from_slice(&p[i].0[..]);
         }
         for i in 0..q.len() {
-            let j = i & (N / 32 - 1);
-            vq[i >> logpack].0[17 * j..17 * j + msize].copy_from_slice(&q[i].0[..]);
+            let j = i & mask;
+            vq[i >> logpack].0[stride * j..stride * j + msize].copy_from_slice(&q[i].0[..]);
         }
         let vpq = mulfft(&vp, &vq);
         // Each output maps to N/16-1 coefficients (degree N/16-2)
         res.fill(MInt::default());
         for i in 0..vpq.len() {
-            for j in 0..N / 16 - 1 {
+            for j in 0..((2 << logpack) - 1) {
                 let idx = (i << logpack) + j;
                 let idx = if offset <= idx && idx < offset + res.len() {
                     idx - offset
                 } else {
                     continue;
                 };
-                let mut digits = [0u64; 16];
-                // FIXME: read the 17th words for n > 500 bits
-                // Last j is offset n + n/16 - 34 .. n + n/16 - 18 < n
-                digits.copy_from_slice(&vpq[i].0[17 * j..17 * j + 16]);
-                res[idx] = zn.add(res[idx], zn.redc_large(&digits));
+                let digits = &vpq[i].0[stride * j..stride * (j + 1)];
+                res[idx] = zn.add(res[idx], zn.redc_large(digits));
             }
         }
     }
@@ -487,40 +515,78 @@ impl<const N: usize> FInt<N> {
             *self = FInt::default().sub(&z);
             return;
         }
-        let nn = 64 * N as u32;
-        let mut zlo = [0; N];
-        let mut zhi = [0; N];
-        let mut carry = 0u64;
-        let sabs = if s >= nn { s - nn } else { s };
-        let shi = sabs as usize / 64;
-        let slo = sabs % 64;
-        for i in 0..N - shi {
-            let xi = ((self.0[i] as u128) << slo) | (carry as u128);
-            zlo[i + shi] = xi as u64;
-            carry = (xi >> 64) as u64;
+        if s == 0 {
+            return;
         }
-        for i in N - shi..N {
-            let xi = ((self.0[i] as u128) << slo) | (carry as u128);
-            zhi[i + shi - N] = xi as u64;
-            carry = (xi >> 64) as u64;
-        }
-        // Top word
-        zhi[shi] = carry;
-        if s >= nn {
-            let c = _sub_slices(&mut zhi, &zlo);
-            self.0 = zhi;
-            self.1 = 0;
-            if c == 1 {
-                self.add_small(1);
+        // Small shift: shl(x, s) = (x << s) - (x >> (64N-s))
+        // Large shift: shl(x, s) = - shl(x, s - 64N)
+        //                        = (x >> (128N-s)) - (x << (s-64N))
+
+        // Shift whole words.
+        let sw = s as usize / 64;
+        if sw == 0 {
+            // nothing to do
+        } else if sw < N {
+            let mut zhi = [0; N];
+            zhi[0..sw].copy_from_slice(&self.0[N - sw..N]);
+            self.0.copy_within(0..N - sw, sw);
+            // subtract zhi
+            if zhi[0] != 0 && self.0[sw] > 0 {
+                // common case without carries:
+                // fill with !(zhi-1) and subtract one for carry
+                zhi[0] -= 1;
+                for i in 0..sw {
+                    self.0[i] = !zhi[i];
+                }
+                self.0[sw] -= 1;
+            } else {
+                self.0[0..sw].fill(0);
+                let c = _sub_slices(&mut self.0, &zhi);
+                if c == 1 {
+                    self.add_small(1);
+                }
             }
+        } else if sw == N {
+            // negate: -x = not(x) + 2
+            for i in 0..N {
+                self.0[i] = !self.0[i]
+            }
+            self.add_small(2);
         } else {
-            let c = _sub_slices(&mut zlo, &zhi);
-            self.0 = zlo;
-            self.1 = 0;
-            if c == 1 {
-                self.add_small(1);
+            let swhi = sw - N;
+            let mut zlo = [0; N];
+            zlo[swhi..].copy_from_slice(&self.0[0..N - swhi]);
+            self.0.copy_within(N - swhi.., 0);
+            if zlo[swhi] != 0 && !self.0[0] != 0 {
+                // common case without carries
+                zlo[swhi] -= 1;
+                for i in swhi..N {
+                    self.0[i] = !zlo[i];
+                }
+                self.0[0] += 1; // add -2^64N == 1
+            } else {
+                self.0[swhi..].fill(0);
+                let c = _sub_slices(&mut self.0, &zlo);
+                if c == 1 {
+                    self.add_small(1);
+                }
             }
         }
+        // Small shift
+        let sb = s % 64;
+        if sb > 0 {
+            let mut carry = 0u64;
+            for i in 0..N {
+                unsafe {
+                    let xi = self.0.get_unchecked_mut(i);
+                    let wlo = (*xi << sb) | carry;
+                    carry = *xi >> (64 - sb);
+                    *xi = wlo;
+                }
+            }
+            self.1 = (self.1 << sb) | carry;
+        }
+        self.reduce();
     }
 
     fn shr(&mut self, s: u32) {

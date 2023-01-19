@@ -187,29 +187,34 @@ impl<'a> Poly<'a> {
 
         // The last layer is Q=product(x-ai) of degree n
         // To get P/Q as a power series in 1/x compute revP/revQ
-        // where rev(F) = t^n F(1/t)
+        // where rev(F) = t^degF F(1/t)
         let q = layers.last().unwrap();
+        let degp = self.c.len() - 1;
         let mut revp = vec![MInt::default(); n + 1];
         let mut revq = vec![MInt::default(); n + 1];
         for i in 0..=n {
-            if i < self.c.len() {
-                revp[n - i] = self.c[i];
+            if i <= degp {
+                revp[i] = self.c[degp - i];
             }
-            revq[n - i] = q[i];
+            revq[i] = q[n - i];
         }
         // If Q is monic, revQ is 1 + O(t)
+        //assert!(revp[0] == zn.one());
         debug_assert!(revq[0] == zn.one());
 
         let mut node = vec![MInt::default(); 2 * n];
         let mut dst = vec![MInt::default(); 2 * n];
         let mut tmp = vec![MInt::default(); 10 * n];
         Self::_div_mod_xn(zn, &mut dst, &revp[..n + 1], &revq[..n + 1], &mut tmp);
+        // P = x^dp (1 + ... t + ... t^dp = revP)
+        // Q = x^dq (1 + ... t + ... t^dq = revQ)
+        // We have computed rev(P)/rev(Q) so
+        // P/Q = t^(n-degp) revP/revQ mod t^n
+        //     = t^n-degp + ... + F[degp] t^n
         // Rewrite the power series:
-        // P/Q = p0 + p1/x + ... + p[n]/x^n
-        // P/Q = p[0] + (p[1] x^n-1 + ... p[n]) / x^n
-        // The constant can be dropped for the residue computation.
-        for i in 0..=n {
-            node[i] = dst[n - i];
+        // P/Q = (F[0] X^degp + ... + F[degp]) / x^n
+        for i in 0..=degp {
+            node[degp - i] = dst[i];
         }
         // For each layer:
         // express P/Q1Q2 as polynomial / 2^(k+1)
@@ -240,26 +245,22 @@ impl<'a> Poly<'a> {
                 // F = P/Q1Q2 = a[2k-1] / x + ... + a[0] / x^2k
                 // Q2 = x^k + b[k-1] x^k-1 + ... + b[0]
                 // middlemul(F/x, Q2) = coefficients of F*(Q2-x^k) for 1/x .. 1/x^k
-                Self::_middlemul(
+                Self::_middlemul_xn(
                     zn,
                     &mut dst[idx1..idx1 + degq],
-                    &node[idx1 + 1..idx1 + 2 * degq],
+                    &node[idx1..idx1 + 2 * degq],
                     &q2[..degq],
                     &mut tmp,
                 );
-                Self::_middlemul(
+                Self::_middlemul_xn(
                     zn,
                     &mut dst[idx2..idx2 + degq],
-                    &node[idx1 + 1..idx1 + 2 * degq],
+                    &node[idx1..idx1 + 2 * degq],
                     &q1[..degq],
                     &mut tmp,
                 );
-                // Re-add terms for the leading x^k of Q2.
-                // Beware to use node[idx1] before writing to it.
-                for i in 0..degq {
-                    node[idx2 + i] = zn.add(&node[idx1 + i], &dst[idx2 + i]);
-                    node[idx1 + i] = zn.add(&node[idx1 + i], &dst[idx1 + i]);
-                }
+                node[idx1..idx1 + degq].copy_from_slice(&dst[idx1..idx1 + degq]);
+                node[idx2..idx2 + degq].copy_from_slice(&dst[idx2..idx2 + degq]);
             }
         }
         // Now each leaf contains the results
@@ -484,6 +485,34 @@ impl<'a> Poly<'a> {
         Self::_add(zn, &mut z[half_up..q.len()], &tmp1[..half]);
     }
 
+    /// Middle product of p by x^n + q
+    /// This special case is common during multipoint evaluation.
+    ///
+    /// p = p[2n-1] x^2n-1 + ... + p[0]
+    /// q = x^n + q[n-1] + ... + q[0]
+    /// Result = n coefficients of pq (x^(2n-1) ... x^n)
+    fn _middlemul_xn(zn: &ZmodN, z: &mut [MInt], p: &[MInt], q: &[MInt], tmp: &mut [MInt]) {
+        let degq = q.len();
+        Self::_middlemul(zn, z, &p[1..], q, tmp);
+        for i in 0..degq {
+            z[i] = zn.add(&z[i], &p[i]);
+        }
+    }
+
+    /// Middle product of p by 1 + xq (dual to [_middlemul_xn])
+    /// This special case is common during multipoint evaluation.
+    ///
+    /// p = p[2n-1] x^2n-1 + ... + p[0]
+    /// q = q[n-1] x^n + ... + q[0] x + 1
+    /// Result = n coefficients of pq (x^(2n-1) ... x^n)
+    fn _middlemul_1x(zn: &ZmodN, z: &mut [MInt], p: &[MInt], q: &[MInt], tmp: &mut [MInt]) {
+        let degq = q.len();
+        Self::_middlemul(zn, z, &p[..p.len() - 1], q, tmp);
+        for i in 0..degq {
+            z[i] = zn.add(&z[i], &p[i + degq]);
+        }
+    }
+
     /// Slow method for testing purposes.
     pub fn mul_basic(p: &'a Poly<'a>, q: &'a Poly<'a>) -> Poly<'a> {
         let mut z = vec![];
@@ -528,12 +557,32 @@ impl<'a> Poly<'a> {
 
     // Inverse and quotient modulo x^n
     // See [Hanrot-Quercia-Zimmerman, section 5.1]
+    //
+    // In multipoint evaluation, the size of p is usually 2^k + 1
     fn _inv_mod_xn(zn: &ZmodN, z: &mut [MInt], p: &[MInt], tmp: &mut [MInt]) {
-        assert!(tmp.len() >= 4 * p.len());
+        if p[0] == zn.one() {
+            match p.len() {
+                2 => {
+                    // 1/(1+ax) = 1-ax
+                    z[0] = zn.one();
+                    z[1] = zn.sub(&zn.zero(), &p[1]);
+                    return;
+                }
+                3 => {
+                    // 1/(1+ax+bx^2) = 1-ax+(a^2-b)x^2
+                    z[0] = zn.one();
+                    z[1] = zn.sub(&zn.zero(), &p[1]);
+                    z[2] = zn.sub(&zn.mul(&p[1], &p[1]), &p[2]);
+                    return;
+                }
+                _ => {}
+            }
+        };
         if p.len() == 1 {
             z[0] = zn.inv(p[0]).unwrap();
             return;
         }
+        assert!(tmp.len() >= 4 * p.len());
         // 1 / (P0 + P1x) = 1 / P0 - P1 x / P0^2
         // Inverse of size n need 3 half multiplies.
         // [Hanrot-Quercia-Zimmerman, section 4]
@@ -546,11 +595,27 @@ impl<'a> Poly<'a> {
         // In P we take 1..2*half_up
         let (tmplo, tmphi) = tmp.split_at_mut(half_up);
         let (tmp_p, tmp_mul) = tmphi.split_at_mut(p.len());
-        tmp_p[..p.len() - 1].copy_from_slice(&p[1..]);
-        tmp_p[p.len() - 1..].fill(MInt::default());
-        Self::_middlemul(zn, tmplo, &tmp_p[..2 * half_up - 1], &z[..half_up], tmp_mul);
+        // p = p0 + x A + x^n+1 B
+        // 1/q = 1 + x C
+        // Compute: middle product(1 + x C, A + x^n B)
+        // = (1 + x C, A + x^n B) [x^n .. x^(2n-1)]
+        // = B + middle product(C, A..B)
+        if z[0] == zn.one() && (half_up - 1) & (half_up - 2) == 0 {
+            debug_assert!(p.len() - 1 == 2 * (half_up - 1));
+            Self::_middlemul_1x(zn, tmplo, &p[1..], &z[1..half_up], tmp_mul);
+        } else {
+            tmp_p[..p.len() - 1].copy_from_slice(&p[1..]);
+            tmp_p[p.len() - 1..].fill(MInt::default());
+            Self::_middlemul(zn, tmplo, &tmp_p[..2 * half_up - 1], &z[..half_up], tmp_mul);
+        }
         // Multiply again by inverse (but we need low words now)
-        Self::_longmul(zn, tmp_p, tmplo, &z[..half], tmp_mul);
+        Self::_longmul(
+            zn,
+            &mut tmp_p[..2 * half],
+            &tmplo[..half],
+            &z[..half],
+            tmp_mul,
+        );
         // Take low words
         z[half_up..p.len()].fill(MInt::default());
         Self::_sub(zn, &mut z[half_up..p.len()], &tmp_p[0..half]);
@@ -573,15 +638,35 @@ impl<'a> Poly<'a> {
         // α in HQZ paper.
         Self::_inv_mod_xn(zn, alpha, &q[..half_up], tmphi);
         // β in HQZ paper.
-        Self::_longmul(zn, tmpmul, &alpha[..half_up], &p[..half_up], tmphi);
-        z[..half_up].copy_from_slice(&tmpmul[..half_up]);
+        if p[0] == zn.one() && alpha[0] == zn.one() && (half_up - 1) & (half_up - 2) == 0 {
+            // Common case: (1+α)(1+β)=1+α+β+αβ where len(α) = 2^k
+            Self::_longmul(
+                zn,
+                &mut tmpmul[..2 * half_up - 2],
+                &alpha[1..half_up],
+                &p[1..half_up],
+                tmphi,
+            );
+            z[0] = zn.one();
+            z[1] = zn.add(&alpha[1], &p[1]);
+            for i in 2..half_up {
+                z[i] = zn.add(&tmpmul[i - 2], &zn.add(&alpha[i], &p[i]));
+            }
+        } else {
+            Self::_longmul(zn, tmpmul, &alpha[..half_up], &p[..half_up], tmphi);
+            z[..half_up].copy_from_slice(&tmpmul[..half_up]);
+        }
         // Hensel lift mod x^n
         // Get P1 / Q0^2 as a middle product
-        // Shift by one like inverse:
-        tmpmul[..q.len() - 1].copy_from_slice(&q[1..]);
-        tmpmul[q.len() - 1..].fill(MInt::default());
         // γ in HQZ paper.
-        Self::_middlemul(zn, tmparg, &tmpmul[..2 * half_up - 1], &z[..half_up], tmphi);
+        if z[0] == zn.one() && (half_up - 1) & (half_up - 2) == 0 {
+            Self::_middlemul_1x(zn, tmparg, &q[1..], &z[1..half_up], tmphi);
+        } else {
+            // Shift by one like inverse:
+            tmpmul[..q.len() - 1].copy_from_slice(&q[1..]);
+            tmpmul[q.len() - 1..].fill(MInt::default());
+            Self::_middlemul(zn, tmparg, &tmpmul[..2 * half_up - 1], &z[..half_up], tmphi);
+        }
         // Subtract p_hi-γ and multiply (length = half)
         for i in 0..half {
             tmparg[i] = zn.sub(p[half_up + i], tmparg[i]);
