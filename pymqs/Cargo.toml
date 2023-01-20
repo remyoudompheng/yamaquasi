@@ -11,5 +11,6 @@ crate-type = ["cdylib"]
  
 [dependencies]
 pyo3 = { version = "0.17", features = ["extension-module"] }
+rayon = "1.6"
 yamaquasi = { path = ".." }
 

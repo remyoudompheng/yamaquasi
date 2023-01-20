@@ -16,6 +16,7 @@ use yamaquasi::{self, Algo, Preferences, Uint, Verbosity};
 #[pymodule]
 fn pymqs(_: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(factor, m)?)?;
+    m.add_function(wrap_pyfunction!(ecm, m)?)?;
     Ok(())
 }
 
@@ -54,6 +55,78 @@ fn factor(
     let factors = py.allow_threads(|| yamaquasi::factor(n, alg, &prefs));
     let l = PyList::empty(py);
     for f in factors {
+        // Use string for conversion.
+        // FIXME: this is ugly.
+        let s = CString::new(f.to_string()).unwrap();
+        let sptr = s.as_ptr();
+        let nullptr: *mut *mut i8 = std::ptr::null::<*mut i8>() as *mut _;
+        let obj = unsafe {
+            let obj_ptr = PyLong_FromString(sptr, nullptr, 0);
+            PyObject::from_owned_ptr(py, obj_ptr)
+        };
+        l.append(obj)?;
+    }
+    Ok(l.into())
+}
+
+#[pyfunction(verbose = "\"silent\"", threads = "None")]
+fn ecm(
+    py: Python<'_>,
+    npy: &PyLong,
+    curves: u64,
+    b1: u64,
+    b2: f64,
+    verbose: &str,
+    threads: Option<usize>,
+) -> PyResult<Py<PyList>> {
+    let verbosity =
+        Verbosity::from_str(verbose).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let prefs = Preferences {
+        threads,
+        verbosity,
+        ..Preferences::default()
+    };
+    let n = Uint::from_str(&npy.to_string()).map_err(|_| {
+        PyValueError::new_err(format!(
+            "Yamaquasi only accepts positive integers with at most 150 decimal digits"
+        ))
+    })?;
+    if n.bits() > 512 {
+        return Err(PyValueError::new_err(format!(
+            "Yamaquasi only accepts positive integers with at most 150 decimal digits"
+        )));
+    }
+    let tpool: Option<rayon::ThreadPool> = prefs.threads.map(|t| {
+        if prefs.verbose(Verbosity::Verbose) {
+            eprintln!("Using a pool of {t} threads");
+        }
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(t)
+            .build()
+            .expect("cannot create thread pool")
+    });
+    let tpool = tpool.as_ref();
+    const DS: &[u64] = &[
+        210, 420, 630, 1050, 2310, 4620, 9240, 19110, 39270, 79170, 159390, 324870, 690690,
+    ];
+    let d = *DS
+        .iter()
+        .min_by_key(|&&_d| (b2 as i64 - _d as i64 * _d as i64).abs())
+        .unwrap();
+    let result = py.allow_threads(|| {
+        yamaquasi::ecm::ecm(n, curves as usize, b1 as usize, d as usize, &prefs, tpool)
+    });
+    let (p, q) = match result {
+        Some(t) => t,
+        None => {
+            return Err(PyValueError::new_err(format!(
+                "No factors found by ECM B1={b1} D={d} with {curves} curves"
+            )))
+        }
+    };
+
+    let l = PyList::empty(py);
+    for f in [p, q] {
         // Use string for conversion.
         // FIXME: this is ugly.
         let s = CString::new(f.to_string()).unwrap();

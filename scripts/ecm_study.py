@@ -7,24 +7,15 @@ proof.arithmetic(False)
 
 # Ideal values of D/B2
 # We cannot reach D > 6 φ(D) (it requires D >= 223092870)
-for k in range(9, 22):
+for k in range(4, 21):
     t = 1 << k
-    # 5 blocks of size 2^k (fixed CPU cost)
     nbest = 0
-    for n in range(int(4.5 * t), 5 * t):
-        if 0.9 <= euler_phi(n) / t <= 1.0:
+    for n in range(int((k // 2 - 1) * t), 12 * t):
+        if 0.80 <= euler_phi(n) / 2 / t <= 1.01:
             nbest = n
     phi = euler_phi(nbest) // 2
-    print(f"D={nbest} B2={float(nbest**2):.3e} φ(D)/2={phi} (10 blocks size 2^{k-1})")
-    nbest = 0
-    for n in range(int(5.2 * t), int(5.5 * t)):
-        if 0.9 <= euler_phi(n) / t <= 1.0:
-            nbest = n
-    if not nbest:
-        continue
-    phi = euler_phi(nbest) // 2
-    print(f"D={nbest} B2={float(nbest**2):.3e} φ(D)/2={phi} (11 blocks size 2^{k-1})")
-
+    for d2 in [2 * t, 3 * t, 4 * t]:
+        print(f"D1={nbest} D2={d2} B2={float(d2*nbest):.3e} φ(D)/2={phi} ({d2//t} blocks size 2^{k-1})")
 
 def analyze(primes, x, y, expect=1):
     stats1, stats2 = [], []

@@ -189,7 +189,7 @@ pub fn ecm(
                 return Some((Uint::from(p), n / Uint::from(p)));
             }
         };
-        if let res @ Some((p, _)) = ecm_curve(&sb, &zn, &c) {
+        if let res @ Some((p, _)) = ecm_curve(&sb, &zn, &c, prefs.verbosity) {
             if prefs.verbose(Verbosity::Info) {
                 eprintln!("ECM success {}/{curves} for special Edwards curve G=({x1}/{x2},{y1}/{y2}) p={p} elapsed={:.3}s",
                 idx + 1,
@@ -252,7 +252,7 @@ pub fn ecm(
                 return Some((Uint::from(p), n / Uint::from(p)));
             }
         };
-        if let res @ Some((p, _)) = ecm_curve(&sb, &zn, &c) {
+        if let res @ Some((p, _)) = ecm_curve(&sb, &zn, &c, prefs.verbosity) {
             if prefs.verbose(Verbosity::Info) {
                 eprintln!(
                     "ECM success {}/{curves} for Edwards curve d=({}/{})² G=({},{}) p={p} elapsed={:.3}s",
@@ -288,9 +288,10 @@ pub fn ecm(
     None
 }
 
-fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve) -> Option<(Uint, Uint)> {
+fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve, verbosity: Verbosity) -> Option<(Uint, Uint)> {
     let n = &zn.n;
     // ECM stage 1
+    let start1 = std::time::Instant::now();
     let mut g = c.gen();
     for block in sb.factors.chunks(4) {
         for &f in block {
@@ -311,6 +312,7 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve) -> Option<(Uint, Uint)> {
         c.zn.to_int(c.d),
         c.zn.n
     );
+    let elapsed1 = start1.elapsed();
 
     // ECM stage 2
     // The order of G (hopefully) no longer has small prime factors.
@@ -324,6 +326,25 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve) -> Option<(Uint, Uint)> {
     // [ad]G and [abs(b)]G have the same coordinate y.
     //
     // After stage 1 we know that [ad]G and [abs(b)]G are never zero.
+    let start2 = std::time::Instant::now();
+    let logtime = || {
+        if verbosity >= Verbosity::Debug {
+            let elapsed2 = start2.elapsed();
+            if elapsed2.as_secs_f64() < 0.01 {
+                eprintln!(
+                    "ECM stage1={:.6}s stage2={:.6}s",
+                    elapsed1.as_secs_f64(),
+                    elapsed2.as_secs_f64()
+                );
+            } else {
+                eprintln!(
+                    "ECM stage1={:.3}s stage2={:.3}s",
+                    elapsed1.as_secs_f64(),
+                    elapsed2.as_secs_f64()
+                );
+            }
+        }
+    };
 
     // Prepare values of abs(b): there are phi(d)/2 < d/4 such values.
     let mut bs = Vec::with_capacity(sb.d / 4);
@@ -382,6 +403,7 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve) -> Option<(Uint, Uint)> {
             if idx % 8 == 0 || idx == gsteps.len() - 1 {
                 let d = Integer::gcd(n, &Uint::from(buffer));
                 if d > Uint::ONE && d < *n {
+                    logtime();
                     return Some((d, n / d));
                 }
             }
@@ -400,11 +422,13 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve) -> Option<(Uint, Uint)> {
             if idx % 8 == 0 || idx == vals.len() - 1 {
                 let d = Integer::gcd(n, &Uint::from(buffer));
                 if d > Uint::ONE && d < *n {
+                    logtime();
                     return Some((d, n / d));
                 }
             }
         }
     }
+    logtime();
     None
 }
 
@@ -825,7 +849,7 @@ fn test_ecm_curve() {
     // order: 2^2 * 7 * 19 * 29 * 347 * 503 * 223843
     let c = Curve::from_point(zn.clone(), 2, 10).unwrap();
     let sb = SmoothBase::new(1000, 630);
-    let res = ecm_curve(&sb, &zn, &c);
+    let res = ecm_curve(&sb, &zn, &c, Verbosity::Silent);
     eprintln!("{:?}", res);
     assert_eq!(res, Some((p, q)));
 }
@@ -841,7 +865,7 @@ fn test_ecm_curve2() {
     // Order has largest prime factors 11329 and 802979
     let c = Curve::from_point(zn.clone(), 2, 132).unwrap();
     let sb = SmoothBase::new(15000, 1050);
-    let res = ecm_curve(&sb, &zn, &c);
+    let res = ecm_curve(&sb, &zn, &c, Verbosity::Silent);
     eprintln!("{:?}", res);
     assert_eq!(res, Some((p, q)));
 }
