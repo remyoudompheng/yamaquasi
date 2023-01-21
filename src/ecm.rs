@@ -353,49 +353,46 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve, verbosity: Verbosity) -> Op
             bs.push(b);
         }
     }
-    // For our values of D the gap between successive values of b is less than 16,
-    // or up to 22 in the case of D > 10000
+    let d = sb.d as u64;
     let g2 = c.double(&g);
     let g4 = c.double(&g2);
-    let g6 = c.add(&g2, &g4);
-    let g8 = c.double(&g4);
-    let g10 = c.add(&g4, &g6);
-    let g12 = c.double(&g6);
-    let g14 = c.add(&g6, &g8);
-    let g16 = c.double(&g8);
-    let g18 = c.add(&g6, &g10);
-    let g20 = c.double(&g10);
-    let g22 = c.add(&g10, &g12);
-    let gaps = [g2, g4, g6, g8, g10, g12, g14, g16, g18, g20, g22];
+    let mut gaps = vec![g2.clone(), g4];
+    // Baby/giant steps in a single vector.
+    let mut steps = Vec::with_capacity(d as usize / 4 + d as usize);
     // Compute the baby steps
-    let mut bsteps = Vec::with_capacity(sb.d / 4);
     let mut bg = g.clone();
     let mut bexp = 1;
     assert_eq!(bs[0], 1);
-    bsteps.push(bg.clone());
+    steps.push(bg.clone());
+    let mut n_bsteps = 1 as usize;
     for &b in &bs[1..] {
         let gap = b - bexp;
-        bg = c.add(&bg, &gaps[gap / 2 - 1]);
-        bsteps.push(bg.clone());
+        while gaps.len() < gap as usize / 2 {
+            let gap2 = c.add(&g2, &gaps[gaps.len() - 1]);
+            gaps.push(gap2);
+        }
+        bg = c.add(&bg, &gaps[gap as usize / 2 - 1]);
+        steps.push(bg.clone());
+        n_bsteps += 1;
         bexp = b;
     }
     // Compute the giant steps
-    let mut gsteps = Vec::with_capacity(sb.d);
-    let dg = c.scalar64_mul(sb.d as u64, &g);
+    let dg = c.scalar64_mul(d, &g);
     let mut gg = dg.clone();
-    for _ in 0..sb.d {
-        gsteps.push(gg.clone());
+    for _ in 0..d {
+        steps.push(gg.clone());
         gg = c.add(&gg, &dg);
     }
-    // Normalize, 2 modular inversion using batch inversion.
-    batch_normalize(&zn, &mut bsteps);
-    batch_normalize(&zn, &mut gsteps);
-    if sb.d < 4000 {
+    // Normalize, 1 modular inversion using batch inversion.
+    batch_normalize(&zn, &mut steps);
+    let bsteps = &steps[..n_bsteps];
+    let gsteps = &steps[n_bsteps..];
+    if d < 4000 {
         // Compute O(d*phi(d)) products
         let mut buffer = zn.one();
         for (idx, pg) in gsteps.iter().enumerate() {
             // Compute the gcd after each row for finer granularity.
-            for pb in &bsteps {
+            for pb in bsteps {
                 // y(G) - y(B)
                 let delta_y = zn.sub(&pg.1, &pb.1);
                 buffer = zn.mul(&buffer, &delta_y);
