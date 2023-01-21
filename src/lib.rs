@@ -40,6 +40,7 @@ pub type Uint = arith::U1024;
 
 // Top-level functions
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use arith::Num;
 use arith_montgomery::{MInt, ZmodN};
@@ -47,13 +48,17 @@ use num_integer::Integer;
 
 const DEBUG: bool = false;
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct Preferences {
     pub fb_size: Option<u32>,
     pub large_factor: Option<u64>,
     pub use_double: Option<bool>,
     pub threads: Option<usize>,
     pub verbosity: Verbosity,
+    // Yes, storing state variables in a Preferences object
+    // is quite awkward.
+    pm1_done: AtomicBool,
+    eecm_done: AtomicBool,
 }
 
 impl Preferences {
@@ -204,7 +209,10 @@ fn factor_impl(
     match alg {
         Algo::Auto => {
             // Only in automatic mode, for large inputs, Pollard P-1 and ECM can be useful.
-            if n.bits() >= 150 {
+            if n.bits() >= 150 && !prefs.pm1_done.load(Ordering::Relaxed) {
+                if prefs.verbose(Verbosity::Verbose) {
+                    eprintln!("Attempting Pollard P-1");
+                }
                 let start_pm1 = std::time::Instant::now();
                 if let Some((a, b)) = pollard_pm1::pm1_quick(n, prefs.verbosity) {
                     if prefs.verbose(Verbosity::Info) {
@@ -220,6 +228,9 @@ fn factor_impl(
                     factor_impl(b.into(), alg, prefs, factors, tpool);
                     return;
                 } else if prefs.verbose(Verbosity::Info) {
+                    // Once Pollard P-1 has failed, all further runs with smaller
+                    // parameters will probably fail.
+                    prefs.pm1_done.store(true, Ordering::Relaxed);
                     eprintln!(
                         "Pollard P-1 failure in {:.3}s",
                         start_pm1.elapsed().as_secs_f64()

@@ -41,13 +41,12 @@ fn main() {
     }
     let n = Uint::from_str(number).unwrap();
 
-    let prefs = Preferences {
-        fb_size: fb_user,
-        large_factor: large,
-        use_double: double,
-        threads,
-        verbosity: Verbosity::from_str(&v).unwrap(),
-    };
+    let mut prefs = Preferences::default();
+    prefs.fb_size = fb_user;
+    prefs.large_factor = large;
+    prefs.use_double = double;
+    prefs.threads = threads;
+    prefs.verbosity = Verbosity::from_str(&v).unwrap();
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Input number {}", n);
     }

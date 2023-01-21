@@ -44,13 +44,8 @@ fn main() {
         eprintln!("p={p} q={q} => n={}", p * q);
         // Factor
         let n = p * q;
-        let prefs = Preferences {
-            fb_size: None,
-            large_factor: None,
-            use_double: None,
-            threads: None,
-            verbosity: Verbosity::Silent,
-        };
+        let mut prefs = Preferences::default();
+        prefs.verbosity = Verbosity::Silent;
         let alg = Algo::from_str(&mode).unwrap();
         let pq = factor(n, alg, &prefs);
         if pq.len() != 2 {

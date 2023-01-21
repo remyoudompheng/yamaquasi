@@ -17,10 +17,8 @@ fn main() {
         "1814274712676087950344811991522598371991048724422784825007845656050800905627423692122807639509275259938192211611976651772022623688843091923010451",
     )
     .unwrap();
-    let prefs = Preferences {
-        verbosity: Verbosity::Silent,
-        ..Default::default()
-    };
+    let mut prefs = Preferences::default();
+    prefs.verbosity = Verbosity::Silent;
 
     let d_values = [
         120_u64, 210, 462, 1050, 2310, 4620, 9240, 19110, 39270, 79170, 159390, 330330, 690690,

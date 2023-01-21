@@ -29,7 +29,7 @@
 //! TODO: merge exponent base with Pollard P-1
 
 use std::cmp::{max, min};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use num_integer::Integer;
 use rayon::prelude::*;
@@ -161,13 +161,16 @@ pub fn ecm(
     let start = std::time::Instant::now();
     let zn = ZmodN::new(n);
     let sb = SmoothBase::new(b1);
+    // Keep track of how many curves were examined.
+    let iters = AtomicUsize::new(0);
     // Try good curves first. They have large torsion (extra factor 3 or 4)
     // so their order is more probably smooth.
     let done = AtomicBool::new(false);
-    let do_good_curve = |(idx, &(x1, x2, y1, y2))| {
+    let do_good_curve = |&(x1, x2, y1, y2)| {
         if done.load(Ordering::Relaxed) {
             return None;
         }
+        let iter = iters.fetch_add(1, Ordering::SeqCst) + 1;
         if prefs.verbose(Verbosity::Verbose) {
             eprintln!("Trying good Edwards curve G=({x1}/{x2},{y1}/{y2})");
         }
@@ -187,8 +190,7 @@ pub fn ecm(
         };
         if let res @ Some((p, _)) = ecm_curve(&sb, &zn, &c, b2, prefs.verbosity) {
             if prefs.verbose(Verbosity::Info) {
-                eprintln!("ECM success {}/{curves} for special Edwards curve G=({x1}/{x2},{y1}/{y2}) p={p} elapsed={:.3}s",
-                idx + 1,
+                eprintln!("ECM success {iter}/{curves} for special Edwards curve G=({x1}/{x2},{y1}/{y2}) p={p} elapsed={:.3}s",
                 start.elapsed().as_secs_f64());
             }
             done.store(true, Ordering::Relaxed);
@@ -196,46 +198,55 @@ pub fn ecm(
         }
         None
     };
-    if let Some(pool) = tpool {
-        let cs: Vec<_> = GOOD_CURVES[..min(curves, GOOD_CURVES.len())]
-            .iter()
-            .enumerate()
-            .collect();
-        let results: Vec<Option<_>> =
-            pool.install(|| cs.par_iter().map(|&t| do_good_curve(t)).collect());
-        for r in results {
-            if r.is_some() {
-                return r;
+    // Only if they were not tried before.
+    if !prefs.eecm_done.load(Ordering::Relaxed) {
+        if let Some(pool) = tpool {
+            let cs = &GOOD_CURVES[..min(curves, GOOD_CURVES.len())];
+            let results: Vec<Option<_>> =
+                pool.install(|| cs.par_iter().map(|t| do_good_curve(t)).collect());
+            for r in results {
+                if r.is_some() {
+                    return r;
+                }
+            }
+        } else {
+            for (idx, gen) in GOOD_CURVES.iter().enumerate() {
+                if idx >= curves {
+                    return None;
+                }
+                if let Some(res) = do_good_curve(gen) {
+                    return Some(res);
+                }
             }
         }
-    } else {
-        for (idx, gen) in GOOD_CURVES.iter().enumerate() {
-            if idx >= curves {
-                return None;
-            }
-            if let Some(res) = do_good_curve((idx, gen)) {
-                return Some(res);
-            }
-        }
+        // Special Edwards curves failed, do not try them again.
+        prefs.eecm_done.store(true, Ordering::Relaxed);
     }
+
     // Choose curves with torsion Z/2 x Z/4. There is a very easy infinite supply
     // of such curves because (3k+5)² + (4k+5)² = 1 + (5k+7)².
     // They are slightly more smooth than general Edwards curves
     // (exponent of 2 is 4.33 on average instead of 3.66).
-    let curves_k: Vec<_> = (GOOD_CURVES.len() as u32..curves as u32).collect();
+    //
+    // Pseudo-randomize curves to avoid using the same ones when recursing through factors.
+    let (seed1, seed2) = {
+        let n0 = n.digits()[0];
+        (n0 as u32 % 65536, n0 as u32 >> 16)
+    };
+    let curves_k: Vec<_> = (0..curves - iters.load(Ordering::SeqCst))
+        .map(|k| k as u32 * seed1 + seed2)
+        .collect();
     let do_curve = |k: u32| {
         if done.load(Ordering::Relaxed) {
             return None;
         }
         let k = k as u64;
         let (gx, gy) = (3 * k + 8, 4 * k + 9);
-        if prefs.verbose(Verbosity::Debug) {
+        let iter = iters.fetch_add(1, Ordering::SeqCst) + 1;
+        if prefs.verbose(Verbosity::Verbose) {
             eprintln!(
-                "Trying Edwards curve with (2,4)-torsion d=({}/{})² G=({},{})",
+                "Trying Edwards curve with (2,4)-torsion G=({gx},{gy}) d=({}/GxGy)²",
                 5 * k + 7,
-                gx * gy,
-                gx,
-                gy,
             );
         }
         let c = match Curve::from_point(zn.clone(), gx, gy) {
@@ -255,10 +266,8 @@ pub fn ecm(
         if let res @ Some((p, _)) = ecm_curve(&sb, &zn, &c, b2, prefs.verbosity) {
             if prefs.verbose(Verbosity::Info) {
                 eprintln!(
-                    "ECM success {}/{curves} for Edwards curve d=({}/{})² G=({},{}) p={p} elapsed={:.3}s",
-                    k as usize + GOOD_CURVES.len() + 1,
+                    "ECM success {iter}/{curves} for Edwards curve G=({gx},{gy}) d=({}/GxGy)² p={p} elapsed={:.3}s",
                     5 * k + 7,
-                    gx*gy, gx, gy,
                     start.elapsed().as_secs_f64()
                     );
             }
@@ -335,7 +344,7 @@ fn ecm_curve(
     // After stage 1 we know that [ad]G and [abs(b)]G are never zero.
     let start2 = std::time::Instant::now();
     let logtime = || {
-        if verbosity >= Verbosity::Debug {
+        if verbosity >= Verbosity::Verbose {
             let elapsed2 = start2.elapsed();
             if elapsed2.as_secs_f64() < 0.01 {
                 eprintln!(
@@ -611,8 +620,8 @@ impl Curve {
     pub fn from_point(zn: ZmodN, x: u64, y: u64) -> Result<Curve, UnexpectedFactor> {
         assert!(x < 1 << 31 && y < 1 << 31);
         // Compute d = (x²+y²-1) / x²y²
-        let gx = zn.from_int(Uint::from(x));
-        let gy = zn.from_int(Uint::from(y));
+        let gx = zn.from_int(Uint::from(x) % zn.n);
+        let gy = zn.from_int(Uint::from(y) % zn.n);
         // gx*gx + gy*gy - 1
         let dn = Self::fraction_modn(&zn, (x * x + y * y - 1) as i64, 1)?;
         let dd = Self::fraction_modn(&zn, 1, (x * y) as i64)?;

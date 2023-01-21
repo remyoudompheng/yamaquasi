@@ -94,7 +94,7 @@ pub fn siqs(
         }
     }
 
-    let s = SieveSIQS::new(n, &fbase, maxlarge, use_double, mm as usize, Some(prefs));
+    let s = SieveSIQS::new(n, &fbase, maxlarge, use_double, mm as usize, prefs);
 
     // When using multiple threads, each thread will sieve a different A
     // to avoid breaking parallelism during 'prepare_a'.
@@ -215,6 +215,7 @@ fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {
 pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
     // Prepare central parameters and A values.
     let (k, score) = fbase::select_multiplier(n);
+    let prefs = Preferences::default();
     eprintln!("Using fixed multiplier {} (score {:.2}/10)", k, score);
     let n = &(n * Uint::from(k));
 
@@ -260,7 +261,7 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
             eprintln!("Test set M={}k A={} npolys={}", mm / 2048, a0, polys_per_a);
             // sample polynomial
             let a = &prepare_a(&factors, &a0, &fbase0, -(mm as i64) / 2);
-            let s = SieveSIQS::new(n, &fbase0, 0, use_double, mm, None);
+            let s = SieveSIQS::new(n, &fbase0, 0, use_double, mm, &prefs);
             let pol = make_polynomial(&s, n, a, 0);
             eprintln!("min(P) ~ {}", pol.eval(0).0);
             eprintln!("max(P) ~ {}", pol.eval(mm as i64 / 2).0);
@@ -282,7 +283,7 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
                     let factors = &factorss[idx];
                     let maxprime = fbase.bound() as u64;
                     let maxlarge: u64 = maxprime * lf as u64;
-                    let s = SieveSIQS::new(n, &fbase, maxlarge, use_double, mm, None);
+                    let s = SieveSIQS::new(n, &fbase, maxlarge, use_double, mm, &prefs);
                     // Measure metrics
                     let t0 = std::time::Instant::now();
                     let a = &prepare_a(factors, &aint, &fbase, -(mm as i64) / 2);
@@ -1079,7 +1080,7 @@ pub struct SieveSIQS<'a> {
     polys_done: AtomicUsize,
     gap: AtomicUsize,
     target: AtomicUsize,
-    prefs: Preferences,
+    prefs: &'a Preferences,
 }
 
 impl<'a> SieveSIQS<'a> {
@@ -1089,7 +1090,7 @@ impl<'a> SieveSIQS<'a> {
         maxlarge: u64,
         use_double: bool,
         interval_size: usize,
-        prefs: Option<&Preferences>,
+        prefs: &'a Preferences,
     ) -> Self {
         let start_offset = -(interval_size as i64 / 2);
         let mut offsets = vec![0u32; (fb.len() + 15) & !15].into_boxed_slice();
@@ -1116,7 +1117,7 @@ impl<'a> SieveSIQS<'a> {
             polys_done: AtomicUsize::new(0),
             gap: AtomicUsize::new(fb_size),
             target: AtomicUsize::new(fb_size * 8 / 10),
-            prefs: prefs.map(|p| p.clone()).unwrap_or_default(),
+            prefs,
         }
     }
 }
@@ -1275,7 +1276,8 @@ fn test_poly_prepare() {
     let n = Uint::from_str(N240).unwrap();
     let fb = fbase::FBase::new(n, 10000);
     let mm = 1_usize << 20;
-    let s = SieveSIQS::new(&n, &fb, fb.bound() as u64, false, mm, None);
+    let prefs = Preferences::default();
+    let s = SieveSIQS::new(&n, &fb, fb.bound() as u64, false, mm, &prefs);
     // Prepare A values
     // Only test 10 A values and 35 polynomials per A.
     let f = select_siqs_factors(&fb, &n, 9, mm);
