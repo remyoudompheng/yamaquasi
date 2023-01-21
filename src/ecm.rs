@@ -58,48 +58,41 @@ pub fn ecm_auto(
     match n.bits() {
         0..=190 => {
             // Will quite often find a 30-32 bit factor (budget 10-20ms)
-            // B2 = D² = 44100
-            ecm(n, 16, 120, 210, prefs, tpool)
+            ecm(n, 16, 120, 40e3, prefs, tpool)
         }
         191..=220 => {
             // Will quite often find a 36 bit factor (budget <100ms)
-            // B2 = D² = 78400
-            ecm(n, 16, 120, 280, prefs, tpool)
+            ecm(n, 16, 120, 80e3, prefs, tpool)
         }
         221..=250 => {
             // Will quite often find a factor of size 42-46 bits (budget 0.1-0.5s)
-            // B2 = D² = 176400
-            ecm(n, 30, 500, 462, prefs, tpool)
+            ecm(n, 30, 500, 300e3, prefs, tpool)
         }
         251..=280 => {
             // Will quite often find a factor of size 52-56 bits (budget 2-3s)
-            // B2 = D² = 700k
-            ecm(n, 80, 2_000, 1050, prefs, tpool)
+            ecm(n, 80, 2_000, 1e6, prefs, tpool)
         }
         281..=310 => {
             // Will often find a factor of size 58-62 bits (budget 5-10s)
-            // B2 = D² ~= 1.6M
-            ecm(n, 40, 8_000, 2310, prefs, tpool)
+            ecm(n, 40, 8_000, 4e6, prefs, tpool)
         }
         311..=340 => {
             // Will often find a factor of size 64-70 bits (budget 20-30s)
-            // B2 = D² = 4M
-            ecm(n, 40, 25_000, 4410, prefs, tpool)
+            ecm(n, 40, 25_000, 20e6, prefs, tpool)
         }
         341..=370 => {
             // Try to find a factor of size 68-76 bits (budget 1min)
-            // B2 = D² = 11.3M
-            ecm(n, 100, 75_000, 8820, prefs, tpool)
+            ecm(n, 100, 75_000, 70e6, prefs, tpool)
         }
         // For very large numbers, we don't expect quadratic sieve to complete
         // in reasonable time, so all hope is on ECM.
         371..=450 => {
             // Budget is more than 10 minutes
-            ecm(n, 200, 200_000, 19110, prefs, tpool)
+            ecm(n, 200, 200_000, 400e6, prefs, tpool)
         }
         451.. => {
             // Budget is virtually unlimited (hours)
-            ecm(n, 500, 500_000, 38220, prefs, tpool)
+            ecm(n, 500, 500_000, 1e9, prefs, tpool)
         }
     }
 }
@@ -116,37 +109,37 @@ pub fn ecm_only(
     // Since we are using Karatsuba, we can make B1 grow as O(D^1.58)
     match n.bits() {
         // The following parameters work well even for balanced semiprimes.
-        0..=64 => ecm(n, 100, 128, 210, prefs, tpool),
-        65..=80 => ecm(n, 100, 300, 210, prefs, tpool),
-        81..=96 => ecm(n, 300, 1000, 462, prefs, tpool),
-        97..=119 => ecm(n, 1000, 3_000, 1050, prefs, tpool),
+        0..=64 => ecm(n, 100, 128, 40e3, prefs, tpool),
+        65..=80 => ecm(n, 100, 300, 40e3, prefs, tpool),
+        81..=96 => ecm(n, 300, 1000, 200e3, prefs, tpool),
+        97..=119 => ecm(n, 1000, 3_000, 1e6, prefs, tpool),
         // May require 100-300 curves for 72-bit factors
-        120..=144 => ecm(n, 1000, 10_000, 2310, prefs, tpool),
+        120..=144 => ecm(n, 1000, 10_000, 4e6, prefs, tpool),
         145..=168 => {
             // Can find a 80 bit factor after a few dozen curves.
-            ecm(n, 1000, 30_000, 4410, prefs, tpool)
+            ecm(n, 1000, 30_000, 20e6, prefs, tpool)
         }
         169..=192 => {
             // Can find a 90 bit factor after a few hundreds curves.
-            ecm(n, 2000, 100_000, 8820, prefs, tpool)
+            ecm(n, 2000, 100_000, 70e6, prefs, tpool)
         }
         193..=224 => {
             // Should be able to find 100 bit factors after
-            // a few hundred curves (B2=365M)
-            ecm(n, 5000, 300_000, 19110, prefs, tpool)
+            // a few hundred curves
+            ecm(n, 5000, 300_000, 400e6, prefs, tpool)
         }
         225..=256 => {
             // May find 100-120 bit factors after ~1000 curves
             // Similar to GMP-ECM recommended for 35 digit factors.
-            ecm(n, 20, 100_000, 8820, prefs, tpool)
-                .or_else(|| ecm(n, 15000, 1_000_000, 38220, prefs, tpool))
+            ecm(n, 20, 100_000, 80e3, prefs, tpool)
+                .or_else(|| ecm(n, 15000, 1_000_000, 1e9, prefs, tpool))
         }
         257.. => {
             // May find 120-140 bit factors after a few thousand curves.
             // B2 is about 5.8 billion.
             // Similar to GMP-ECM recommended for 40 digit factors.
-            ecm(n, 50, 300_000, 19110, prefs, tpool)
-                .or_else(|| ecm(n, 40000, 3_000_000, 76440, prefs, tpool))
+            ecm(n, 50, 300_000, 400e3, prefs, tpool)
+                .or_else(|| ecm(n, 40000, 3_000_000, 4e9, prefs, tpool))
         }
     }
 }
@@ -156,19 +149,17 @@ pub fn ecm(
     n: Uint,
     curves: usize,
     b1: usize,
-    d: usize,
+    b2: f64,
     prefs: &Preferences,
     tpool: Option<&rayon::ThreadPool>,
 ) -> Option<(Uint, Uint)> {
+    let (b2, _, _) = stage2_params(b2);
     if prefs.verbose(Verbosity::Info) {
-        eprintln!(
-            "Attempting ECM with {curves} curves B1={b1} D={d} (B2={})",
-            d * d
-        );
+        eprintln!("Attempting ECM with {curves} curves B1={b1} B2={b2:e}",);
     }
     let start = std::time::Instant::now();
     let zn = ZmodN::new(n);
-    let sb = SmoothBase::new(b1, d);
+    let sb = SmoothBase::new(b1);
     // Try good curves first. They have large torsion (extra factor 3 or 4)
     // so their order is more probably smooth.
     let done = AtomicBool::new(false);
@@ -189,7 +180,7 @@ pub fn ecm(
                 return Some((Uint::from(p), n / Uint::from(p)));
             }
         };
-        if let res @ Some((p, _)) = ecm_curve(&sb, &zn, &c, prefs.verbosity) {
+        if let res @ Some((p, _)) = ecm_curve(&sb, &zn, &c, b2, prefs.verbosity) {
             if prefs.verbose(Verbosity::Info) {
                 eprintln!("ECM success {}/{curves} for special Edwards curve G=({x1}/{x2},{y1}/{y2}) p={p} elapsed={:.3}s",
                 idx + 1,
@@ -252,7 +243,7 @@ pub fn ecm(
                 return Some((Uint::from(p), n / Uint::from(p)));
             }
         };
-        if let res @ Some((p, _)) = ecm_curve(&sb, &zn, &c, prefs.verbosity) {
+        if let res @ Some((p, _)) = ecm_curve(&sb, &zn, &c, b2, prefs.verbosity) {
             if prefs.verbose(Verbosity::Info) {
                 eprintln!(
                     "ECM success {}/{curves} for Edwards curve d=({}/{})² G=({},{}) p={p} elapsed={:.3}s",
@@ -288,8 +279,15 @@ pub fn ecm(
     None
 }
 
-fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve, verbosity: Verbosity) -> Option<(Uint, Uint)> {
+fn ecm_curve(
+    sb: &SmoothBase,
+    zn: &ZmodN,
+    c: &Curve,
+    b2: f64,
+    verbosity: Verbosity,
+) -> Option<(Uint, Uint)> {
     let n = &zn.n;
+    let (_, d1, d2) = stage2_params(b2);
     // ECM stage 1
     let start1 = std::time::Instant::now();
     let mut g = c.gen();
@@ -346,19 +344,18 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve, verbosity: Verbosity) -> Op
         }
     };
 
-    // Prepare values of abs(b): there are phi(d)/2 < d/4 such values.
-    let mut bs = Vec::with_capacity(sb.d / 4);
-    for b in 1..sb.d / 2 {
-        if Integer::gcd(&b, &sb.d) == 1 {
+    // Prepare values of abs(b): there are phi(d1)/2 < d1/4 such values.
+    let mut bs = Vec::with_capacity(d1 as usize / 4);
+    for b in 1..d1 / 2 {
+        if Integer::gcd(&b, &d1) == 1 {
             bs.push(b);
         }
     }
-    let d = sb.d as u64;
     let g2 = c.double(&g);
     let g4 = c.double(&g2);
     let mut gaps = vec![g2.clone(), g4];
     // Baby/giant steps in a single vector.
-    let mut steps = Vec::with_capacity(d as usize / 4 + d as usize);
+    let mut steps = Vec::with_capacity(d1 as usize / 4 + d2 as usize);
     // Compute the baby steps
     let mut bg = g.clone();
     let mut bexp = 1;
@@ -377,9 +374,9 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve, verbosity: Verbosity) -> Op
         bexp = b;
     }
     // Compute the giant steps
-    let dg = c.scalar64_mul(d, &g);
+    let dg = c.scalar64_mul(d1, &g);
     let mut gg = dg.clone();
-    for _ in 0..d {
+    for _ in 0..d2 {
         steps.push(gg.clone());
         gg = c.add(&gg, &dg);
     }
@@ -387,7 +384,7 @@ fn ecm_curve(sb: &SmoothBase, zn: &ZmodN, c: &Curve, verbosity: Verbosity) -> Op
     batch_normalize(&zn, &mut steps);
     let bsteps = &steps[..n_bsteps];
     let gsteps = &steps[n_bsteps..];
-    if d < 4000 {
+    if d1 < 4000 {
         // Compute O(d*phi(d)) products
         let mut buffer = zn.one();
         for (idx, pg) in gsteps.iter().enumerate() {
@@ -475,14 +472,10 @@ fn batch_normalize(zn: &ZmodN, pts: &mut [Point]) -> Option<()> {
 pub struct SmoothBase {
     /// Chunks of primes multiplied into u64 integers.
     factors: Box<[u64]>,
-    // A number d such that d² ~ B2
-    // In BSGS to check that a point has order B2, we look for
-    // q in [0,d) r in [-d/2,d/2] such that [qd]P = [-r]P
-    d: usize,
 }
 
 impl SmoothBase {
-    pub fn new(b1: usize, d: usize) -> Self {
+    pub fn new(b1: usize) -> Self {
         let primes = fbase::primes(b1 as u32 / 2);
         let mut factors = vec![];
         let mut buffer = 1_u64;
@@ -513,9 +506,48 @@ impl SmoothBase {
         }
         SmoothBase {
             factors: factors.into_boxed_slice(),
-            d,
         }
     }
+}
+
+/// Suitable parameters according to values of B2.
+/// d1: size of "giant steps", such that φ(d1) is small and close to 2^k
+/// d2: number of giant steps, a power of 2 close to φ(d1)/2
+///
+/// For small values where multipoint evaluation is not used,
+/// the power of 2 constraint can be relaxed.
+const STAGE2_PARAMS: &[(f64, u64, u64)] = &[
+    // B2, d1, d2
+    (10e3, 420, 24),    // φ/2=48, 1152 products
+    (20e3, 420, 48),    // φ/2=48, 2304 products
+    (50e3, 630, 80),    // φ/2=72, 5700 products
+    (100e3, 2310, 44),  // φ/2=240
+    (270e3, 1050, 256), // φ/2=120
+    (540e3, 1050, 512),
+    (1.18e6, 2310, 512), // φ/2=240
+    (2.36e6, 2310, 1024),
+    (4.73e6, 4620, 1024),     // φ/2=480
+    (9.5e6, 4620, 2048),      // φ/2=480
+    (19e6, 9240, 2048),       // φ/2=960
+    (38e6, 9240, 4096),       // φ/2=960
+    (117e6, 19110, 6144),     // φ/2=2016
+    (322e6, 39270, 8192),     // φ/2=3840
+    (643e6, 39270, 16384),    // φ/2=3840
+    (1.3e9, 79170, 16384),    // φ/2=8064
+    (2.6e9, 79170, 32768),    // φ/2=8064
+    (5.2e9, 159390, 32768),   // φ/2=15840
+    (10.5e9, 159390, 65536),  // φ/2=15840
+    (21.6e9, 330330, 65536),  // φ/2=31680
+    (43e9, 330330, 131072),   // φ/2=31680
+    (136e9, 690690, 196608),  // φ/2=63360
+    (362e9, 1381380, 262144), // φ/2=126720
+];
+
+fn stage2_params(b2: f64) -> (f64, u64, u64) {
+    *STAGE2_PARAMS
+        .iter()
+        .min_by(|x, y| (x.0 - b2).abs().total_cmp(&(y.0 - b2).abs()))
+        .unwrap()
 }
 
 // Edwards curves
@@ -857,8 +889,8 @@ fn test_ecm_curve() {
     // This curve has smooth order for prime 602768606663711
     // order: 2^2 * 7 * 19 * 29 * 347 * 503 * 223843
     let c = Curve::from_point(zn.clone(), 2, 10).unwrap();
-    let sb = SmoothBase::new(1000, 630);
-    let res = ecm_curve(&sb, &zn, &c, Verbosity::Silent);
+    let sb = SmoothBase::new(1000);
+    let res = ecm_curve(&sb, &zn, &c, 500e3, Verbosity::Silent);
     eprintln!("{:?}", res);
     assert_eq!(res, Some((p, q)));
 }
@@ -873,8 +905,8 @@ fn test_ecm_curve2() {
     // This curve has smooth order for prime 1174273970803390465747303
     // Order has largest prime factors 11329 and 802979
     let c = Curve::from_point(zn.clone(), 2, 132).unwrap();
-    let sb = SmoothBase::new(15000, 1050);
-    let res = ecm_curve(&sb, &zn, &c, Verbosity::Silent);
+    let sb = SmoothBase::new(15000);
+    let res = ecm_curve(&sb, &zn, &c, 1e6, Verbosity::Silent);
     eprintln!("{:?}", res);
     assert_eq!(res, Some((p, q)));
 }

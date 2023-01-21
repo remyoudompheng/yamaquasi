@@ -96,7 +96,7 @@ fn main() {
                 .with_timeout(Duration::from_secs(10))
                 .run_seeded((), |_| for &p in primes24 {
                     let n = Uint::from(p) * p256;
-                    ecm::ecm(n, 16, 120, 280, &prefs, None).unwrap();
+                    ecm::ecm(n, 16, 120, 280.*280., &prefs, None).unwrap();
                 })
         },
     }
@@ -133,7 +133,7 @@ fn main() {
             }
             let start = std::time::Instant::now();
             // Use P256 so what ECM cannot work.
-            let res = ecm::ecm(p256, 1, b1, d, &prefs, None);
+            let res = ecm::ecm(p256, 1, b1, (d * d) as f64, &prefs, None);
             assert!(res.is_none());
             eprintln!(
                 "p256 ECM(B1={b1},D={d}) in {:.3}s",
@@ -141,7 +141,7 @@ fn main() {
             );
 
             let start = std::time::Instant::now();
-            let res = ecm::ecm(p480, 1, b1, d, &prefs, None);
+            let res = ecm::ecm(p480, 1, b1, (d * d) as f64, &prefs, None);
             assert!(res.is_none());
             eprintln!(
                 "p480 ECM(B1={b1},D={d}) in {:.3}s",
@@ -153,7 +153,7 @@ fn main() {
         let d = 8820;
         let start = std::time::Instant::now();
         // Use P256 so what ECM cannot work.
-        let res = ecm::ecm(p256, 1, b1, d, &prefs, None);
+        let res = ecm::ecm(p256, 1, b1, (d * d) as f64, &prefs, None);
         assert!(res.is_none());
         eprintln!(
             "p256 ECM(B1={b1},D={d}) in {:.3}s",
@@ -161,7 +161,7 @@ fn main() {
         );
 
         let start = std::time::Instant::now();
-        let res = ecm::ecm(p480, 1, b1, d, &prefs, None);
+        let res = ecm::ecm(p480, 1, b1, (d * d) as f64, &prefs, None);
         assert!(res.is_none());
         eprintln!(
             "p480 ECM(B1={b1},D={d}) in {:.3}s",

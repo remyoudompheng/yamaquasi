@@ -106,21 +106,14 @@ fn ecm(
             .expect("cannot create thread pool")
     });
     let tpool = tpool.as_ref();
-    const DS: &[u64] = &[
-        210, 420, 630, 1050, 2310, 4620, 9240, 19110, 39270, 79170, 159390, 324870, 690690,
-    ];
-    let d = *DS
-        .iter()
-        .min_by_key(|&&_d| (b2 as i64 - _d as i64 * _d as i64).abs())
-        .unwrap();
     let result = py.allow_threads(|| {
-        yamaquasi::ecm::ecm(n, curves as usize, b1 as usize, d as usize, &prefs, tpool)
+        yamaquasi::ecm::ecm(n, curves as usize, b1 as usize, b2, &prefs, tpool)
     });
     let (p, q) = match result {
         Some(t) => t,
         None => {
             return Err(PyValueError::new_err(format!(
-                "No factors found by ECM B1={b1} D={d} with {curves} curves"
+                "No factors found by ECM B1={b1} B2={b2} with {curves} curves"
             )))
         }
     };
