@@ -1,5 +1,45 @@
 from random import getrandbits
-from sage.all import next_prime, factor
+from sage.all import next_prime, factor, primes
+
+# Cost of exponentiation chains when taking w bits at a time.
+def cost(n, w):
+    if w == 1:
+        sq, mul = 0, 0
+    else:
+        # compute 1, ... 2**w-1
+        sq, mul = 1, 2**(w-1) - 1
+    while n >= 0:
+        if n % 2 == 0:
+            sq += 1
+            n = n // 2
+        elif n < 2**w:
+            break
+        else:
+            mul += 1
+            n = n - (n % 2**w)
+    return sq, mul
+
+def pblocks(sz):
+    blocks = []
+    buf = 1
+    for p in primes(500_000):
+        if (buf * p).bit_length() > sz:
+            blocks.append(buf)
+            buf = 1
+        buf *= p
+    blocks.append(buf)
+    return blocks
+
+for blksize in (32, 64, 128, 256):
+    blks = pblocks(blksize)
+    print(f"exponent blocks {len(blks)}x {blksize} bits")
+    for w in range(1, 10):
+        sqs, muls = 0, 0
+        for b in blks:
+            sq, mul = cost(b, w)
+            sqs += sq
+            muls += mul
+        print(f"{blksize=} {w=} cost={sqs+muls} ({sqs}S + {muls}M)")
 
 # Study efficiency of Pollard P-1 for random large primes.
 for sz in list(range(22, 28)) + [48, 60, 72, 84, 96]:

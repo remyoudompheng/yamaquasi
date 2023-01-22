@@ -318,15 +318,75 @@ pub fn pm1_impl(n: Uint, b1: u64, sqrtb2: u64) -> Option<(Uint, Uint)> {
 }
 
 fn exp_modn(zn: &ZmodN, g: &MInt, exp: u64) -> MInt {
-    let mut res = zn.one();
-    let mut sq = g.clone();
-    let mut exp = exp;
-    while exp > 0 {
-        if exp & 1 == 1 {
-            res = zn.mul(&res, &sq);
+    // Start with MSB and consume blocks of 3 bits (optimal for 64 bits).
+    // Note that 1, 3, 5, 7 have symmetrical bits.
+    let mut exprev = exp.reverse_bits();
+    let g2 = zn.mul(g, g);
+    let g3 = zn.mul(g, &g2);
+    let g5 = zn.mul(&g3, &g2);
+    let g7 = zn.mul(&g5, &g2);
+    let mut i = exprev.trailing_zeros();
+    exprev >>= i;
+    let (mut res, mut consumed) = {
+        // Exprev must start with bit "1"
+        match exprev & 7 {
+            1 => {
+                // g or g^2
+                if i > 60 {
+                    // Consume a single bit, we may have reached the end.
+                    (*g, 1)
+                } else {
+                    (g2, 2)
+                }
+            }
+            3 => (g3, 2),
+            5 => (g5, 3),
+            7 => (g7, 3),
+            _ => unreachable!("impossible"),
         }
-        sq = zn.mul(&sq, &sq);
-        exp /= 2;
+    };
+    exprev >>= consumed;
+    i += consumed;
+    while i < 64 {
+        consumed = if exprev & 1 == 0 {
+            res = zn.mul(&res, &res);
+            1
+        } else {
+            match exprev & 7 {
+                1 => {
+                    // x => x^2 g
+                    res = zn.mul(&res, &res);
+                    res = zn.mul(&res, &g);
+                    1
+                }
+                3 => {
+                    // x => x^4 g^3
+                    res = zn.mul(&res, &res);
+                    res = zn.mul(&res, &res);
+                    res = zn.mul(&res, &g3);
+                    2
+                }
+                5 => {
+                    // x => x^8 g^5
+                    res = zn.mul(&res, &res);
+                    res = zn.mul(&res, &res);
+                    res = zn.mul(&res, &res);
+                    res = zn.mul(&res, &g5);
+                    3
+                }
+                7 => {
+                    // x => x^8 g^7
+                    res = zn.mul(&res, &res);
+                    res = zn.mul(&res, &res);
+                    res = zn.mul(&res, &res);
+                    res = zn.mul(&res, &g7);
+                    3
+                }
+                _ => unreachable!("impossible"),
+            }
+        };
+        exprev >>= consumed;
+        i += consumed;
     }
     res
 }
