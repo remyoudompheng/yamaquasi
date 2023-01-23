@@ -38,6 +38,7 @@ use crate::arith;
 use crate::arith_montgomery::{MInt, ZmodN};
 use crate::arith_poly::Poly;
 use crate::fbase;
+use crate::params::stage2_params;
 use crate::{Preferences, Uint, UnexpectedFactor, Verbosity};
 
 /// Run ECM with automatically selected small parameters.
@@ -508,46 +509,6 @@ impl SmoothBase {
             factors: factors.into_boxed_slice(),
         }
     }
-}
-
-/// Suitable parameters according to values of B2.
-/// d1: size of "giant steps", such that φ(d1) is small and close to 2^k
-/// d2: number of giant steps, a power of 2 close to φ(d1)/2
-///
-/// For small values where multipoint evaluation is not used,
-/// the power of 2 constraint can be relaxed.
-const STAGE2_PARAMS: &[(f64, u64, u64)] = &[
-    // B2, d1, d2
-    (10e3, 420, 24),    // φ/2=48, 1152 products
-    (20e3, 420, 48),    // φ/2=48, 2304 products
-    (50e3, 630, 80),    // φ/2=72, 5700 products
-    (100e3, 2310, 44),  // φ/2=240
-    (270e3, 1050, 256), // φ/2=120
-    (540e3, 1050, 512),
-    (1.18e6, 2310, 512), // φ/2=240
-    (2.36e6, 2310, 1024),
-    (4.73e6, 4620, 1024),     // φ/2=480
-    (9.5e6, 4620, 2048),      // φ/2=480
-    (19e6, 9240, 2048),       // φ/2=960
-    (38e6, 9240, 4096),       // φ/2=960
-    (117e6, 19110, 6144),     // φ/2=2016
-    (322e6, 39270, 8192),     // φ/2=3840
-    (643e6, 39270, 16384),    // φ/2=3840
-    (1.3e9, 79170, 16384),    // φ/2=8064
-    (2.6e9, 79170, 32768),    // φ/2=8064
-    (5.2e9, 159390, 32768),   // φ/2=15840
-    (10.5e9, 159390, 65536),  // φ/2=15840
-    (21.6e9, 330330, 65536),  // φ/2=31680
-    (43e9, 330330, 131072),   // φ/2=31680
-    (136e9, 690690, 196608),  // φ/2=63360
-    (362e9, 1381380, 262144), // φ/2=126720
-];
-
-fn stage2_params(b2: f64) -> (f64, u64, u64) {
-    *STAGE2_PARAMS
-        .iter()
-        .min_by(|x, y| (x.0 - b2).abs().total_cmp(&(y.0 - b2).abs()))
-        .unwrap()
 }
 
 // Edwards curves

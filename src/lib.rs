@@ -201,7 +201,7 @@ fn factor_impl(
             // Only in automatic mode, for large inputs, Pollard P-1 and ECM can be useful.
             if n.bits() >= 150 {
                 let start_pm1 = std::time::Instant::now();
-                if let Some((a, b)) = pollard_pm1::pm1_quick(n) {
+                if let Some((a, b)) = pollard_pm1::pm1_quick(n, prefs.verbosity) {
                     if prefs.verbose(Verbosity::Info) {
                         eprintln!(
                             "Pollard P-1 success with factor p={a} in {:.3}s",
@@ -235,7 +235,7 @@ fn factor_impl(
         Algo::Pm1 => {
             // Pure Pollard P-1
             let start_pm1 = std::time::Instant::now();
-            if let Some((a, b)) = pollard_pm1::pm1_only(n) {
+            if let Some((a, b)) = pollard_pm1::pm1_only(n, prefs.verbosity) {
                 if prefs.verbose(Verbosity::Info) {
                     eprintln!(
                         "Pollard P-1 success with factor p={a} in {:.3}s",

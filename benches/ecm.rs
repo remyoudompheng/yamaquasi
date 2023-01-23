@@ -23,24 +23,25 @@ fn main() {
     };
 
     let d_values = [
-        120_u64, 210, 462, 1050, 2310, 4620, 9240, 19110, 39270, 79170, 159390, 324870, 649740,
+        120_u64, 210, 462, 1050, 2310, 4620, 9240, 19110, 39270, 79170, 159390, 330330, 690690,
     ];
     for &d in &d_values {
         let b1 = 200;
+        let b2 = (d as f64) * (d as f64);
         let start = std::time::Instant::now();
         // Use P256 so what ECM cannot work.
-        let res = pm1_impl(p256, b1, d);
+        let res = pm1_impl(p256, b1, b2, Verbosity::Silent);
         assert!(res.is_none());
         eprintln!(
-            "p256 PM1(B1={b1},D={d}) in {:.3}s",
+            "p256 PM1(B1={b1},B2={b2:.2e}) in {:.3}s",
             start.elapsed().as_secs_f64()
         );
 
         let start = std::time::Instant::now();
-        let res = pm1_impl(p480, b1, d);
+        let res = pm1_impl(p480, b1, b2, Verbosity::Silent);
         assert!(res.is_none());
         eprintln!(
-            "p480 PM1(B1={b1},D={d}) in {:.3}s",
+            "p480 PM1(B1={b1},B2={b2:.2e}) in {:.3}s",
             start.elapsed().as_secs_f64()
         );
     }
