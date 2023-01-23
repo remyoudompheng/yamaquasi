@@ -2,7 +2,7 @@ use brunch::Bench;
 use std::str::FromStr;
 use std::time::Duration;
 use yamaquasi::arith::{self, inv_mod, isqrt, sqrt_mod, U1024, U256, U512};
-use yamaquasi::Uint;
+use yamaquasi::{pseudoprime, Uint};
 
 const N256: &str = "23374454829417248628572084580131596971714744792262629806178559231363799527559";
 const N1024: &str = "151952459753478002695019426760010155060843495222227274132379609296400121039669231304773230812180118038110720749720126892606028066428592635259881846540972318178085451540072789829262653604582400850027888747669577446006250152212830539247245081046528476394714357280530544575057923657219245807858740056085355550029";
@@ -128,5 +128,18 @@ brunch::benches! {
         Bench::new("1000x mod const(u256, 65537)")
         .with_samples(50_000)
         .run_seeded((&n, &d), |(n, d)| for _ in 0..1000 { d.divmod_uint(n).1; })
-    }
+    },
+    // Primality test
+    {
+        let p80 = U1024::from_str("908562714656657188071511").unwrap();
+        Bench::new("pseudoprime(80-bit prime)")
+            .with_timeout(Duration::from_secs(1))
+            .run_seeded(p80, |p| assert!(pseudoprime(p)))
+    },
+    {
+        let p160 = U1024::from_str(P160).unwrap();
+        Bench::new("pseudoprime(160-bit prime)")
+            .with_timeout(Duration::from_secs(1))
+            .run_seeded(p160, |p| assert!(pseudoprime(p)))
+    },
 }

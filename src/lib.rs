@@ -42,6 +42,7 @@ pub type Uint = arith::U1024;
 use std::str::FromStr;
 
 use arith::Num;
+use arith_montgomery::{MInt, ZmodN};
 use bnum::cast::CastFrom;
 use num_integer::Integer;
 
@@ -400,6 +401,21 @@ fn check_factors(n: &Uint, factors: &[Uint]) {
 
 /// Probabilistic primality test using a Miller test for small bases.
 pub fn pseudoprime(p: Uint) -> bool {
+    pub fn pow_mod(zp: &ZmodN, x: MInt, exp: Uint) -> MInt {
+        let mut res = zp.one();
+        let mut x = x;
+        let mut exp = exp;
+        while !exp.is_zero() {
+            if exp.bit(0) {
+                res = zp.mul(&res, &x);
+            }
+            x = zp.mul(&x, &x);
+            exp = exp >> 1;
+        }
+        res
+    }
+
+    let zp = ZmodN::new(p);
     let s = (p.low_u64() - 1).trailing_zeros();
     for &b in fbase::SMALL_PRIMES {
         if p.to_u64() == Some(b) {
@@ -409,16 +425,15 @@ pub fn pseudoprime(p: Uint) -> bool {
             // Bases up to 37 are enough for 64-bit integers.
             break;
         }
-        let mut pow = arith::pow_mod(Uint::from(b), Uint::cast_from(p) >> s, Uint::cast_from(p));
-        let p = Uint::cast_from(p);
-        let pm1 = p - Uint::from(1u64);
-        let mut ok = pow.to_u64() == Some(1) || pow == pm1;
+        let mut pow = pow_mod(&zp, zp.from_int(b.into()), p >> s);
+        let pm1 = zp.sub(&zp.zero(), &zp.one());
+        let mut ok = pow == zp.one() || pow == pm1;
         for _ in 0..s {
-            pow = (pow * pow) % p;
+            pow = zp.mul(&pow, &pow);
             if pow == pm1 {
                 ok = true;
                 break;
-            } else if pow.to_u64() == Some(1) {
+            } else if pow == zp.one() {
                 break;
             }
         }

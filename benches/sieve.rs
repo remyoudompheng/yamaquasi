@@ -14,9 +14,9 @@ fn main() {
         // Eratosthenes sieve
         Bench::new("sieve 1000 primes")
         .run_seeded(1000, fbase::primes),
-        Bench::new("sieve 10000 primes")
+        Bench::new("sieve 10000 primes (until ~100e3)")
         .run_seeded(10000, fbase::primes),
-        Bench::new("sieve 50000 primes")
+        Bench::new("sieve 50000 primes (until ~600e3)")
         .run_seeded(50000, fbase::primes),
         // Polynomial selection
         {

@@ -5,6 +5,8 @@
 //! Routines related to the quadratic sieve factor base.
 //! This file is common to all variants (QS, MPQS, SIQS).
 
+use std::cmp::max;
+
 use crate::arith;
 use crate::arith::Num;
 use crate::pollard_pm1;
@@ -191,19 +193,27 @@ pub fn expected_smooth_magnitude(n: &Uint) -> f64 {
 }
 
 pub fn primes(n: u32) -> Vec<u32> {
-    let bound = (n * 2 * (32 - n.leading_zeros())) as usize;
-    let mut sieve = vec![0; bound];
-
-    let mut primes = vec![];
-    for p in 2..sieve.len() {
-        if sieve[p] == 0 {
+    // The n-th prime is always less than n * n.bit_length()
+    // except for n = 1.
+    let bound = max(100, n * (32 - n.leading_zeros())) as usize;
+    // sieve[i] says that 2i+1 is composite
+    let mut sieve = vec![false; bound / 2];
+    let mut primes = vec![2];
+    for i in 1..sieve.len() {
+        if !sieve[i] {
+            let p = 2 * i + 1;
             primes.push(p as u32);
             if primes.len() == n as usize {
                 break;
             }
-            let mut k = 2 * p as usize;
-            while k < bound {
-                sieve[k] = 1;
+            // No need to sieve numbers above sqrt(bound)
+            if p as u64 * p as u64 > bound as u64 {
+                continue;
+            }
+            // First odd multiple is 3p.
+            let mut k = (p + p / 2) as usize;
+            while k < sieve.len() {
+                sieve[k] = true;
                 k += p
             }
         }
@@ -379,6 +389,13 @@ pub fn cofactor(
         }
     };
     Some((pq?, factors))
+}
+
+#[test]
+fn test_primes() {
+    let ps = primes(50000);
+    assert!(ps.len() == 50000);
+    assert_eq!(ps.last(), Some(&611953));
 }
 
 #[test]
