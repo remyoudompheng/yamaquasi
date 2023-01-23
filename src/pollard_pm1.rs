@@ -40,6 +40,11 @@
 //!
 //! It uses the multipoint evaluation model for large D=sqrt(B2)
 //! where D is such that D ~= 5 φ(D).
+//!
+//! When looking for a large prime order (p=qd+r) using the baby steps giant steps
+//! method, the classical method to test only φ(d)/2 values of r is to use
+//! an even polynomial (x^2): such a large prime exists if g^(qd^2) = g^(r^2).
+//! because (qd^2 - r^2) = (qd-r)(qd+r), allowing to test only r < d/2.
 
 use num_integer::Integer;
 
@@ -342,6 +347,9 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Uint
 }
 
 fn exp_modn(zn: &ZmodN, g: &MInt, exp: u64) -> MInt {
+    if exp == 0 {
+        return zn.one();
+    }
     // Start with MSB and consume blocks of 3 bits (optimal for 64 bits).
     // Note that 1, 3, 5, 7 have symmetrical bits.
     let mut exprev = exp.reverse_bits();
@@ -415,44 +423,56 @@ fn exp_modn(zn: &ZmodN, g: &MInt, exp: u64) -> MInt {
     res
 }
 
+/// Compute g^(i^2) for i = start, start + step, ... (i < bound and gcd(i,d)==1)
+fn exp_squares(zn: &ZmodN, g: MInt, d: u64, range: std::ops::Range<u64>, step: u64) -> Vec<MInt> {
+    let (start, end) = (range.start, range.end);
+    // The factor from an element to the next is:
+    // (start + (k+1) step)^2 - (start + k step)^2 = 2 start step + step^2 (2k+1)
+    let gstep = exp_modn(zn, &g, step);
+    // start^2
+    let mut x = exp_modn(zn, &g, start * start);
+    // Finite difference x[i+1] - [i]
+    let mut dx = exp_modn(zn, &gstep, 2 * start + step);
+    // Order 2 finite difference (constant).
+    let ddx = exp_modn(zn, &gstep, 2 * step);
+    let mut result = Vec::with_capacity((end - start) as usize / step as usize);
+    result.push(x);
+    let mut exp = start;
+    loop {
+        exp += step;
+        if exp >= end {
+            break
+        }
+        x = zn.mul(&x, &dx);
+        dx = zn.mul(&dx, &ddx);
+        if Integer::gcd(&exp, &d) == 1 {
+            result.push(x);
+        }
+    }
+    result
+}
+
 fn pm1_stage2_polyeval(zn: &ZmodN, b2: f64, g: MInt) -> Option<(Uint, Uint)> {
     let (_, d1, d2) = stage2_params(b2);
     // Instead of computing g^p for all primes p in [b1, b2]
     // write the unknown p as qD - r where r < D and gcd(r,D)=1
     // and look for (g^D)^q == g^r modulo some unknown factor.
-    let n = &zn.n;
-    let g2 = zn.mul(&g, &g);
-    let mut gaps = vec![g2];
+    //
+    // When using the degree 2 method, it is enough to check 0 < r < D/2
+    // look for g^(qD^2) == g^(r^2) modulo some unknown factor.
+    // It requires twice as much modular multiplications.
+    //
+    // Instead of using 0 < r < D/2 we can use r=6k+1, 0 < r < D
+    // to keep a rather short arithmeric progression (this is used in GMP-ECM).
+    // This requires n/6 values instead of φ(n)/2 ~ n/10)
 
-    let mut bs = Vec::with_capacity(d1 as usize / 2);
-    for b in 1..d1 {
-        if Integer::gcd(&b, &d1) == 1 {
-            bs.push(b);
-        }
-    }
-    // Compute the baby steps
-    let mut bsteps = Vec::with_capacity(d1 as usize / 2);
-    let mut bg = g.clone();
-    let mut bexp = 1;
-    assert_eq!(bs[0], 1);
-    bsteps.push(bg.clone());
-    for &b in &bs[1..] {
-        let gap = b - bexp;
-        while gaps.len() as u64 <= gap / 2 {
-            gaps.push(zn.mul(gaps[gaps.len() - 1], g2));
-        }
-        bg = zn.mul(&bg, &gaps[gap as usize / 2 - 1]);
-        bsteps.push(bg.clone());
-        bexp = b;
-    }
-    // Compute the giant steps
-    let mut gsteps = Vec::with_capacity(d2 as usize);
-    let dg = exp_modn(zn, &g, d1 as u64);
-    let mut gg = dg.clone();
-    for _ in 0..d2 {
-        gsteps.push(gg.clone());
-        gg = zn.mul(&gg, &dg);
-    }
+    let n = &zn.n;
+    // Compute the baby steps (1 + 6k)^2 up to d1/2
+    assert!(d1 % 6 == 0);
+    let bsteps = exp_squares(zn, g, d1, 1..d1, 6);
+    // Compute the giant steps (i*d)^2 for i in 1..d2
+    let gsteps = exp_squares(zn, g, 1, 0..d1 * d2, d1);
+    debug_assert!(gsteps.len() == d2 as usize);
 
     // Compute:
     // P = product(X - bg[i])
@@ -551,6 +571,15 @@ fn test_pm1_uint() {
     let p = Uint::from_str("703855808397033138741049").unwrap();
     let n = p * p256;
     let Some((p, q)) = pm1_impl(n, 30000, 18e6, v)
+        else { panic!("failed Pollard P-1") };
+    assert_eq!(p, p);
+    assert_eq!(q, p256);
+
+    // p-1 = 2^2 * 3^2 * 11 * 41 * 71 * 379 * 613 * 1051 * 13195979
+    // 13195979 % 9240 = 1259 is small, positive
+    let p = Uint::from_str("3714337881767344119949").unwrap();
+    let n = p * p256;
+    let Some((p, q)) = pm1_impl(n, 2000, 19e6, v)
         else { panic!("failed Pollard P-1") };
     assert_eq!(p, p);
     assert_eq!(q, p256);
