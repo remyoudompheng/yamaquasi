@@ -174,6 +174,10 @@ pub fn ecm(
         let c = match Curve::from_fractional_point(zn.clone(), x1, x2, y1, y2) {
             Ok(c) => c,
             Err(UnexpectedFactor(p)) => {
+                if Uint::from(p) == n {
+                    // Not an actual factor, we have truly divided by zero.
+                    return None;
+                }
                 if prefs.verbose(Verbosity::Info) {
                     eprintln!("Unexpected factor {p}");
                 }
@@ -237,6 +241,10 @@ pub fn ecm(
         let c = match Curve::from_point(zn.clone(), gx, gy) {
             Ok(c) => c,
             Err(UnexpectedFactor(p)) => {
+                if Uint::from(p) == n {
+                    // Not an actual factor, we have truly divided by zero.
+                    return None;
+                }
                 if prefs.verbose(Verbosity::Info) {
                     eprintln!("Unexpected factor {p}");
                 }
@@ -606,7 +614,7 @@ impl Curve {
         let gx = zn.from_int(Uint::from(x));
         let gy = zn.from_int(Uint::from(y));
         // gx*gx + gy*gy - 1
-        let dn = zn.from_int(Uint::from(x * x + y * y - 1));
+        let dn = Self::fraction_modn(&zn, (x * x + y * y - 1) as i64, 1)?;
         let dd = Self::fraction_modn(&zn, 1, (x * y) as i64)?;
         let d = zn.mul(zn.mul(dn, dd), dd);
         Ok(Curve { zn, d, gx, gy })

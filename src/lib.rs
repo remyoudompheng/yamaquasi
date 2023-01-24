@@ -43,7 +43,6 @@ use std::str::FromStr;
 
 use arith::Num;
 use arith_montgomery::{MInt, ZmodN};
-use bnum::cast::CastFrom;
 use num_integer::Integer;
 
 const DEBUG: bool = false;
@@ -524,6 +523,12 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     factor(n, Algo::Siqs, &Preferences::default());
     let n = Uint::from_str("34084481733943226418420736441")?;
     factor(n, Algo::Siqs, &Preferences::default());
+
+    // In pure ECM mode, the factor 75763 = 239*317 is difficult to isolate.
+    // This could cause an infinite loop or a crash.
+    // FIXME: make sure the factorization actually succeeds.
+    let n = Uint::from_str("149765065983515097066869381115702138825777596")?;
+    factor(n, Algo::Ecm, &Preferences::default());
 
     Ok(())
 }
