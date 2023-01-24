@@ -53,7 +53,9 @@ pub fn siqs(
     let fb = prefs.fb_size.unwrap_or(fb_size(n, use_double));
     let fbase = FBase::new(*n, fb);
     if let Err(e) = fbase.check_divisors() {
-        eprintln!("Unexpected divisor {} in factor base", e.0);
+        if prefs.verbose(Verbosity::Info) {
+            eprintln!("Unexpected divisor {} in factor base", e.0);
+        }
         return Err(e);
     }
     let mm = interval_size(n);
