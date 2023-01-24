@@ -401,6 +401,10 @@ fn check_factors(n: &Uint, factors: &[Uint]) {
 
 /// Probabilistic primality test using a Miller test for small bases.
 pub fn pseudoprime(p: Uint) -> bool {
+    // Montgomery arithmetic is only for odd numbers.
+    if !p.bit(0) {
+        return p.to_u64() == Some(2);
+    }
     pub fn pow_mod(zp: &ZmodN, x: MInt, exp: Uint) -> MInt {
         let mut res = zp.one();
         let mut x = x;
@@ -522,4 +526,18 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     factor(n, Algo::Siqs, &Preferences::default());
 
     Ok(())
+}
+
+#[test]
+fn test_pseudoprime() {
+    assert!(pseudoprime(2_u64.into()));
+    assert!(pseudoprime(17_u64.into()));
+    // Large prime
+    assert!(pseudoprime(Uint::from_str("1515019151549030796823931666316891543876480618160148234227332522965297454091879022905608234715852754566536639937").unwrap()));
+    // Some composite number.
+    assert!(!pseudoprime(
+        Uint::from_str("893439027234689082677874957196339924735254319540").unwrap()
+    ));
+    // Carmichael number.
+    assert!(!pseudoprime(9746347772161_u64.into()));
 }

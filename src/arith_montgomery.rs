@@ -86,6 +86,7 @@ impl MInt {
 
 impl ZmodN {
     pub fn new(n: Uint) -> Self {
+        assert!(n.bit(0));
         assert!(n.bits() < Uint::BITS / 2);
         let k = (n.bits() + 63) / 64;
         assert!(n.bits() <= 64 * k);
