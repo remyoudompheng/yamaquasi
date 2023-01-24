@@ -266,7 +266,14 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Uint
             }
             if 1 << expblock.leading_zeros() <= pow {
                 // process exponent block
-                g = exp_modn(&zn, &g, expblock);
+                let gexp = exp_modn(&zn, &g, expblock);
+                if gexp == zn.one() {
+                    // We can reach 1 if φ(n) is B1-smooth.
+                    // No need to continue, maybe the previous value
+                    // was the answer.
+                    break;
+                }
+                g = gexp;
                 expblock = 1;
             }
             expblock *= pow;
@@ -583,4 +590,11 @@ fn test_pm1_uint() {
         else { panic!("failed Pollard P-1") };
     assert_eq!(p, p);
     assert_eq!(q, p256);
+
+    // All factors are smooth:
+    // 271750259454572315341 = 91033 * 6472621 * 461201737
+    let n = Uint::from_str("271750259454572315341").unwrap();
+    let Some((p, q)) = pm1_impl(n, 16384, 40e3, v)
+        else { panic!("failed Pollard P-1") };
+    assert_eq!(p * q, n);
 }
