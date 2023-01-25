@@ -79,11 +79,9 @@ fn ecm(
 ) -> PyResult<Py<PyList>> {
     let verbosity =
         Verbosity::from_str(verbose).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let prefs = Preferences {
-        threads,
-        verbosity,
-        ..Preferences::default()
-    };
+    let mut prefs = Preferences::default();
+    prefs.threads = threads;
+    prefs.verbosity = verbosity;
     let n = Uint::from_str(&npy.to_string()).map_err(|_| {
         PyValueError::new_err(format!(
             "Yamaquasi only accepts positive integers with at most 150 decimal digits"
