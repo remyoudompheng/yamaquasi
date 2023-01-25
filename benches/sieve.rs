@@ -18,6 +18,12 @@ fn main() {
         .run_seeded(10000, fbase::primes),
         Bench::new("sieve 50000 primes (until ~600e3)")
         .run_seeded(50000, fbase::primes),
+        // Multiplier selection
+        {
+            let n = Uint::from_str(PQ128).unwrap();
+            Bench::new("select_multiplier(128-bit n) = Some(...)")
+            .run_seeded(n, |n| { fbase::select_multiplier(n) })
+        },
         // Polynomial selection
         {
             let n = Uint::from_str(PQ256).unwrap();

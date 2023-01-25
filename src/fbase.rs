@@ -119,11 +119,22 @@ pub struct Prime<'a> {
     pub div: &'a arith::Dividers,
 }
 
-pub const SMALL_PRIMES: &[u64] = &[
+pub const SMALL_PRIMES: [u64; 46] = [
     2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97,
     101, 103, 107, 109, 113, 127, 131, 137, 139, 149, 151, 157, 163, 167, 173, 179, 181, 191, 193,
     197, 199,
 ];
+
+pub const SMALL_PRIMES_DIVIDERS: [arith::Dividers; SMALL_PRIMES.len()] = {
+    let dummy = arith::Dividers::new(3);
+    let mut divs = [dummy; SMALL_PRIMES.len()];
+    let mut i = 0;
+    while i < SMALL_PRIMES.len() {
+        divs[i] = arith::Dividers::new(SMALL_PRIMES[i] as u32);
+        i += 1;
+    }
+    divs
+};
 
 const MAX_MULTIPLIER: u32 = 200;
 
@@ -135,8 +146,18 @@ const MAX_MULTIPLIER: u32 = 200;
 pub fn select_multiplier(n: Uint) -> (u32, f64) {
     let mut best: u32 = 1;
     let mut best_score = 0.0;
+    let mut modsquares = [[false; 256]; SMALL_PRIMES.len()];
+    assert!(MAX_MULTIPLIER * MAX_MULTIPLIER < 1 << 16);
+    for i in 0..SMALL_PRIMES.len() {
+        let p = SMALL_PRIMES[i];
+        let div = &SMALL_PRIMES_DIVIDERS[i];
+        for x in 0..=p / 2 {
+            let sq = div.modu16((x * x) as u16);
+            modsquares[i as usize][sq as usize] = true;
+        }
+    }
     for k in 1..MAX_MULTIPLIER {
-        let mag = expected_smooth_magnitude(&(n * Uint::from(k)));
+        let mag = expected_smooth_magnitude(&(n * Uint::from(k)), &modsquares);
         // A multiplier k increases the size of P(x) by sqrt(k)
         let mag = (mag - 0.5 * (k as f64).ln()) / std::f64::consts::LN_2;
         if mag > best_score {
@@ -155,10 +176,10 @@ pub fn select_multiplier(n: Uint) -> (u32, f64) {
 /// Formula is corrected for the weight of 2 (1 instead of 2)
 /// and denominator p-1 instead of p to account for prime
 /// powers.
-pub fn expected_smooth_magnitude(n: &Uint) -> f64 {
+fn expected_smooth_magnitude(n: &Uint, modsquares: &[[bool; 256]]) -> f64 {
     let mut res: f64 = 0.0;
-    for &p in SMALL_PRIMES {
-        let np: u64 = *n % p;
+    for ((pidx, &p), div) in SMALL_PRIMES.iter().enumerate().zip(&SMALL_PRIMES_DIVIDERS) {
+        let np: u64 = div.mod_uint(n);
         let exp = if p == 2 {
             match *n % 8u64 {
                 // Modulo 8:
@@ -182,7 +203,7 @@ pub fn expected_smooth_magnitude(n: &Uint) -> f64 {
             }
         } else if np == 0 {
             1.0 / (p - 1) as f64
-        } else if let Some(_) = arith::sqrt_mod(np, p) {
+        } else if modsquares[pidx][np as usize] {
             2.0 / (p - 1) as f64
         } else {
             0.0

@@ -250,7 +250,7 @@ pub fn select_polys(fb: &FBase, n: &Uint, base: Uint, width: usize) -> Vec<Poly>
 #[doc(hidden)]
 pub fn sieve_for_polys(fb: &FBase, n: &Uint, bmin: Uint, width: usize) -> Vec<(Uint, Uint)> {
     let mut composites = vec![false; width as usize];
-    for &p in fbase::SMALL_PRIMES {
+    for &p in &fbase::SMALL_PRIMES {
         let off = bmin % (p as u64);
         let mut idx = -(off as isize);
         while idx < composites.len() as isize {

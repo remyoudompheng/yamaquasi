@@ -30,7 +30,7 @@ pub fn qsieve(n: u64, v: Verbosity) -> Option<(u64, u64)> {
     let mut primes: Vec<u32> = vec![];
     let mut sqrts: Vec<u32> = vec![];
     let mut divs = vec![];
-    for &p in SMALL_PRIMES {
+    for &p in &SMALL_PRIMES {
         if n % p == 0 {
             return Some((p, n / p));
         }

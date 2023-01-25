@@ -191,19 +191,16 @@ fn mulmod<T: Num>(a: T, b: T, p: T) -> T {
 
 /// A precomputed structure to divide by a static prime number
 /// via Barrett reduction. This is used for primes from the factor base.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Dividers {
-    p: u32,
+    // Multiplier for 64-bit division
+    div64: Divider64,
     // Multiplier for 16-bit division
     // This is used for small primes during sieving.
     m16: u32,
     s16: usize,
     // Multiplier for 31-bit division
     pub div31: Divider31,
-    // Multiplier for 64-bit division
-    m64: u64,
-    r64: u64,
-    s64: usize,
 }
 
 impl Dividers {
@@ -215,10 +212,15 @@ impl Dividers {
     // m must be 32 bit for u31 and 65-bit for u64
     // to obtain correct results. We use 32-bit/64-bit mantissas
     // and thus need to correct the result in the case of u64.
-    pub fn new(p: u32) -> Self {
+    pub const fn new(p: u32) -> Self {
         if p == 2 {
             return Dividers {
-                p,
+                div64: Divider64 {
+                    p: 2,
+                    m64: 1,
+                    r64: 0,
+                    s64: 1,
+                },
                 m16: 1,
                 s16: 1,
                 div31: Divider31 {
@@ -226,42 +228,75 @@ impl Dividers {
                     m31: 1,
                     s31: 1,
                 },
-                m64: 1,
-                r64: 0,
-                s64: 1,
             };
         }
         // Compute 2^k / p rounded up
-        let m128: U256 = (U256::one() << 128) / (p as u64);
-        let sz = m128.bits();
+        let m64 = (1u64 << 63) / p as u64;
+        let sz = 64 - u64::leading_zeros(m64);
         // For 16 bits we can use the exact 17-bit multiplier
-        let m16 = (m128 >> (sz - 17)).low_u64() as u32 + 1; // 17 bits
-        let s16 = 128 + 17 - sz as usize; // m16 >> s16 = m128 >> 128
-        let m64 = (m128 >> (sz - 64)).low_u64() + 1; // 64 bits
-        let r64 = (U256::one() << 64) % (p as u64);
-        let s64 = 128 + 64 - sz as usize; // m64 >> s64 = m128 >> 128
-        assert_eq!(r64, {
-            let m = (m64 - 1) >> (s64 - 64);
-            !m.wrapping_mul(p as u64) + 1
-        });
+        let m16 = (m64 >> (sz - 17)) as u32 + 1; // 17 bits
+        let s16 = 63 + 17 - sz as usize; // m16 >> s16 = m128 >> 128
         Dividers {
-            p,
+            div64: Divider64::new(p as u64),
             m16,
             s16,
             div31: Divider31::new(p),
-            m64,
-            r64,
-            s64,
         }
     }
 
     pub fn modu16(&self, n: u16) -> u16 {
-        if self.p == 2 {
+        if self.div64.p == 2 {
             return n & 1;
         }
         let nm = (n as u64) * (self.m16 as u64);
         let q = (nm >> self.s16) as u16;
-        n - q * self.p as u16
+        n - q * self.div64.p as u16
+    }
+
+    #[inline]
+    pub fn divmod64(&self, n: u64) -> (u64, u64) {
+        self.div64.divmod64(n)
+    }
+
+    pub fn modi64(&self, n: i64) -> u64 {
+        self.div64.modi64(n)
+    }
+
+    pub fn divmod_uint<const N: usize>(&self, n: &BUint<N>) -> (BUint<N>, u64) {
+        self.div64.divmod_uint(n)
+    }
+
+    pub fn mod_uint<const N: usize>(&self, n: &BUint<N>) -> u64 {
+        self.div64.mod_uint(n)
+    }
+}
+
+// Constants for Barrett reduction division by a constant prime.
+// The 64-bit multiplier can only exactly divide 63-bit integers.
+#[derive(Clone, Copy, Debug)]
+pub struct Divider64 {
+    p: u64,
+    m64: u64,
+    r64: u64,
+    s64: usize,
+}
+
+impl Divider64 {
+    pub const fn new(p: u64) -> Self {
+        // Compute 2^127 / p
+        let m127 = (1_u128 << 127) / p as u128;
+        let sz = u128::BITS - u128::leading_zeros(m127);
+        let m64 = (m127 >> (sz - 64)) as u64 + 1; // 64 bits
+        let r64 = ((1_u128 << 64) % (p as u128)) as u64;
+        let s64 = 127 + 64 - sz as usize; // m64 >> s64 = m127 >> 127
+
+        // Sanity check
+        let m = (m64 - 1) >> (s64 - 64);
+        let mp = (!m.wrapping_mul(p as u64)).wrapping_add(1);
+        if mp != r64 {
+            panic!("incorrect divider");
+        }
+        Divider64 { p, m64, r64, s64 }
     }
 
     #[inline]
@@ -332,84 +367,6 @@ impl Dividers {
         }
         carry
     }
-
-    /// Modular inverse. Prime number is supposed to be small (<= 32 bits).
-    /// The algorithm is an extended binary GCD.
-    #[allow(dead_code)]
-    pub fn inv(&self, k: u64) -> Option<u64> {
-        if self.p == 2 {
-            if k % 2 == 0 {
-                return None;
-            } else {
-                return Some(1);
-            }
-        }
-        let k = if k >= self.p as u64 {
-            self.divmod64(k).1
-        } else {
-            k
-        };
-        if k == 0 {
-            return None;
-        }
-        // x and y can never be both divisible by 2.
-        // x is always less than y
-        let (mut x, mut y) = (k, self.p as u64);
-        let (mut a, mut b) = (1i64, 0i64); // x = ak + bp
-        let (mut c, mut d) = (0i64, 1i64); // y = ck + dp
-
-        let k = k as i64;
-        let p = self.p as i64;
-
-        // Use hardware division if bit size is very different.
-        while x != 1 && y > (x << 8) {
-            let (q, r) = (y as u32 / x as u32, y as u32 % x as u32);
-            let q = q as i64;
-            (x, y) = (r as u64, x);
-            (a, b, c, d) = (c - q * a, d - q * b, a, b);
-        }
-        loop {
-            debug_assert!(x as i64 == a * k + b * p);
-            debug_assert!(y as i64 == c * k + d * p);
-            debug_assert!(-p < a && a < p);
-            if x == 1 {
-                if a < 0 {
-                    a += p;
-                }
-                return Some(a as u64);
-            } else if x > y {
-                (x, y) = (y, x);
-                (a, b, c, d) = (c, d, a, b);
-            } else if x % 2 == 0 {
-                x >>= 1;
-                if a % 2 == 0 {
-                    // both a, b even
-                    (a, b) = (a >> 1, b >> 1);
-                } else {
-                    // adjust by an odd term, both become even
-                    if a < 0 {
-                        (a, b) = ((a + p) / 2, (b - k) / 2);
-                    } else {
-                        (a, b) = ((a - p) / 2, (b + k) / 2);
-                    }
-                }
-            } else if y % 2 == 0 {
-                y >>= 1;
-                if c % 2 == 0 {
-                    (c, d) = (c >> 1, d >> 1);
-                } else {
-                    if c < 0 {
-                        (c, d) = ((c + p) / 2, (d - k) / 2);
-                    } else {
-                        (c, d) = ((c - p) / 2, (d + k) / 2);
-                    }
-                }
-            } else {
-                (x, y) = (x, y - x);
-                (a, b, c, d) = (a, b, c - a, d - b);
-            }
-        }
-    }
 }
 
 /// Tests whether n can be written as p^k for k <= 20.
@@ -434,7 +391,7 @@ where
 
 /// A divider for 31-bit integers.
 /// It uses a 32-bit mantissa.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Divider31 {
     pub p: u32,
     pub m31: u32,
@@ -738,22 +695,6 @@ mod tests {
         let n = U1024::from_str("37714305606241449883").unwrap();
         assert_eq!(d.mod_uint(&n), 0);
         assert_eq!(d.divmod_uint(&n), (U1024::from(137554592858779 as u64), 0));
-    }
-
-    #[test]
-    fn test_dividers_inv() {
-        use crate::fbase::primes;
-        let ps = primes(200);
-        for p in ps {
-            let d = Dividers::new(p);
-            let p = p as u64;
-            for i in 0..=2 * p {
-                match d.inv(i) {
-                    None => assert_eq!(i % p, 0),
-                    Some(j) => assert_eq!((i * j) % p, 1),
-                }
-            }
-        }
     }
 
     #[test]

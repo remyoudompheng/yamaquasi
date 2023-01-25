@@ -139,11 +139,17 @@ pub fn factor(n: Uint, alg: Algo, prefs: &Preferences) -> Vec<Uint> {
         eprintln!("Testing small prime divisors");
     }
     let mut nred = n;
-    for &p in fbase::SMALL_PRIMES {
-        while nred % (p as u64) == 0 {
-            let p = Uint::from(p);
-            factors.push(p);
-            nred /= p;
+    for (&p, div) in fbase::SMALL_PRIMES
+        .iter()
+        .zip(&fbase::SMALL_PRIMES_DIVIDERS)
+    {
+        loop {
+            let (q, r) = div.divmod_uint(&nred);
+            if r != 0 {
+                break;
+            }
+            nred = q;
+            factors.push(p.into());
             if prefs.verbose(Verbosity::Info) {
                 eprintln!("Found small factor {p}");
             }
@@ -420,7 +426,7 @@ pub fn pseudoprime(p: Uint) -> bool {
 
     let zp = ZmodN::new(p);
     let s = (p.low_u64() - 1).trailing_zeros();
-    for &b in fbase::SMALL_PRIMES {
+    for &b in &fbase::SMALL_PRIMES {
         if p.to_u64() == Some(b) {
             return true;
         }
