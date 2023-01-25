@@ -399,7 +399,7 @@ fn ecm_curve(
         gg = c.add(&gg, &dg);
     }
     // Normalize, 1 modular inversion using batch inversion.
-    batch_normalize(&zn, &mut steps);
+    batch_normalize(zn, &mut steps);
     let bsteps = &steps[..n_bsteps];
     let gsteps = &steps[n_bsteps..];
     if d1 < 4000 {
@@ -702,8 +702,8 @@ impl Curve {
         // https://eprint.iacr.org/2007/455.pdf
         // We find that m=7 is optimal for 64-bit blocks (~14 adds instead of 28 for ~56-bit blocks)
         // For 32-bit blocks, the optimal value is m=5 (7 adds instead of 12 for ~22-bit blocks)
-        let p2 = self.double(&p);
-        let p3 = self.add(&p, &p2);
+        let p2 = self.double(p);
+        let p3 = self.add(p, &p2);
         let p5 = self.add(&p3, &p2);
         let p7 = self.add(&p5, &p2);
         let gaps = [p, &p3, &p5, &p7];
@@ -719,9 +719,9 @@ impl Curve {
             if op == 0 {
                 q = self.double(&q);
             } else if op > 0 {
-                q = self.add(&q, &gaps[op as usize / 2]);
+                q = self.add(&q, gaps[op as usize / 2]);
             } else if op < 0 {
-                q = self.sub(&q, &gaps[(-op) as usize / 2]);
+                q = self.sub(&q, gaps[(-op) as usize / 2]);
             }
         }
         q

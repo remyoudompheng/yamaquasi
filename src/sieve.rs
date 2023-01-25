@@ -210,7 +210,7 @@ impl<'a> Sieve<'a> {
                         else { unreachable!("large primes must have 2 roots") };
                     let (o1, o2) = (o1 as isize, o2 as isize);
                     let p = p as isize;
-                    let rmax = max(o1, o2) as isize;
+                    let rmax = max(o1, o2);
                     let m = interval_size - p - rmax;
                     while kp < m {
                         table.add((kp + o1) as usize, pbucket);
@@ -219,12 +219,12 @@ impl<'a> Sieve<'a> {
                         table.add((kp + p + o2) as usize, pbucket);
                         kp += 2 * p;
                     }
-                    let mut off = o1 as isize + kp;
+                    let mut off = o1 + kp;
                     while off < interval_size {
                         table.add(off as usize, pbucket);
                         off += p;
                     }
-                    let mut off = o2 as isize + kp;
+                    let mut off = o2 + kp;
                     while off < interval_size {
                         table.add(off as usize, pbucket);
                         off += p;
@@ -343,7 +343,7 @@ impl<'a> Sieve<'a> {
                         // Almost always true
                         let m = max(off1, off2);
                         let p = p as usize;
-                        let mut kp = 0 as usize;
+                        let mut kp = 0;
                         let ll = len - p - m;
                         while kp < ll {
                             // both kp+off1 and kp+off2 are in range
@@ -351,7 +351,7 @@ impl<'a> Sieve<'a> {
                             *blk.get_unchecked_mut(kp + off2) += log;
                             *blk.get_unchecked_mut(kp + p + off1) += log;
                             *blk.get_unchecked_mut(kp + p + off2) += log;
-                            kp += 2 * p as usize;
+                            kp += 2 * p;
                         }
                         off1 += kp;
                         off2 += kp
@@ -466,8 +466,8 @@ impl<'a> Sieve<'a> {
 
     fn prime_bucket_bounds(&self, pbucket: usize, logp: usize) -> (usize, usize) {
         let idxs = &self.fbase.idx_by_log;
-        let base = idxs[logp] as usize;
-        let next = idxs[logp + 1] as usize;
+        let base = idxs[logp];
+        let next = idxs[logp + 1];
         let bsz = PRIME_BUCKET_SIZES[logp - LARGE_PRIME_LOG];
         (base + pbucket * bsz, min(next, base + (pbucket + 1) * bsz))
     }
@@ -552,7 +552,6 @@ impl<'a> Sieve<'a> {
         let mut facs = vec![vec![]; res.len()];
         for i in 0..self.fbase.idx_by_log[15] {
             // Prime less than BLOCK_SIZE/2
-            let i = i as usize;
             unsafe {
                 let pdiv = self.fbase.divs.get_unchecked(i);
                 let off1 = self.lo_prev[2 * i];

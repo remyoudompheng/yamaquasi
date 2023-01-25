@@ -48,7 +48,7 @@ impl FBase {
                 }
                 log = l + 1;
             }
-            primes.push(p as u32);
+            primes.push(p);
             sqrts.push(r as u32);
             divs.push(div);
         }
@@ -232,7 +232,7 @@ pub fn primes(n: u32) -> Vec<u32> {
                 continue;
             }
             // First odd multiple is 3p.
-            let mut k = (p + p / 2) as usize;
+            let mut k = p + p / 2;
             while k < sieve.len() {
                 sieve[k] = true;
                 k += p

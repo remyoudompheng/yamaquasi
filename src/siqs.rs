@@ -146,7 +146,7 @@ pub fn siqs(
 
 fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {
     let mm = s.interval_size;
-    let a = &prepare_a(&factors, a_int, &s.fbase, -(mm as i64) / 2);
+    let a = &prepare_a(&factors, a_int, s.fbase, -(mm as i64) / 2);
     if s.prefs.verbose(Verbosity::Debug) {
         eprintln!(
             "Sieving A={} (factors {})",
@@ -166,8 +166,8 @@ fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {
             return;
         }
 
-        let pol = make_polynomial(&s, s.n, a, idx);
-        siqs_sieve_poly(&s, a, &pol);
+        let pol = make_polynomial(s, s.n, a, idx);
+        siqs_sieve_poly(s, a, &pol);
         // Check status.
         let rlen = {
             let rels = s.rels.read().unwrap();
@@ -282,7 +282,7 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
                     let aint = a_s[idx];
                     let factors = &factorss[idx];
                     let maxprime = fbase.bound() as u64;
-                    let maxlarge: u64 = maxprime * lf as u64;
+                    let maxlarge: u64 = maxprime * lf;
                     let s = SieveSIQS::new(n, &fbase, maxlarge, use_double, mm, &prefs);
                     // Measure metrics
                     let t0 = std::time::Instant::now();
@@ -626,14 +626,14 @@ pub fn select_a(f: &Factors, want: usize) -> Vec<Uint> {
                     break;
                 }
                 if f.nfacs == 2 {
-                    candidates.push(p1 as u64 * p2 as u64);
+                    candidates.push(p1 * p2);
                 } else {
                     for f3 in &f.factors {
                         let p3 = f3.p;
                         if p3 >= p2 {
                             break;
                         }
-                        candidates.push(p1 as u64 * p2 as u64 * p3 as u64);
+                        candidates.push(p1 * p2 * p3);
                     }
                 }
             }
@@ -645,7 +645,7 @@ pub fn select_a(f: &Factors, want: usize) -> Vec<Uint> {
             candidates.truncate(want);
         }
         candidates.sort();
-        return candidates.into_iter().map(|c| Uint::from(c)).collect();
+        return candidates.into_iter().map(Uint::from).collect();
     }
 
     let mut rng: u64 = 0xcafebeefcafebeef;
@@ -800,7 +800,7 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase, start_offset: i64
             if i == 0 {
                 val = val - rp[pidx] as i32 - start_offset as i32;
             }
-            v[pidx] = pdiv.div31.modi32(val) as u32;
+            v[pidx] = pdiv.div31.modi32(val);
         }
     }
     A {
@@ -974,7 +974,6 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
     // type2:
     // poly % p = Bx + C, root is -C/B
     for &pidx in a.factors_idx.iter() {
-        let pidx = pidx as usize;
         let div = &s.fbase.div(pidx);
         let p = s.fbase.p(pidx);
         let bp = div.mod_uint(&b);
@@ -987,7 +986,7 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
             else { unreachable!("no inverse of b={bp} mod p={p}") };
         let r = div.divmod64(cp * binv).1 as u32;
         let off = s.offset_modp[pidx];
-        let r = div.div31.modu31(r + p as u32 - off);
+        let r = div.div31.modu31(r + p - off);
         r1p[pidx] = r;
         r2p[pidx] = r;
     }
@@ -1029,7 +1028,7 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
 // Sieving process
 
 fn siqs_sieve_poly(s: &SieveSIQS, a: &A, pol: &Poly) {
-    let mm = s.interval_size as usize;
+    let mm = s.interval_size;
     let nblocks: usize = mm / BLOCK_SIZE;
     if s.prefs.verbose(Verbosity::Debug) {
         eprintln!(
@@ -1177,7 +1176,7 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
             eprintln!("x={x} smooth {v} cofactor {cofactor}");
         }
         assert!(
-            cofactor == 1 || cofactor > maxprime as u64,
+            cofactor == 1 || cofactor > maxprime,
             "invalid cofactor {}",
             cofactor
         );

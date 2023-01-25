@@ -395,7 +395,7 @@ fn exp_modn(zn: &ZmodN, g: &MInt, exp: u64) -> MInt {
                 1 => {
                     // x => x^2 g
                     res = zn.mul(&res, &res);
-                    res = zn.mul(&res, &g);
+                    res = zn.mul(&res, g);
                     1
                 }
                 3 => {
@@ -448,7 +448,7 @@ fn exp_squares(zn: &ZmodN, g: MInt, d: u64, range: std::ops::Range<u64>, step: u
     loop {
         exp += step;
         if exp >= end {
-            break
+            break;
         }
         x = zn.mul(&x, &dx);
         dx = zn.mul(&dx, &ddx);

@@ -292,7 +292,7 @@ impl Divider64 {
 
         // Sanity check
         let m = (m64 - 1) >> (s64 - 64);
-        let mp = (!m.wrapping_mul(p as u64)).wrapping_add(1);
+        let mp = (!m.wrapping_mul(p)).wrapping_add(1);
         if mp != r64 {
             panic!("incorrect divider");
         }
@@ -303,9 +303,9 @@ impl Divider64 {
     pub fn divmod64(&self, n: u64) -> (u64, u64) {
         let nm = (n as u128) * (self.m64 as u128);
         let q = (nm >> self.s64) as u64;
-        let qp = q * self.p as u64;
+        let qp = q * self.p;
         if qp > n {
-            (q - 1, self.p as u64 - (qp - n))
+            (q - 1, self.p - (qp - n))
         } else {
             (q, n - qp)
         }

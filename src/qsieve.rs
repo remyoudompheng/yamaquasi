@@ -335,9 +335,9 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
     let maybe_two: i64 = if s.only_odds { 2 } else { 1 };
     for (i, facs) in idxs.into_iter().zip(facss) {
         let x = if !backward {
-            Int::from_bits(s.nsqrt) + Int::from(maybe_two * (offset as i64 + i as i64))
+            Int::from_bits(s.nsqrt) + Int::from(maybe_two * (offset + i as i64))
         } else {
-            Int::from_bits(s.nsqrt) - Int::from(maybe_two * (offset as i64 + i as i64 + 1))
+            Int::from_bits(s.nsqrt) - Int::from(maybe_two * (offset + i as i64 + 1))
         };
         let candidate: Int = x * x - Int::from_bits(*n);
         let Some(((p, q), factors)) = fbase::cofactor(

@@ -137,7 +137,7 @@ pub fn mpqs(
                 break;
             } else {
                 eprintln!("Need {} additional relations", gap);
-                target += gap + std::cmp::min(10, fb as usize / 4);
+                target += gap + std::cmp::min(10, fb / 4);
             }
         }
     }
@@ -180,7 +180,7 @@ impl Poly {
     ) -> sieve::SievePrime {
         let off: u32 = div.div31.modi32(offset);
         let shift = |r: u32| -> u32 {
-            if r < off as u32 {
+            if r < off {
                 r + p - off
             } else {
                 r - off
@@ -249,7 +249,7 @@ pub fn select_polys(fb: &FBase, n: &Uint, base: Uint, width: usize) -> Vec<Poly>
 
 #[doc(hidden)]
 pub fn sieve_for_polys(fb: &FBase, n: &Uint, bmin: Uint, width: usize) -> Vec<(Uint, Uint)> {
-    let mut composites = vec![false; width as usize];
+    let mut composites = vec![false; width];
     for &p in &fbase::SMALL_PRIMES {
         let off = bmin % (p as u64);
         let mut idx = -(off as isize);

@@ -221,11 +221,11 @@ fn factor_impl(
                             start_pm1.elapsed().as_secs_f64()
                         );
                     }
-                    factor_impl(a.into(), alg, prefs, factors, tpool);
+                    factor_impl(a, alg, prefs, factors, tpool);
                     if prefs.verbose(Verbosity::Info) {
                         eprintln!("Recursively factor {b}");
                     }
-                    factor_impl(b.into(), alg, prefs, factors, tpool);
+                    factor_impl(b, alg, prefs, factors, tpool);
                     return;
                 } else if prefs.verbose(Verbosity::Info) {
                     // Once Pollard P-1 has failed, all further runs with smaller
@@ -239,11 +239,11 @@ fn factor_impl(
             }
             if n.bits() > 190 {
                 if let Some((a, b)) = ecm::ecm_auto(n, prefs, tpool) {
-                    factor_impl(a.into(), alg, prefs, factors, tpool);
+                    factor_impl(a, alg, prefs, factors, tpool);
                     if prefs.verbose(Verbosity::Info) {
                         eprintln!("Recursively factor {b}");
                     }
-                    factor_impl(b.into(), alg, prefs, factors, tpool);
+                    factor_impl(b, alg, prefs, factors, tpool);
                     return;
                 }
             }
@@ -258,11 +258,11 @@ fn factor_impl(
                         start_pm1.elapsed().as_secs_f64()
                     );
                 }
-                factor_impl(a.into(), alg, prefs, factors, tpool);
+                factor_impl(a, alg, prefs, factors, tpool);
                 if prefs.verbose(Verbosity::Info) {
                     eprintln!("Recursively factor {b}");
                 }
-                factor_impl(b.into(), alg, prefs, factors, tpool);
+                factor_impl(b, alg, prefs, factors, tpool);
                 return;
             } else if prefs.verbose(Verbosity::Info) {
                 eprintln!(
@@ -278,11 +278,11 @@ fn factor_impl(
             // However due to determinism the recursion will go through the
             // same curves, which is not very useful.
             if let Some((a, b)) = ecm::ecm_only(n, prefs, tpool) {
-                factor_impl(a.into(), alg, prefs, factors, tpool);
+                factor_impl(a, alg, prefs, factors, tpool);
                 if prefs.verbose(Verbosity::Info) {
                     eprintln!("Recursively factor {b}");
                 }
-                factor_impl(b.into(), alg, prefs, factors, tpool);
+                factor_impl(b, alg, prefs, factors, tpool);
                 return;
             }
             if prefs.verbose(Verbosity::Info) {
@@ -347,9 +347,9 @@ fn factor_impl(
         Algo::Squfof => unreachable!("impossible"),
         Algo::Pm1 => unreachable!("impossible"),
         Algo::Ecm => unreachable!("impossible"),
-        Algo::Qs => Ok(qsieve::qsieve(nk, &prefs, tpool)),
-        Algo::Mpqs => Ok(mpqs::mpqs(nk, &prefs, tpool)),
-        Algo::Siqs => siqs::siqs(&nk, &prefs, tpool),
+        Algo::Qs => Ok(qsieve::qsieve(nk, prefs, tpool)),
+        Algo::Mpqs => Ok(mpqs::mpqs(nk, prefs, tpool)),
+        Algo::Siqs => siqs::siqs(&nk, prefs, tpool),
     };
     let rels = match rels {
         Ok(rels) => rels,
@@ -461,7 +461,7 @@ pub fn pseudoprime(p: Uint) -> bool {
             return false;
         }
     }
-    return true;
+    true
 }
 
 #[test]
