@@ -36,11 +36,9 @@ fn factor(
 ) -> PyResult<Py<PyList>> {
     let verbosity =
         Verbosity::from_str(verbose).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let prefs = Preferences {
-        threads,
-        verbosity,
-        ..Preferences::default()
-    };
+    let mut prefs = Preferences::default();
+    prefs.threads = threads;
+    prefs.verbosity = verbosity;
     let alg = Algo::from_str(algo).map_err(|e| PyValueError::new_err(e.to_string()))?;
     let n = Uint::from_str(&npy.to_string()).map_err(|_| {
         PyValueError::new_err(format!(
@@ -106,9 +104,8 @@ fn ecm(
             .expect("cannot create thread pool")
     });
     let tpool = tpool.as_ref();
-    let result = py.allow_threads(|| {
-        yamaquasi::ecm::ecm(n, curves as usize, b1 as usize, b2, &prefs, tpool)
-    });
+    let result = py
+        .allow_threads(|| yamaquasi::ecm::ecm(n, curves as usize, b1 as usize, b2, &prefs, tpool));
     let (p, q) = match result {
         Some(t) => t,
         None => {
