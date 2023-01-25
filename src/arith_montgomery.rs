@@ -33,14 +33,19 @@ pub fn mg_mul(n: u64, ninv: u64, x: u64, y: u64) -> u64 {
     mg_redc(n, ninv, (x as u128) * (y as u128))
 }
 
-/// Montgomery reduction (x/R mod n).
+/// Montgomery reduction (x/R mod n), only if x < nR
 #[inline(always)]
 pub fn mg_redc(n: u64, ninv: u64, x: u128) -> u64 {
+    if x as u64 == 0 {
+        return (x >> 64) as u64;
+    }
     // compute -x/N mod R
     let mul: u64 = (x as u64).wrapping_mul(ninv);
     // reduce
     let m = mul as u128 * n as u128;
-    let res = ((x + m) >> 64) as u64;
+    debug_assert!((x as u64).wrapping_add(m as u64) == 0);
+    // The low words always produce a carry.
+    let res = (x >> 64) as u64 + (m >> 64) as u64 + 1;
     if res >= n {
         res - n
     } else {
@@ -77,7 +82,7 @@ impl From<MInt> for Uint {
 }
 
 impl MInt {
-    fn from_uint(n: Uint) -> Self {
+    pub(crate) fn from_uint(n: Uint) -> Self {
         let mut m = MInt::default();
         m.0[..].copy_from_slice(&n.digits()[..MINT_WORDS]);
         m
@@ -123,6 +128,10 @@ impl ZmodN {
 
     pub fn one(&self) -> MInt {
         self.r
+    }
+
+    pub fn words(&self) -> usize {
+        self.k as usize
     }
 
     pub fn from_int(&self, x: Uint) -> MInt {

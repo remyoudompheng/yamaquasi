@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use yamaquasi::arith_montgomery::{MInt, ZmodN};
-use yamaquasi::arith_poly::Poly;
+use yamaquasi::arith_poly::{Poly, PolyRing};
 use yamaquasi::Uint;
 
 fn main() {
@@ -9,14 +9,15 @@ fn main() {
         for degree in [
             30, 60, 120, 240, 480, 960, 1920, 4032, 8192, 16384, 32768, 65536, 131072, 262144,
         ] {
-            let p1: Vec<MInt> = (1..degree)
+            let zr = PolyRing::new(zn, degree);
+            let p1: Vec<MInt> = (1..degree as u64)
                 .map(|x: u64| zn.from_int(Uint::from(x * x * 12345 + x * 1234 + 123)))
                 .collect();
-            let p2: Vec<MInt> = (1..degree)
+            let p2: Vec<MInt> = (1..degree as u64)
                 .map(|x: u64| zn.from_int(Uint::from(x * x * 56789 + x * 6789 + 789)))
                 .collect();
-            let pol1 = Poly::new(&zn, p1);
-            let pol2 = Poly::new(&zn, p2);
+            let pol1 = Poly::new(&zr, p1);
+            let pol2 = Poly::new(&zr, p2);
 
             let start = std::time::Instant::now();
             let res_f = Poly::mul_fft(&pol1, &pol2);
@@ -75,14 +76,15 @@ fn main() {
     for degree in [
         30, 60, 120, 240, 480, 960, 1920, 4032, 8192, 16384, 32768, 65536, 131072,
     ] {
-        let p1: Vec<MInt> = (1..degree)
+        let zr = PolyRing::new(&zn, degree);
+        let p1: Vec<MInt> = (1..degree as u64)
             .map(|x: u64| zn.from_int(Uint::from(x * x * 12345 + x * 1234 + 123)))
             .collect();
-        let p2: Vec<MInt> = (1..degree)
+        let p2: Vec<MInt> = (1..degree as u64)
             .map(|x: u64| zn.from_int(Uint::from(x * x * 56789 + x * 6789 + 789)))
             .collect();
-        let pol1 = Poly::new(&zn, p1);
-        let pol2 = Poly::new(&zn, p2);
+        let pol1 = Poly::new(&zr, p1);
+        let pol2 = Poly::new(&zr, p2);
 
         let start = std::time::Instant::now();
         let _ = Poly::div_mod_xn(&pol1, &pol2);
@@ -96,14 +98,15 @@ fn main() {
     for degree in [
         30, 60, 120, 240, 480, 960, 1920, 4032, 8064, 16128, 32768, 65536, 131072,
     ] {
-        let roots: Vec<MInt> = (1..=10 * degree)
+        let zr = PolyRing::new(&zn, degree);
+        let roots: Vec<MInt> = (1..=10 * degree as u64)
             .map(|x: u64| zn.from_int(Uint::from(x * x * 12345 + x * 1234 + 123)))
             .collect();
-        let roots2: Vec<MInt> = (1..degree)
+        let roots2: Vec<MInt> = (1..degree as u64)
             .map(|x: u64| zn.from_int(Uint::from(x * x * 56789 + x * 6789 + 789)))
             .collect();
         let start = std::time::Instant::now();
-        let pol = Poly::from_roots(&zn, &roots2);
+        let pol = Poly::from_roots(&zr, &roots2);
         eprintln!(
             "product tree {degree} in {:.4}s",
             start.elapsed().as_secs_f64()
@@ -116,7 +119,7 @@ fn main() {
 
         // Benchmark blockwise remainder tree.
         let start = std::time::Instant::now();
-        let pol2 = Poly::from_roots(&zn, &roots2);
+        let pol2 = Poly::from_roots(&zr, &roots2);
         let vals = pol2.multi_eval(&roots);
         eprintln!(
             "block multieval {degree} over {} in {:.4}s",
@@ -140,7 +143,8 @@ fn main() {
         );
 
         if roots.len() <= 512 * 1024 {
-            let pol1 = Poly::from_roots(&zn, &roots);
+            let zr = PolyRing::new(&zn, 5 * degree);
+            let pol1 = Poly::from_roots(&zr, &roots);
             for i in 0..64 {
                 let idx = (i * roots2.len()) / 64;
                 assert_eq!(pol1.eval(roots2[idx]), vals[idx]);
