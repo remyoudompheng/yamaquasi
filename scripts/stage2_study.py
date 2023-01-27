@@ -112,7 +112,7 @@ for d, k in [(2310, 3 * 256), (9240, 3 * 1024), (39270, 3 * 4096)]:
             t0 = time.time()
             for idx in range(10000):
                 g, b = random.choice(gs), random.choice(bs)
-                for f in factor(g - b):
+                for f in factor(g - b, timeout=1):
                     if f > d * k:
                         extra.add(f)
                 pairs += 2
@@ -156,10 +156,10 @@ for d, k in [(2310, 3 * 256), (9240, 3 * 1024), (39270, 3 * 4096)]:
             t0 = time.time()
             for idx in range(10000):
                 g, b = random.choice(gs), random.choice(bs)
-                for f in factor(g - b):
+                for f in factor(g - b, timeout=1):
                     if f > d * k:
                         extra.add(f)
-                for f in factor(g + b):
+                for f in factor(g + b, timeout=1):
                     if f > d * k:
                         extra.add(f)
                 pairs += 2

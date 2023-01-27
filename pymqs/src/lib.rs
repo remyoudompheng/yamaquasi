@@ -4,8 +4,10 @@
 
 use std::ffi::CString;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyKeyboardInterrupt, PyValueError};
 use pyo3::ffi::PyLong_FromString;
 use pyo3::prelude::*;
 use pyo3::pyfunction;
@@ -20,10 +22,22 @@ fn pymqs(_: Python<'_>, m: &PyModule) -> PyResult<()> {
     Ok(())
 }
 
-#[pyfunction(algo = "\"auto\"", verbose = "\"silent\"", threads = "None")]
-#[pyo3(text_signature = "(n: int, algo: str, threads: str) -> List[int]")]
+#[pyfunction(
+    algo = "\"auto\"",
+    verbose = "\"silent\"",
+    timeout = "None",
+    threads = "None"
+)]
+#[pyo3(
+    text_signature = "(n: int, algo: str, verbose: str, timeout: Optional[float], threads: str) -> List[int]"
+)]
 /// Factors an integer into prime factors. The result is a list
 /// whose product is the input argument.
+///
+/// An optional timeout (in seconds) can be specified to obtain
+/// possibly partial factorizations. The function may exceed the specified
+/// timeout depending on the computation status. If the timeout is reached,
+/// returned factors may be composite.
 ///
 /// Possible values for algo are:
 /// auto (default), pm1, ecm, qs, mpqs, siqs.
@@ -32,6 +46,7 @@ fn factor(
     npy: &PyLong,
     algo: &str,
     verbose: &str,
+    timeout: Option<f64>,
     threads: Option<usize>,
 ) -> PyResult<Py<PyList>> {
     let verbosity =
@@ -39,6 +54,30 @@ fn factor(
     let mut prefs = Preferences::default();
     prefs.threads = threads;
     prefs.verbosity = verbosity;
+    // Handle interrupts.
+    let start = std::time::Instant::now();
+    let interrupted = Arc::new(AtomicBool::new(false));
+    prefs.should_abort = Some(Box::new({
+        let interrupted = interrupted.clone();
+        move || {
+            if let Some(t) = timeout {
+                if start.elapsed().as_secs_f64() > t {
+                    return true;
+                }
+            }
+            if interrupted.load(Ordering::Relaxed) {
+                return true;
+            }
+            let sig = Python::with_gil(|py| py.check_signals().is_err());
+            if sig {
+                interrupted.store(true, Ordering::Relaxed);
+                if verbosity >= Verbosity::Info {
+                    eprintln!("Interupted");
+                }
+            }
+            sig
+        }
+    }));
     let alg = Algo::from_str(algo).map_err(|e| PyValueError::new_err(e.to_string()))?;
     let n = Uint::from_str(&npy.to_string()).map_err(|_| {
         PyValueError::new_err(format!(
@@ -51,6 +90,14 @@ fn factor(
         )));
     }
     let factors = py.allow_threads(|| yamaquasi::factor(n, alg, &prefs));
+    if Some(start.elapsed().as_secs_f64()) >= timeout && verbosity >= Verbosity::Info {
+        eprintln!("Timeout reached");
+    }
+    // The expected semantics of KeyboardInterrupt are to end
+    // the program even if the function has interesting data to return.
+    if interrupted.load(Ordering::Relaxed) {
+        return Err(PyKeyboardInterrupt::new_err(()));
+    }
     let l = PyList::empty(py);
     for f in factors {
         // Use string for conversion.

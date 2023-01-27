@@ -55,6 +55,7 @@ pub struct Preferences {
     pub use_double: Option<bool>,
     pub threads: Option<usize>,
     pub verbosity: Verbosity,
+    pub should_abort: Option<Box<dyn Fn() -> bool + Sync>>,
     // Yes, storing state variables in a Preferences object
     // is quite awkward.
     pm1_done: AtomicBool,
@@ -66,6 +67,14 @@ impl Preferences {
     #[doc(hidden)]
     pub fn verbose(&self, v: Verbosity) -> bool {
         self.verbosity >= v
+    }
+
+    pub fn abort(&self) -> bool {
+        if let Some(f) = &self.should_abort {
+            f()
+        } else {
+            false
+        }
     }
 }
 
@@ -331,6 +340,10 @@ fn factor_impl(
         }
         _ => {}
     }
+    if prefs.abort() {
+        factors.push(n);
+        return;
+    }
 
     let (k, score) = fbase::select_multiplier(n);
     if prefs.verbose(Verbosity::Verbose) {
@@ -350,7 +363,15 @@ fn factor_impl(
         Algo::Siqs => siqs::siqs(&nk, prefs, tpool),
     };
     let rels = match rels {
-        Ok(rels) => rels,
+        Ok(rels) => {
+            if rels.len() == 0 {
+                // Failure or interrupted.
+                factors.push(n);
+                return;
+            } else {
+                rels
+            }
+        }
         Err(UnexpectedFactor(d)) => {
             factor_impl(d.into(), alg, prefs, factors, tpool);
             factor_impl(n / Uint::from(d), alg, prefs, factors, tpool);

@@ -184,7 +184,7 @@ pub fn ecm(
     // so their order is more probably smooth.
     let done = AtomicBool::new(false);
     let do_good_curve = |&(x1, x2, y1, y2)| {
-        if done.load(Ordering::Relaxed) {
+        if done.load(Ordering::Relaxed) || prefs.abort() {
             return None;
         }
         let iter = iters.fetch_add(1, Ordering::SeqCst) + 1;
@@ -254,7 +254,7 @@ pub fn ecm(
         .map(|k| k as u32 * seed1 + seed2)
         .collect();
     let do_curve = |k: u32| {
-        if done.load(Ordering::Relaxed) {
+        if done.load(Ordering::Relaxed) || prefs.abort() {
             return None;
         }
         let k = k as u64;

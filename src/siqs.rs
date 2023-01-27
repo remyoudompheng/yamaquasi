@@ -108,7 +108,7 @@ pub fn siqs(
                 if s.gap.load(Ordering::Relaxed) == 0 {
                     return;
                 }
-                if s.done.load(Ordering::Relaxed) {
+                if s.done.load(Ordering::Relaxed) || prefs.abort() {
                     return;
                 }
                 sieve_a(&s, &a_int, &factors);
@@ -120,10 +120,13 @@ pub fn siqs(
             if s.gap.load(Ordering::Relaxed) == 0 {
                 break;
             }
-            if s.done.load(Ordering::Relaxed) {
+            if s.done.load(Ordering::Relaxed) || prefs.abort() {
                 break;
             }
         }
+    }
+    if prefs.abort() {
+        return Ok(vec![]);
     }
     if s.gap.load(Ordering::Relaxed) != 0 {
         panic!("Internal error: not enough smooth numbers with selected parameters");
