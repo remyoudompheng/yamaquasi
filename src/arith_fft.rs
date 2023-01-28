@@ -109,32 +109,39 @@ pub fn convolve_modn_ntt(
     let logsize = size.trailing_zeros();
     assert!(mzp.k >= logsize);
     // Map p1 and p2 to residues.
+    // f1 and f2 are in bit reversed order.
     let w = mzp.w;
     let mut f1 = vec![0; w * size];
     let mut f2 = vec![0; w * size];
     for i in 0..p1.len() {
-        mzp.from_mint(&mut f1[w * i..w * (i + 1)], &p1[i]);
+        let irev = usize::reverse_bits(i) >> (usize::BITS - logsize);
+        mzp.from_mint(&mut f1[w * irev..w * (irev + 1)], &p1[i]);
     }
     for i in 0..p2.len() {
-        mzp.from_mint(&mut f2[w * i..w * (i + 1)], &p2[i]);
+        let irev = usize::reverse_bits(i) >> (usize::BITS - logsize);
+        mzp.from_mint(&mut f2[w * irev..w * (irev + 1)], &p2[i]);
     }
-    // Forward NTT
-    let mut ntt1 = vec![0; w * size];
-    mzp.ntt(&f1, &mut ntt1, 0, logsize, true);
-    let mut ntt2 = f1;
-    mzp.ntt(&f2, &mut ntt2, 0, logsize, true);
+    // Forward NTT: output is in natural order.
+    mzp.ntt_inplace(&mut f1, 0, logsize, true);
+    mzp.ntt_inplace(&mut f2, 0, logsize, true);
     // Pointwise multiply
     for i in 0..size {
-        mzp.mul(&mut ntt1[w * i..w * (i + 1)], &ntt2[w * i..w * (i + 1)]);
+        mzp.mul(&mut f1[w * i..w * (i + 1)], &f2[w * i..w * (i + 1)]);
     }
-    // Inverse NTT
-    let mut f12 = ntt2;
-    mzp.ntt(&ntt1, &mut f12, 0, logsize, false);
+    // Reverse bits, inverse NTT
+    for i in 0..size {
+        let irev = usize::reverse_bits(i) >> (usize::BITS - logsize);
+        if i < irev {
+            let (f1a, f1b) = f1.split_at_mut(irev * w);
+            f1a[w * i..w * (i + 1)].swap_with_slice(&mut f1b[..w]);
+        }
+    }
+    mzp.ntt_inplace(&mut f1, 0, logsize, false);
     // Extract result
     res.fill(MInt::default());
     for i in offset..min(size, offset + res.len()) {
         let idx = i - offset;
-        res[idx] = mzp.redc(&f12[w * i..w * (i + 1)]);
+        res[idx] = mzp.redc(&f1[w * i..w * (i + 1)]);
     }
 }
 
@@ -1086,6 +1093,40 @@ impl<'a> MultiZmodP<'a> {
             );
         }
     }
+
+    // Compute NTT in place, assuming the input array is indexed
+    // in bit reverse mode.
+    fn ntt_inplace(&self, v: &mut [u64], depth: u32, k: u32, fwd: bool) {
+        assert!(v.len() == self.w << k);
+        assert!(k > 0);
+        let w = self.w;
+        if k == 1 {
+            // v = (v0 + v1, v0 - v1)
+            let (v0, v1) = v.split_at_mut(w);
+            self.addsub_inplace(v0, v1);
+            if !fwd {
+                // For inverse FFT, divide by 2^(depth+1).
+                self.div_pow2(v0, depth + 1);
+                self.div_pow2(v1, depth + 1);
+            }
+            return;
+        }
+        // Transform odd/even indices
+        let half = 1 << (k - 1);
+        let (v0, v1) = v.split_at_mut(w * half);
+        self.ntt_inplace(v0, depth + 1, k - 1, fwd);
+        self.ntt_inplace(v1, depth + 1, k - 1, fwd);
+        // Twiddle
+        for idx in 0..half {
+            // Compute X + ω^idx Y, X - ω^idx Y where ω is the 2^k primitive root of unity.
+            if fwd {
+                self.twiddle(&mut v1[w * idx..w * idx + w], idx, k);
+            } else {
+                self.twiddle(&mut v1[w * idx..w * idx + w], (1 << k) - idx, k);
+            }
+            self.addsub_inplace(&mut v0[w * idx..w * idx + w], &mut v1[w * idx..w * idx + w]);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1351,6 +1392,15 @@ fn test_multintt() {
                 "index {idx}"
             );
         }
+
+        // NTT in place
+        let mut f1rev = vec![0; 2 * w * mw];
+        for i in 0..2 * w {
+            let irev = usize::reverse_bits(i) >> (usize::BITS - logsize);
+            f1rev[irev * mw..irev * mw + mw].copy_from_slice(&f1[i * mw..i * mw + mw]);
+        }
+        mzp.ntt_inplace(&mut f1rev, 0, logsize, true);
+        assert_eq!(t1, f1rev);
 
         // NTT convolution
         let mut v = vec![MInt::default(); 2 * w];
