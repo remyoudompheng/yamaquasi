@@ -1,6 +1,7 @@
 Yamaquasi is a Rust implementation of several factoring algorithms with
-a focus on the Quadratic sieve factorisation method. It attempts to balance
-efficiency and readability.
+a focus on the Quadratic sieve factorisation method. It is a hobby project
+attempting to balance efficiency and readability, with references to research
+articles when applicable.
 
 # Description
 
@@ -8,7 +9,8 @@ Yamaquasi can be used as a general-purpose factoring utility through command `ym
 
 It implements several variants of the Quadratic sieve factoring method with light
 boilerplate allowing it to completely factor most integers with fewer than
-110 decimal digits.
+110 decimal digits. In many cases larger numbers (up to 150 digits) can also
+be factored thanks to the ECM method.
 
 There is no guarantee to obtain a successful factorization even when input size
 is small enough due to edge cases (non squarefree integers, small factors,
@@ -44,6 +46,51 @@ $ bin/ymqs --mode ecm 8034690221294951377709810461705813012611014968913964176506
 4884164093883941177660049098586324302977543600799
 ```
 
+# Python module
+
+An experimental Python module is available. You can build it
+with `maturin`:
+
+```
+maturin build -r -m pymqs/Cargo.toml -o OUTDIR
+```
+
+It has a single function `factor`:
+
+```python
+>>> import pymqs
+>>> pymqs.factor(803469022129495137770981046170581301261101496891396417650687)
+>>> pymqs.factor(803469022129495137770981046170581301261101496891396417650687, algo="ecm", verbose="info")
+```
+
+The `verbose` argument accepts values `silent` (default), `info`, `verbose`.
+
+The `timeout` argument accepts an optional numerical value in seconds
+and the library will tentatively stop computation after that duration.
+
+# CPU-specific performance
+
+## Multiprecision arithmetic
+
+Yamaquasi includes various homemade multiprecision routines which are used intensively
+in the P-1 and ECM algorithms.
+
+Multiplication can be sped up on `x86-64` using the `mulx` instruction. This is
+done automatically by the Rust compiler when enabling `target-feature=+bmi2`
+on supported CPUs (at least microarchitecture level `x86-64-v3`). The improvement
+may range from 0% to 10%.
+
+## Vectorization
+
+The polynomial roots step of SIQS is written to benefit from vectorization.
+On architecture `x86-64` you can compile with `RUSTFLAGS='-C target-feature=+avx2'`
+to use AVX2 which can often be faster.
+
+The linear algebra step common to quadratic sieve variants can also benefit
+from AVX2 through LLVM automatic vectorization (possibly 5%-10% improvement).
+
+On `aarch64` architecture, the NEON feature is usually enabled by default.
+
 # Choices
 
 To keep a good balance with readability Yamaquasi does not include inline assembly
@@ -63,7 +110,9 @@ assume that this upper bound is enforced.
 The purpose of Yamaquasi is to reinvent the wheel in various ways and thus
 it often contains reimplementations instead of importing libraries.
 
-# Benchmarks
+# Quadratic sieve
+
+## Sample benchmarks
 
 The following benchmarks use balanced semiprimes as input (product of 2 primes
 of similar size). The figures below are not guaranteed to follow a rigorous
@@ -105,11 +154,7 @@ The CPU clock rate is usually slower when multiple cores are active.
 On platforms supporting SMT (Simultaneous Multi-Threading) a small benefit
 can be observed when fully using all available logical cores.
 
-On x86-64 architectures, several parts of the code can be accelerated
-by enabling AVX2 using `RUSTFLAGS='-C target-cpu=native'`
-or `RUSTFLAGS='-C target-feature=+avx2'`.
-
-# Quadratic sieve implementation
+## Implementation choices
 
 The implementation is a "textbook" implementation following the papers:
 
@@ -201,6 +246,9 @@ available at https://eecm.cr.yp.to/index.html
 
 Relevant references include:
 
+Peter. L. Montgomery. An FFT extension of the elliptic curve method of factorization.
+PhD thesis, University of California, 1992.
+
 [B. Dodson, P. Zimmermann, 20 Years of ECM](https://hal.archives-ouvertes.fr/inria-00070192)
 
 [G. Hanrot, M. Quercia, P. Zimmermann, The Middle Product Algorithm I](https://hal.inria.fr/inria-00071921)
@@ -216,7 +264,10 @@ https://eecm.cr.yp.to/goodcurves.html) and a family of curves with
 rational Z/2 x Z/4 torsion which is not optimal but has a very simple
 definition.
 
-Integer arithmetic is performed using the Montgomery form.
+The implementation uses several state-of-the-art techniques such as
+Montgomery arithmetic, Schonhage-Strassen FFT multiplication, and
+scaled remainder trees for multipoint polynomial evaluation.
+It will usually be 2x-3x slower than GMP-ECM.
 
 The ECM implementation is run when using the "automatic" factoring mode,
 with very low parameters (that can easily catch factors with 1/5th
