@@ -22,14 +22,10 @@ fn pymqs(_: Python<'_>, m: &PyModule) -> PyResult<()> {
     Ok(())
 }
 
-#[pyfunction(
-    algo = "\"auto\"",
-    verbose = "\"silent\"",
-    timeout = "None",
-    threads = "None"
-)]
+#[pyfunction]
 #[pyo3(
-    text_signature = "(n: int, algo: str, verbose: str, timeout: Optional[float], threads: str) -> List[int]"
+    signature = (n, /, algo = "auto", verbose = "silent", timeout = None, threads = None),
+    text_signature = "(n: int, /, algo: str, verbose: str, timeout=None, threads=None) -> List[int]",
 )]
 /// Factors an integer into prime factors. The result is a list
 /// whose product is the input argument.
@@ -43,7 +39,7 @@ fn pymqs(_: Python<'_>, m: &PyModule) -> PyResult<()> {
 /// auto (default), pm1, ecm, qs, mpqs, siqs.
 fn factor(
     py: Python<'_>,
-    npy: &PyLong,
+    n: &PyLong,
     algo: &str,
     verbose: &str,
     timeout: Option<f64>,
@@ -79,7 +75,7 @@ fn factor(
         }
     }));
     let alg = Algo::from_str(algo).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let n = Uint::from_str(&npy.to_string()).map_err(|_| {
+    let n = Uint::from_str(&n.to_string()).map_err(|_| {
         PyValueError::new_err(format!(
             "Yamaquasi only accepts positive integers with at most 150 decimal digits"
         ))
@@ -90,7 +86,10 @@ fn factor(
         )));
     }
     let factors = py.allow_threads(|| yamaquasi::factor(n, alg, &prefs));
-    if Some(start.elapsed().as_secs_f64()) >= timeout && verbosity >= Verbosity::Info {
+    if timeout.is_some()
+        && Some(start.elapsed().as_secs_f64()) >= timeout
+        && verbosity >= Verbosity::Info
+    {
         eprintln!("Timeout reached");
     }
     // The expected semantics of KeyboardInterrupt are to end
@@ -114,10 +113,14 @@ fn factor(
     Ok(l.into())
 }
 
-#[pyfunction(verbose = "\"silent\"", threads = "None")]
+#[pyfunction]
+#[pyo3(
+    signature = (n, curves, b1, b2, /, verbose = "silent", threads = None),
+    text_signature = "(n: int, curves: int, b1: int, b2: float, /, verbose=\"silent\", threads=None) -> List[int]"
+)]
 fn ecm(
     py: Python<'_>,
-    npy: &PyLong,
+    n: &PyLong,
     curves: u64,
     b1: u64,
     b2: f64,
@@ -129,7 +132,7 @@ fn ecm(
     let mut prefs = Preferences::default();
     prefs.threads = threads;
     prefs.verbosity = verbosity;
-    let n = Uint::from_str(&npy.to_string()).map_err(|_| {
+    let n = Uint::from_str(&n.to_string()).map_err(|_| {
         PyValueError::new_err(format!(
             "Yamaquasi only accepts positive integers with at most 150 decimal digits"
         ))
