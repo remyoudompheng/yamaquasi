@@ -9,7 +9,7 @@ fn main() {
         for degree in [
             30, 60, 120, 240, 480, 960, 1920, 4032, 8192, 16384, 32768, 65536, 131072, 262144,
         ] {
-            let zr = PolyRing::new(zn, degree);
+            let zr = PolyRing::new(zn, std::cmp::max(256, degree));
             let p1: Vec<MInt> = (1..degree as u64)
                 .map(|x: u64| zn.from_int(Uint::from(x * x * 12345 + x * 1234 + 123)))
                 .collect();
