@@ -20,12 +20,11 @@ fn main() {
     let mut prefs = Preferences::default();
     prefs.verbosity = Verbosity::Silent;
 
-    let d_values = [
-        120_u64, 210, 462, 1050, 2310, 4620, 9240, 19110, 39270, 79170, 159390, 330330, 690690,
+    let b2_values = [
+        15e3, 65e3, 268e3, 1.18e6, 7.1e6, 28e6, 117e6, 643e6, 2.6e9, 10.5e9, 43e9, 136e9, 543e9,
     ];
-    for &d in &d_values {
+    for &b2 in &b2_values {
         let b1 = 200;
-        let b2 = (d as f64) * (d as f64);
         let start = std::time::Instant::now();
         // Use P256 so what ECM cannot work.
         let res = pm1_impl(p256, b1, b2, Verbosity::Silent);
@@ -100,70 +99,47 @@ fn main() {
         },
     }
 
-    // ECM complexity (O(b1 log(b1)) + O(d^2))
+    // ECM complexity (O(b1 log(b1)) + O(b2^(0.5+eps)))
     eprintln!("ECM timings");
-    // Ideal d are such that phi(d)/2 is less than a power of two.
-    // 120 => 32
-    // 210 => 48
-    // 462 => 120
-    // 1050 => 240
-    // D=2310 B2=5.336e+06 φ(D)/2=240 (10 blocks size 2^8)
-    // D=4620 B2=2.134e+07 φ(D)/2=480 (10 blocks size 2^9)
-    // D=9240 B2=8.538e+07 φ(D)/2=960 (10 blocks size 2^10)
-    // D=19110 B2=3.652e+08 φ(D)/2=2016 (10 blocks size 2^11)
-    // D=39270 B2=1.542e+09 φ(D)/2=3840 (10 blocks size 2^12)
-    // D=79170 B2=6.268e+09 φ(D)/2=8064 (10 blocks size 2^13)
-    // D=159390 B2=2.541e+10 φ(D)/2=15840 (10 blocks size 2^14)
-    // D=324870 B2=1.055e+11 φ(D)/2=32256 (10 blocks size 2^15)
-    // D=649740 B2=4.222e+11 φ(D)/2=64512 (10 blocks size 2^16)
-    // D=690690 B2=4.771e+11 φ(D)/2=63360 (11 blocks size 2^16)
-    // D=1299480 B2=1.689e+12 φ(D)/2=129024 (10 blocks size 2^17)
-    // D=1381380 B2=1.908e+12 φ(D)/2=126720 (11 blocks size 2^17)
-    // D=2612610 B2=6.826e+12 φ(D)/2=241920 (10 blocks size 2^18)
-    // D=2852850 B2=8.139e+12 φ(D)/2=259200 (11 blocks size 2^18)
-    // D=5238870 B2=2.745e+13 φ(D)/2=518400 (10 blocks size 2^19)
-    // D=5705700 B2=3.256e+13 φ(D)/2=518400 (11 blocks size 2^19)
-    for d in [
-        120_u64, 210, 462, 1050, 2310, 4620, 9240, 19110, 39270, 79170, 159390, 324870, 649740,
-    ] {
+    for &b2 in &b2_values {
         for b1 in [100, 150, 200] {
-            if b1 != 200 && d > 1000 {
+            if b1 != 200 && b2 > 1e6 {
                 continue;
             }
             let start = std::time::Instant::now();
             // Use P256 so what ECM cannot work.
-            let res = ecm::ecm(p256, 1, b1, (d * d) as f64, &prefs, None);
+            let res = ecm::ecm(p256, 1, b1, b2, &prefs, None);
             assert!(res.is_none());
             eprintln!(
-                "p256 ECM(B1={b1},D={d}) in {:.3}s",
+                "p256 ECM(B1={b1},B2={b2:.3e}) in {:.3}s",
                 start.elapsed().as_secs_f64()
             );
 
             let start = std::time::Instant::now();
-            let res = ecm::ecm(p480, 1, b1, (d * d) as f64, &prefs, None);
+            let res = ecm::ecm(p480, 1, b1, b2, &prefs, None);
             assert!(res.is_none());
             eprintln!(
-                "p480 ECM(B1={b1},D={d}) in {:.3}s",
+                "p480 ECM(B1={b1},B2={b2:.3e}) in {:.3}s",
                 start.elapsed().as_secs_f64()
             );
         }
     }
     for b1 in [1000, 10_000, 100_000, 1_000_000] {
-        let d = 8820;
+        let b2 = 38e6;
         let start = std::time::Instant::now();
         // Use P256 so what ECM cannot work.
-        let res = ecm::ecm(p256, 1, b1, (d * d) as f64, &prefs, None);
+        let res = ecm::ecm(p256, 1, b1, b2, &prefs, None);
         assert!(res.is_none());
         eprintln!(
-            "p256 ECM(B1={b1},D={d}) in {:.3}s",
+            "p256 ECM(B1={b1},B2={b2:.3e}) in {:.3}s",
             start.elapsed().as_secs_f64()
         );
 
         let start = std::time::Instant::now();
-        let res = ecm::ecm(p480, 1, b1, (d * d) as f64, &prefs, None);
+        let res = ecm::ecm(p480, 1, b1, b2, &prefs, None);
         assert!(res.is_none());
         eprintln!(
-            "p480 ECM(B1={b1},D={d}) in {:.3}s",
+            "p480 ECM(B1={b1},B2={b2:.3e}) in {:.3}s",
             start.elapsed().as_secs_f64()
         );
     }

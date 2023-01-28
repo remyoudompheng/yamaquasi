@@ -209,7 +209,7 @@ fn factor_impl(
     match alg {
         Algo::Auto => {
             // Only in automatic mode, for large inputs, Pollard P-1 and ECM can be useful.
-            if n.bits() >= 150 && !prefs.pm1_done.load(Ordering::Relaxed) {
+            if !prefs.pm1_done.load(Ordering::Relaxed) {
                 if prefs.verbose(Verbosity::Verbose) {
                     eprintln!("Attempting Pollard P-1");
                 }
@@ -237,15 +237,13 @@ fn factor_impl(
                     );
                 }
             }
-            if n.bits() > 190 {
-                if let Some((a, b)) = ecm::ecm_auto(n, prefs, tpool) {
-                    factor_impl(a, alg, prefs, factors, tpool);
-                    if prefs.verbose(Verbosity::Info) {
-                        eprintln!("Recursively factor {b}");
-                    }
-                    factor_impl(b, alg, prefs, factors, tpool);
-                    return;
+            if let Some((a, b)) = ecm::ecm_auto(n, prefs, tpool) {
+                factor_impl(a, alg, prefs, factors, tpool);
+                if prefs.verbose(Verbosity::Info) {
+                    eprintln!("Recursively factor {b}");
                 }
+                factor_impl(b, alg, prefs, factors, tpool);
+                return;
             }
         }
         Algo::Pm1 => {

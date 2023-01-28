@@ -57,43 +57,47 @@ pub fn ecm_auto(
     //
     // Sample parameters can be found at https://eecm.cr.yp.to/performance.html
     match n.bits() {
-        0..=190 => {
+        0..=160 => {
+            // Very quick run.
+            ecm(n, 4, 120, 10e3, prefs, tpool)
+        }
+        161..=190 => {
             // Will quite often find a 30-32 bit factor (budget 10-20ms)
             ecm(n, 16, 120, 40e3, prefs, tpool)
         }
         191..=220 => {
-            // Will quite often find a 36 bit factor (budget <100ms)
-            ecm(n, 16, 120, 80e3, prefs, tpool)
+            // Will quite often find a 40-45 bit factor (budget <100ms)
+            ecm(n, 16, 800, 80e3, prefs, tpool)
         }
         221..=250 => {
-            // Will quite often find a factor of size 42-46 bits (budget 0.1-0.5s)
-            ecm(n, 30, 500, 300e3, prefs, tpool)
+            // Will quite often find a factor of size 50-55 bits (budget 0.1-0.5s)
+            ecm(n, 30, 3000, 300e3, prefs, tpool)
         }
         251..=280 => {
-            // Will quite often find a factor of size 52-56 bits (budget 2-3s)
-            ecm(n, 80, 2_000, 1e6, prefs, tpool)
+            // Will quite often find a factor of size 60-65 bits (budget 2-3s)
+            ecm(n, 100, 8000, 1.2e6, prefs, tpool)
         }
         281..=310 => {
-            // Will often find a factor of size 58-62 bits (budget 5-10s)
-            ecm(n, 40, 8_000, 4e6, prefs, tpool)
+            // Will often find a factor of size 70-75 bits (budget 5-10s)
+            ecm(n, 100, 30_000, 4.7e6, prefs, tpool)
         }
         311..=340 => {
-            // Will often find a factor of size 64-70 bits (budget 20-30s)
-            ecm(n, 40, 25_000, 20e6, prefs, tpool)
+            // Will often find a factor of size 75-80 bits (budget 20-30s)
+            ecm(n, 100, 60_000, 20e6, prefs, tpool)
         }
         341..=370 => {
-            // Try to find a factor of size 68-76 bits (budget 1min)
-            ecm(n, 100, 75_000, 70e6, prefs, tpool)
+            // Try to find a factor of size 80-85 bits (budget 1min)
+            ecm(n, 200, 100_000, 70e6, prefs, tpool)
         }
         // For very large numbers, we don't expect quadratic sieve to complete
         // in reasonable time, so all hope is on ECM.
         371..=450 => {
-            // Budget is more than 10 minutes
-            ecm(n, 200, 200_000, 400e6, prefs, tpool)
+            // May find a 100-110 bit factor. Budget is more than 10 minutes
+            ecm(n, 400, 500_000, 640e6, prefs, tpool)
         }
         451.. => {
-            // Budget is virtually unlimited (hours)
-            ecm(n, 500, 500_000, 1e9, prefs, tpool)
+            // Budget is virtually unlimited (several seconds per curve)
+            ecm(n, 500, 5_000_000, 21e9, prefs, tpool)
         }
     }
 }
@@ -106,19 +110,17 @@ pub fn ecm_only(
 ) -> Option<(Uint, Uint)> {
     // B1 values should be such that step 1 takes about as much time as step 2.
     // D values are only such that phi(D) is a bit less than a power of 2.
-    //
-    // Since we are using Karatsuba, we can make B1 grow as O(D^1.58)
     match n.bits() {
         // The following parameters work well even for balanced semiprimes.
-        0..=64 => ecm(n, 100, 128, 40e3, prefs, tpool),
-        65..=80 => ecm(n, 100, 300, 40e3, prefs, tpool),
-        81..=96 => ecm(n, 300, 1000, 200e3, prefs, tpool),
-        97..=119 => ecm(n, 1000, 3_000, 1e6, prefs, tpool),
+        0..=64 => ecm(n, 100, 256, 20e3, prefs, tpool),
+        65..=80 => ecm(n, 100, 500, 40e3, prefs, tpool),
+        81..=96 => ecm(n, 300, 1000, 100e3, prefs, tpool),
+        97..=119 => ecm(n, 1000, 10_000, 1e6, prefs, tpool),
         // May require 100-300 curves for 72-bit factors
-        120..=144 => ecm(n, 1000, 10_000, 4e6, prefs, tpool),
+        120..=144 => ecm(n, 1000, 30_000, 4.7e6, prefs, tpool),
         145..=168 => {
             // Can find a 80 bit factor after a few dozen curves.
-            ecm(n, 1000, 30_000, 20e6, prefs, tpool)
+            ecm(n, 1000, 60_000, 20e6, prefs, tpool)
         }
         169..=192 => {
             // Can find a 90 bit factor after a few hundreds curves.
@@ -127,20 +129,35 @@ pub fn ecm_only(
         193..=224 => {
             // Should be able to find 100 bit factors after
             // a few hundred curves
-            ecm(n, 5000, 300_000, 400e6, prefs, tpool)
+            ecm(n, 5000, 500_000, 640e6, prefs, tpool)
         }
         225..=256 => {
             // May find 100-120 bit factors after ~1000 curves
             // Similar to GMP-ECM recommended for 35 digit factors.
-            ecm(n, 20, 100_000, 80e3, prefs, tpool)
-                .or_else(|| ecm(n, 15000, 1_000_000, 1e9, prefs, tpool))
+            ecm(n, 20, 2_000, 100e3, prefs, tpool)
+                .or_else(|| ecm(n, 15000, 1_000_000, 1.3e9, prefs, tpool))
         }
-        257.. => {
+        257..=320 => {
             // May find 120-140 bit factors after a few thousand curves.
-            // B2 is about 5.8 billion.
             // Similar to GMP-ECM recommended for 40 digit factors.
-            ecm(n, 50, 300_000, 400e3, prefs, tpool)
-                .or_else(|| ecm(n, 40000, 3_000_000, 4e9, prefs, tpool))
+            ecm(n, 20, 10_000, 400e3, prefs, tpool)
+                .or_else(|| ecm(n, 40000, 3_000_000, 5e9, prefs, tpool))
+        }
+        321..=384 => {
+            // Similar to GMP-ECM recommended for 40-45 digit factors.
+            ecm(n, 10, 500_000, 400e6, prefs, tpool)
+                .or_else(|| ecm(n, 40000, 8_000_000, 22e9, prefs, tpool))
+        }
+        385..=448 => {
+            // Similar to GMP-ECM recommended for 45-50 digit factors.
+            ecm(n, 10, 500_000, 400e6, prefs, tpool)
+                .or_else(|| ecm(n, 40000, 20_000_000, 130e9, prefs, tpool))
+        }
+        449.. => {
+            // Similar to GMP-ECM recommended for 50-55 digit factors.
+            // May exceed 1 minute per curve.
+            ecm(n, 10, 500_000, 400e6, prefs, tpool)
+                .or_else(|| ecm(n, 40000, 50_000_000, 600e9, prefs, tpool))
         }
     }
 }

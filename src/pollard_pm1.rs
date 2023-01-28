@@ -194,21 +194,24 @@ impl PM1Base {
 // to possibly detect a small factor. The cost is 2 multiplications per large
 // prime and it should use a CPU budget similar to 1 ECM run.
 pub fn pm1_quick(n: Uint, v: Verbosity) -> Option<(Uint, Uint)> {
+    // Choose B1 so that stage 1 is a large part of CPU time.
     match n.bits() {
+        // Extremely quick run
+        0..=128 => pm1_impl(n, 256, 20e3, v),
         // Catches many 24-bit factors in 1-5ms.
-        0..=190 => pm1_impl(n, 256, 50e3, v),
+        129..=190 => pm1_impl(n, 256, 50e3, v),
         // Takes less than a few ms
-        191..=220 => pm1_impl(n, 512, 270e3, v),
+        191..=220 => pm1_impl(n, 10_000, 270e3, v),
         // Takes less than 0.01 second
-        221..=250 => pm1_impl(n, 1024, 540e3, v),
+        221..=250 => pm1_impl(n, 50_000, 540e3, v),
         // Takes less than 0.1 second
-        251..=280 => pm1_impl(n, 8192, 4.7e6, v),
+        251..=280 => pm1_impl(n, 200_000, 7.1e6, v),
         // Takes less than 0.5 second
-        281..=310 => pm1_impl(n, 256 << 10, 117e6, v),
+        281..=310 => pm1_impl(n, 1_000_000, 117e6, v),
         // Takes about 1 second
-        311..=340 => pm1_impl(n, 1 << 20, 322e6, v),
+        311..=340 => pm1_impl(n, 2_000_000, 322e6, v),
         // Takes about 2-5 seconds
-        341..=370 => pm1_impl(n, 4 << 20, 1.3e9, v),
+        341..=370 => pm1_impl(n, 7_000_000, 1.3e9, v),
         // Above this size, quadratic sieve will be extremely
         // long so allow a lot of CPU budget into Pollard P-1.
         371..=420 => pm1_impl(n, 16 << 20, 5.2e9, v),
@@ -292,9 +295,8 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Uint
     // g is 2^(product of small primes) mod n
     // gaps[i] = g^2i+2
     // The vector is grown dynamically during iteration.
-    if d1 > MULTIEVAL_THRESHOLD {
-        let start2 = std::time::Instant::now();
-        let res = pm1_stage2_polyeval(&zn, b2, g);
+    let start2 = std::time::Instant::now();
+    let logtime = || {
         if verbosity >= Verbosity::Verbose {
             let elapsed2 = start2.elapsed();
             if elapsed2.as_secs_f64() < 0.01 {
@@ -311,6 +313,10 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Uint
                 );
             }
         }
+    };
+    if d1 > MULTIEVAL_THRESHOLD {
+        let res = pm1_stage2_polyeval(&zn, b2, g);
+        logtime();
         return res;
     }
     let g2 = zn.mul(&g, &g);
@@ -343,13 +349,16 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Uint
         // Check GCD after each prime block
         let d = Integer::gcd(&n, &Uint::from(product));
         if d > Uint::ONE && d < n {
+            logtime();
             return Some((d, n / d));
         }
     }
     let d = Integer::gcd(&n, &Uint::from(product));
     if d > Uint::ONE && d < n {
+        logtime();
         return Some((d, n / d));
     }
+    logtime();
     None
 }
 
@@ -474,7 +483,6 @@ fn pm1_stage2_polyeval(zn: &ZmodN, b2: f64, g: MInt) -> Option<(Uint, Uint)> {
     // This requires n/6 values instead of φ(n)/2 ~ n/10)
 
     let n = &zn.n;
-    // Compute the baby steps (1 + 6k)^2 up to d1/2
     assert!(d1 % 6 == 0);
     let bsteps = exp_squares(zn, g, d1, 1..d1, 6);
     // Compute the giant steps (i*d)^2 for i in 1..d2
