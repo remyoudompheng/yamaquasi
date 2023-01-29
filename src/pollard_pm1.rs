@@ -264,7 +264,7 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Uint
             }
             let p = p as u64;
             let mut pow = p;
-            while pow * p < 1024 {
+            while pow * p < b1 {
                 pow *= p;
             }
             if 1 << expblock.leading_zeros() <= pow {
@@ -604,5 +604,13 @@ fn test_pm1_uint() {
     let n = Uint::from_str("271750259454572315341").unwrap();
     let Some((p, q)) = pm1_impl(n, 16384, 40e3, v)
         else { panic!("failed Pollard P-1") };
+    assert_eq!(p * q, n);
+
+    // Has factor p=25362180101
+    // p-1 = 2*2*5*5*53*53*90289 where 53*53 > 1024
+    let n = Uint::from_str("11006826704494670034453871933878113282264711716157472884058231906746817631612072806760744802006592942296873294117168841323692902345209717573").unwrap();
+    let Some((p, q)) = pm1_impl(n, 16384, 100e3, v)
+        else { panic!("failed Pollard P-1") };
+    assert_eq!(p, Uint::from_digit(25_362_180_101));
     assert_eq!(p * q, n);
 }
