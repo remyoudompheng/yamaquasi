@@ -90,7 +90,7 @@ impl<'a> Poly<'a> {
 
     // Computes polynomial product(x-r for r in roots)
     #[doc(hidden)]
-    pub fn _product_tree(zr: &PolyRing<'a>, roots: &[MInt]) -> Vec<Vec<MInt>> {
+    pub fn _product_tree(zr: &PolyRing<'a>, roots: &[MInt], keep_tree: bool) -> Vec<Vec<MInt>> {
         // Smallest power of two >= len(roots).
         let zn = &zr.zn;
         let logn = usize::BITS - usize::leading_zeros(roots.len() - 1);
@@ -108,11 +108,13 @@ impl<'a> Poly<'a> {
                 buf1[2 * i + 1] = zn.one();
             }
         }
-        layers.push(buf1.clone());
         // Repeatedly multiply pairs of polynomials in buf1 into buf2.
         // To build layer i, multiply degree 2^{i-1} polynomials from previous layer.
         let mut tmp = vec![MInt::default(); 6 * n];
         for i in 1..=logn {
+            if keep_tree {
+                layers.push(buf1.clone());
+            }
             for j in 0..(1 << (logn - i)) {
                 // Indices from 0 to 2<<logn
                 // At layer i, the degree of polynomials to be multiplied is 2^(i-1)
@@ -166,15 +168,17 @@ impl<'a> Poly<'a> {
             }
             debug_assert!(buf2[1 << i] == zn.one());
             std::mem::swap(&mut buf1, &mut buf2);
-            layers.push(buf1.clone());
         }
-        assert_eq!(layers.len() as u32, logn + 1);
+        layers.push(buf1.clone());
+        if keep_tree {
+            assert_eq!(layers.len() as u32, logn + 1);
+        }
         layers
     }
 
     pub fn from_roots<'b>(r: &'b PolyRing<'a>, roots: &[MInt]) -> Poly<'b> {
         let deg = roots.len();
-        let layers = Self::_product_tree(r, roots);
+        let layers = Self::_product_tree(r, roots, false);
         let product = layers.last().unwrap();
         // Last layer has degree n.
         let n = product.len() / 2;
@@ -206,7 +210,7 @@ impl<'a> Poly<'a> {
         assert!(a.len() <= chunks * chunklen);
         let mut vals = vec![];
         for chk in a.chunks(chunklen) {
-            let tree = Self::_product_tree(self.r, chk);
+            let tree = Self::_product_tree(self.r, chk, true);
             let mut vs = self._multi_eval(&tree);
             vs.truncate(chk.len());
             vals.append(&mut vs);
@@ -218,7 +222,7 @@ impl<'a> Poly<'a> {
     // Compute product(x-a[i]) evaluated as points b[j]
     pub fn roots_eval(zn: &'a ZmodN, a: &[MInt], b: &[MInt]) -> Vec<MInt> {
         let zr = PolyRing::new(zn, b.len());
-        let tree = Self::_product_tree(&zr, b);
+        let tree = Self::_product_tree(&zr, b, true);
         let n = tree[tree.len() - 1].len() / 2;
         let mut vals = if a.len() < n {
             // Compute the full product of x - a[i]
