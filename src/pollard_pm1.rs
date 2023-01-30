@@ -45,13 +45,20 @@
 //! method, the classical method to test only φ(d)/2 values of r is to use
 //! an even polynomial (x^2): such a large prime exists if g^(qd^2) = g^(r^2).
 //! because (qd^2 - r^2) = (qd-r)(qd+r), allowing to test only r < d/2.
+//!
+//! The Bluestein (chirp-z) algorithm can compute a multipoint evaluation faster when
+//! the base points are a geometric progression.
+//!
+//! FFT extension for algebraic-group factorization algorithms
+//! Richard P. Brent, Alexander Kruppa, Paul Zimmermann
+//! https://hal.inria.fr/hal-01630907/document
 
 use num_integer::Integer;
 
+use crate::arith_fft::convolve_modn_ntt;
 use crate::arith_montgomery::{mg_2adic_inv, mg_mul, mg_redc, MInt, ZmodN};
-use crate::arith_poly::Poly;
+use crate::arith_poly::{Poly, PolyRing};
 use crate::fbase;
-use crate::params::stage2_params;
 use crate::{Uint, Verbosity};
 
 /// A factor base for Pollard P-1.
@@ -203,20 +210,20 @@ pub fn pm1_quick(n: Uint, v: Verbosity) -> Option<(Uint, Uint)> {
         // Takes less than a few ms
         191..=220 => pm1_impl(n, 10_000, 270e3, v),
         // Takes less than 0.01 second
-        221..=250 => pm1_impl(n, 50_000, 540e3, v),
+        221..=250 => pm1_impl(n, 50_000, 8e6, v),
         // Takes less than 0.1 second
-        251..=280 => pm1_impl(n, 200_000, 7.1e6, v),
+        251..=280 => pm1_impl(n, 200_000, 300e6, v),
         // Takes less than 0.5 second
-        281..=310 => pm1_impl(n, 1_000_000, 117e6, v),
+        281..=310 => pm1_impl(n, 1_000_000, 1.2e9, v),
         // Takes about 1 second
-        311..=340 => pm1_impl(n, 2_000_000, 322e6, v),
+        311..=340 => pm1_impl(n, 2_000_000, 5e9, v),
         // Takes about 2-5 seconds
-        341..=370 => pm1_impl(n, 7_000_000, 1.3e9, v),
+        341..=370 => pm1_impl(n, 7_000_000, 18e9, v),
         // Above this size, quadratic sieve will be extremely
         // long so allow a lot of CPU budget into Pollard P-1.
-        371..=420 => pm1_impl(n, 16 << 20, 5.2e9, v),
-        421..=470 => pm1_impl(n, 64 << 20, 21e9, v),
-        471.. => pm1_impl(n, 256 << 20, 136e9, v),
+        371..=420 => pm1_impl(n, 16 << 20, 150e9, v),
+        421..=470 => pm1_impl(n, 64 << 20, 1.4e12, v),
+        471.. => pm1_impl(n, 256 << 20, 10e12, v),
     }
 }
 
@@ -225,29 +232,29 @@ pub fn pm1_quick(n: Uint, v: Verbosity) -> Option<(Uint, Uint)> {
 /// but should be faster than ECM with similar B1/B2.
 pub fn pm1_only(n: Uint, v: Verbosity) -> Option<(Uint, Uint)> {
     match n.bits() {
-        0..=80 => pm1_impl(n, 16 << 10, 270e3, v),
-        81..=120 => pm1_impl(n, 64 << 10, 1.2e6, v),
-        121..=160 => pm1_impl(n, 256 << 10, 5e6, v),
-        161..=200 => pm1_impl(n, 1 << 20, 19e6, v),
-        201..=240 => pm1_impl(n, 4 << 20, 117e6, v),
-        241..=280 => pm1_impl(n, 32 << 20, 322e6, v),
-        281..=320 => pm1_impl(n, 64 << 20, 1.3e9, v),
-        321..=370 => pm1_impl(n, 128 << 20, 5e9, v),
+        0..=80 => pm1_impl(n, 16 << 10, 450e3, v),
+        81..=120 => pm1_impl(n, 64 << 10, 8e6, v),
+        121..=160 => pm1_impl(n, 256 << 10, 300e6, v),
+        161..=200 => pm1_impl(n, 1 << 20, 1.2e9, v),
+        201..=240 => pm1_impl(n, 4 << 20, 8e9, v),
+        241..=280 => pm1_impl(n, 32 << 20, 640e9, v),
+        281..=320 => pm1_impl(n, 64 << 20, 1.4e12, v),
+        321..=370 => pm1_impl(n, 128 << 20, 2.5e12, v),
         // Below parameters can take several minutes.
-        371..=420 => pm1_impl(n, 256 << 20, 10e9, v),
-        421..=470 => pm1_impl(n, 512 << 20, 136e9, v),
-        471.. => pm1_impl(n, 1 << 30, 362e9, v),
+        371..=420 => pm1_impl(n, 200_000_000, 5e12, v),
+        421..=470 => pm1_impl(n, 300_000_000, 10e12, v),
+        471.. => pm1_impl(n, 500_000_000, 22.5e12, v),
     }
 }
 
-const MULTIEVAL_THRESHOLD: u64 = 2000;
+const MULTIEVAL_THRESHOLD: f64 = 300e3;
 
 #[doc(hidden)]
 pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Uint, Uint)> {
     let start1 = std::time::Instant::now();
-    let (b2real, d1, _) = stage2_params(b2);
+    let (b2real, _, _) = stage2_params(b2);
     if verbosity >= Verbosity::Info {
-        eprintln!("Attempting P-1 with B1={b1} B2={b2real:e}",);
+        eprintln!("Attempting P-1 with B1={b1} B2={b2real:e}");
     }
     assert!(b1 > 3);
     let zn = ZmodN::new(n);
@@ -314,7 +321,7 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Uint
             }
         }
     };
-    if d1 > MULTIEVAL_THRESHOLD {
+    if b2 > MULTIEVAL_THRESHOLD {
         let res = pm1_stage2_polyeval(&zn, b2, g);
         logtime();
         return res;
@@ -439,73 +446,166 @@ fn exp_modn(zn: &ZmodN, g: &MInt, exp: u64) -> MInt {
     res
 }
 
-/// Compute g^(i^2) for i = start, start + step, ... (i < bound and gcd(i,d)==1)
-fn exp_squares(zn: &ZmodN, g: MInt, d: u64, range: std::ops::Range<u64>, step: u64) -> Vec<MInt> {
-    let (start, end) = (range.start, range.end);
-    // The factor from an element to the next is:
-    // (start + (k+1) step)^2 - (start + k step)^2 = 2 start step + step^2 (2k+1)
-    let gstep = exp_modn(zn, &g, step);
-    // start^2
-    let mut x = exp_modn(zn, &g, start * start);
-    // Finite difference x[i+1] - [i]
-    let mut dx = exp_modn(zn, &gstep, 2 * start + step);
-    // Order 2 finite difference (constant).
-    let ddx = exp_modn(zn, &gstep, 2 * step);
-    let mut result = Vec::with_capacity((end - start) as usize / step as usize);
-    result.push(x);
-    let mut exp = start;
-    loop {
-        exp += step;
-        if exp >= end {
-            break;
-        }
-        x = zn.mul(&x, &dx);
-        dx = zn.mul(&dx, &ddx);
-        if Integer::gcd(&exp, &d) == 1 {
-            result.push(x);
-        }
-    }
-    result
-}
-
 fn pm1_stage2_polyeval(zn: &ZmodN, b2: f64, g: MInt) -> Option<(Uint, Uint)> {
     let (_, d1, d2) = stage2_params(b2);
     // Instead of computing g^p for all primes p in [b1, b2]
     // write the unknown p as qD - r where r < D and gcd(r,D)=1
     // and look for (g^D)^q == g^r modulo some unknown factor.
     //
-    // When using the degree 2 method, it is enough to check 0 < r < D/2
-    // look for g^(qD^2) == g^(r^2) modulo some unknown factor.
-    // It requires twice as much modular multiplications.
+    // Define the polynomial P(x) = product(x - g^r).
+    // We need to compute P(g^D), P(g^2D) etc.
     //
-    // Instead of using 0 < r < D/2 we can use r=6k+1, 0 < r < D
-    // to keep a rather short arithmeric progression (this is used in GMP-ECM).
-    // This requires n/6 values instead of φ(n)/2 ~ n/10)
-
+    // Define
+    // Pg = [P[i] g^(-i² D/2)]
+    // Q = [1, g^D/2, g^4D/2 ... g^(D/2 k²)]
+    //
+    // Then the convolution (Pg * Q)[k] is:
+    //     sum(i+j=k, P[i] g^(i² D/2) g^(K-j² D/2))
+    //   = g^? * sum(i+j=k, P[i] (g^kD)^i)
+    //   = g^? P(g^kD)
+    // because K+(i²-j²)D/2 = K+k(2i-k)D/2 = (K-k²D/2) + ikD
+    //
+    // If Q has size 2^n we recover 2^n - deg P evaluations of P.
     let n = &zn.n;
     assert!(d1 % 6 == 0);
-    let bsteps = exp_squares(zn, g, d1, 1..d1, 6);
-    // Compute the giant steps (i*d)^2 for i in 1..d2
-    let gsteps = exp_squares(zn, g, 1, 0..d1 * d2, d1);
-    debug_assert!(gsteps.len() == d2 as usize);
+    // Compute baby steps.
+    let bsteps = {
+        let mut v = Vec::with_capacity(d1 as usize / 2);
+        let mut b = 1;
+        let g2 = zn.mul(&g, &g);
+        let mut gaps = vec![g2];
+        let mut bg = g.clone();
+        let mut bexp = 1;
+        v.push(bg.clone());
+        while b < d1 {
+            b += 6;
+            if Integer::gcd(&b, &d1) != 1 {
+                continue;
+            }
+            let gap = b - bexp;
+            while gaps.len() as u64 <= gap / 2 {
+                gaps.push(zn.mul(gaps[gaps.len() - 1], g2));
+            }
+            bg = zn.mul(&bg, &gaps[gap as usize / 2 - 1]);
+            v.push(bg.clone());
+            bexp = b;
+        }
+        debug_assert!(bg == exp_modn(zn, &g, bexp));
+        v
+    };
+    // Compute the giant steps i²D/2 for i in 0..k
+    // but also the negated (k²-i²)D/2
+    let d2 = d2 as usize;
+    let (gsteps, negsteps) = {
+        let mut gaps = Vec::with_capacity(d2);
+        let mut steps = Vec::with_capacity(d2);
+        let mut gexp = zn.one();
+        let mut dg = exp_modn(zn, &g, d1 / 2);
+        let ddg = zn.mul(&dg, &dg);
+        for _ in 0..d2 {
+            // gexp = exp(g, i² D/2)
+            steps.push(gexp);
+            gexp = zn.mul(&gexp, &dg);
+            // dg = exp(g, (2k+1)D/2)
+            gaps.push(dg);
+            dg = zn.mul(&dg, &ddg)
+        }
+        debug_assert!(gexp == exp_modn(zn, &g, (d2 as u64 * d2 as u64 * d1) / 2));
+        // sum(gaps) = d2² D/2
+        assert!(gaps.len() == d2);
+        // Apply gaps in reverse order to build (k²-i²)D/2
+        let mut negsteps = Vec::with_capacity(d2);
+        gexp = zn.one();
+        for i in 0..d2 {
+            gexp = zn.mul(&gexp, &gaps[d2 - 1 - i]);
+            negsteps.push(gexp);
+        }
+        (steps, negsteps)
+    };
+    assert!(d2 & (d2 - 1) == 0);
+    debug_assert!(gsteps.len() == d2);
+    debug_assert!(negsteps.len() == d2);
 
-    // Compute:
-    // P = product(X - bg[i])
-    // product P(gg[j])
-    let vals = Poly::roots_eval(zn, &gsteps, &bsteps);
+    // Compute the convolution. Only coefficients [deg P .. d2]
+    // d2/2 is always above FFT_THRESHOLD.
+    let znx = PolyRing::new(zn, d2 / 2);
+    let mzp = znx.mzp().unwrap();
+    let mut p = Poly::from_roots(&znx, &bsteps).c;
+    for i in 0..p.len() {
+        p[i] = zn.mul(&p[i], &negsteps[i]);
+    }
+    let q = gsteps;
+    let mut z = vec![MInt::default(); d2];
+    convolve_modn_ntt(&mzp, d2, &p, &q, &mut z, 0);
+    let vals = &z[p.len() - 1..];
     let mut buffer = zn.one();
+    let mut buffer_start = 0;
     for (idx, &v) in vals.iter().enumerate() {
         // Compute the gcd every few rows for finer granularity.
         buffer = zn.mul(buffer, v);
-        if idx % 8 == 0 || idx == vals.len() - 1 {
+        if idx % 64 == 0 || idx == vals.len() - 1 {
             let d = Integer::gcd(n, &Uint::from(buffer));
             if d > Uint::ONE && d < *n {
                 return Some((d, n / d));
             }
+            if d == *n {
+                // Backtrack.
+                for v in &vals[buffer_start..idx + 1] {
+                    let d = Integer::gcd(n, &Uint::from(*v));
+                    if d > Uint::ONE && d < *n {
+                        return Some((d, n / d));
+                    }
+                }
+            }
+            buffer_start = idx + 1;
         }
     }
     None
 }
+
+fn stage2_params(b2: f64) -> (f64, u64, u64) {
+    *STAGE2_PARAMS
+        .iter()
+        .min_by(|x, y| (x.0 - b2).abs().total_cmp(&(y.0 - b2).abs()))
+        .unwrap()
+}
+
+const STAGE2_PARAMS: &[(f64, u64, u64)] = &[
+    // B2, d1, d2
+    // Cost assumption: a product tree costs about 8 times a convolution.
+    // Parameters are chosen so that d2 is about 8x or 16x φ(d1)
+    // B2 = d1*(d2 - φ(d1))
+    (30e3, 120, 256),
+    (60e3, 120, 512),
+    (100e3, 240, 512),
+    (200e3, 240, 1024),
+    (450e3, 510, 1024),
+    (980e3, 510, 2048),
+    (1.9e6, 1050, 2048),
+    (4e6, 1050, 4096),
+    (8.3e6, 2310, 4096),
+    (18e6, 2310, 8192),
+    (33e6, 4620, 8192),
+    (71e6, 4620, 16384),
+    (133e6, 9240, 16384),
+    (285e6, 9240, 32768),
+    (550e6, 19110, 32768),
+    (1.2e9, 19110, 65536),
+    (2.3e9, 39270, 65536),
+    (4.8e9, 39270, 131072),
+    (7.9e9, 79170, 131072),
+    (18e9, 79170, 262144),
+    (37e9, 159390, 262144),
+    (78e9, 159390, 524288),
+    (150e9, 330330, 524288), // φ=63360
+    (320e9, 330330, 1048576),
+    (640e9, 690690, 1048576), // φ=126720
+    (1360e9, 690690, 2097152),
+    (2500e9, 1381380, 2097152), // φ=253440
+    (5400e9, 1381380, 4194304),
+    (10.5e12, 2852850, 4194304), // φ=518400
+    (22.5e12, 2852850, 8388608),
+];
 
 #[test]
 fn test_pm1_basic() {

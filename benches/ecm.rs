@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use brunch::Bench;
 use yamaquasi::arith_montgomery::ZmodN;
-use yamaquasi::pollard_pm1::pm1_impl;
 use yamaquasi::{ecm, Preferences, Uint, Verbosity};
 
 fn main() {
@@ -19,29 +18,6 @@ fn main() {
     .unwrap();
     let mut prefs = Preferences::default();
     prefs.verbosity = Verbosity::Silent;
-
-    let b2_values = [
-        15e3, 65e3, 268e3, 1.18e6, 7.1e6, 28e6, 117e6, 643e6, 2.6e9, 10.5e9, 43e9, 136e9, 543e9,
-    ];
-    for &b2 in &b2_values {
-        let b1 = 200;
-        let start = std::time::Instant::now();
-        // Use P256 so what ECM cannot work.
-        let res = pm1_impl(p256, b1, b2, Verbosity::Silent);
-        assert!(res.is_none());
-        eprintln!(
-            "p256 PM1(B1={b1},B2={b2:.2e}) in {:.3}s",
-            start.elapsed().as_secs_f64()
-        );
-
-        let start = std::time::Instant::now();
-        let res = pm1_impl(p480, b1, b2, Verbosity::Silent);
-        assert!(res.is_none());
-        eprintln!(
-            "p480 PM1(B1={b1},B2={b2:.2e}) in {:.3}s",
-            start.elapsed().as_secs_f64()
-        );
-    }
 
     brunch::benches! {
         inline:
@@ -101,6 +77,9 @@ fn main() {
 
     // ECM complexity (O(b1 log(b1)) + O(b2^(0.5+eps)))
     eprintln!("ECM timings");
+    let b2_values = [
+        15e3, 65e3, 268e3, 1.18e6, 7.1e6, 28e6, 117e6, 643e6, 2.6e9, 10.5e9, 43e9, 136e9, 543e9,
+    ];
     for &b2 in &b2_values {
         for b1 in [100, 150, 200] {
             if b1 != 200 && b2 > 1e6 {

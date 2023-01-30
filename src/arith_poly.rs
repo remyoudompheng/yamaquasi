@@ -81,6 +81,12 @@ impl<'a> PolyRing<'a> {
             PolyRing { zn, mzp: None }
         }
     }
+
+    /// A reference to the underlying product ring Π(Z/piZ)
+    /// when NTT is enabled.
+    pub fn mzp(&self) -> Option<&'a MultiZmodP> {
+        self.mzp.as_ref()
+    }
 }
 
 impl<'a> Poly<'a> {

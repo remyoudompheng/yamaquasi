@@ -219,9 +219,6 @@ fn factor_impl(
         Algo::Auto => {
             // Only in automatic mode, for large inputs, Pollard P-1 and ECM can be useful.
             if !prefs.pm1_done.load(Ordering::Relaxed) {
-                if prefs.verbose(Verbosity::Verbose) {
-                    eprintln!("Attempting Pollard P-1");
-                }
                 let start_pm1 = std::time::Instant::now();
                 if let Some((a, b)) = pollard_pm1::pm1_quick(n, prefs.verbosity) {
                     if prefs.verbose(Verbosity::Info) {

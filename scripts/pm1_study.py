@@ -1,13 +1,33 @@
 from random import getrandbits
-from sage.all import next_prime, factor, primes
+from sage.all import next_prime, factor, primes, euler_phi
+
+# Study parameters for stage 2.
+
+Ds = [
+    # fmt:off
+    240, 510, 1050, 2310, 4620, 9240,
+    19110, 39270, 79190, 159390, 330330,
+    690690, 1381380, 2852850,
+    # fmt:on
+]
+for d in Ds:
+    for k in range(2, 26):
+        phi = euler_phi(d)
+        if 2 * phi >= (1 << k):
+            continue
+        b2 = d * (2**k - phi)
+        # Cost model: 1 product tree of size N = 8 convolutions of size N
+        cost = 8 * phi + 2**k
+        print(f"D={d} φ={phi} size={2**k} B2={float(b2):.3e} cost={cost}")
 
 # Cost of exponentiation chains when taking w bits at a time.
+
 def cost(n, w):
     if w == 1:
         sq, mul = 0, 0
     else:
         # compute 1, ... 2**w-1
-        sq, mul = 1, 2**(w-1) - 1
+        sq, mul = 1, 2 ** (w - 1) - 1
     while n >= 0:
         if n % 2 == 0:
             sq += 1
@@ -18,6 +38,7 @@ def cost(n, w):
             mul += 1
             n = n - (n % 2**w)
     return sq, mul
+
 
 def pblocks(sz):
     blocks = []
@@ -30,10 +51,22 @@ def pblocks(sz):
     blocks.append(buf)
     return blocks
 
+
 for blksize in (32, 64, 128, 256):
     blks = pblocks(blksize)
     print(f"exponent blocks {len(blks)}x {blksize} bits")
-    for w in range(1, 10):
+    for w in range(1, 8):
+        sqs, muls = 0, 0
+        for b in blks:
+            sq, mul = cost(b, w)
+            sqs += sq
+            muls += mul
+        print(f"{blksize=} {w=} cost={sqs+muls} ({sqs}S + {muls}M)")
+
+for blksize in (512, 1024, 2048):
+    blks = pblocks(blksize)
+    print(f"exponent blocks {len(blks)}x {blksize} bits")
+    for w in range(4, 10):
         sqs, muls = 0, 0
         for b in blks:
             sq, mul = cost(b, w)
@@ -50,10 +83,10 @@ for sz in list(range(22, 28)) + [48, 60, 72, 84, 96]:
     for _ in range(5000):
         p0 = getrandbits(sz)
         p = next_prime(p0)
-        ps = [f for f, _ in factor(p-1)]
-        for f, k in factor(p-1):
+        ps = [f for f, _ in factor(p - 1)]
+        for f, k in factor(p - 1):
             if k > 1 and f**k > 500:
-                #print(f"large factor {f}^{k} in prime {p}")
+                # print(f"large factor {f}^{k} in prime {p}")
                 powers += 1
         q1, q2 = sorted(ps)[-2:] if len(ps) > 1 else (ps[0], ps[0])
         stats1.append(q1)
@@ -61,11 +94,10 @@ for sz in list(range(22, 28)) + [48, 60, 72, 84, 96]:
     l = len(stats1)
     stats1.sort()
     stats2.sort()
-    p50, p66, p75 = stats1[-l//2], stats1[-l//3], stats1[-l//4]
-    p90, p99 = stats1[-l//10], stats1[-l//100]
+    p50, p66, p75 = stats1[-l // 2], stats1[-l // 3], stats1[-l // 4]
+    p90, p99 = stats1[-l // 10], stats1[-l // 100]
     print(f"2nd largest {p50=} {p66=} {p75=} {p90=} {p99=}")
-    p50, p66, p75 = stats2[-l//2], stats2[-l//3], stats2[-l//4]
-    p90, p99 = stats2[-l//10], stats2[-l//100]
+    p50, p66, p75 = stats2[-l // 2], stats2[-l // 3], stats2[-l // 4]
+    p90, p99 = stats2[-l // 10], stats2[-l // 100]
     print(f"largest {p50=} {p66=} {p75=} {p90=} {p99=}")
     print(f"{powers/50:.2}% misses due to small prime powers")
-
