@@ -437,6 +437,11 @@ pub fn pseudoprime(p: Uint) -> bool {
     if !p.bit(0) {
         return p.to_u64() == Some(2);
     }
+    if let Some(p64) = p.to_u64() {
+        if p64 < *fbase::SMALL_PRIMES.last().unwrap() {
+            return fbase::SMALL_PRIMES[..].contains(&p64);
+        }
+    }
     pub fn pow_mod(zp: &ZmodN, x: MInt, exp: Uint) -> MInt {
         let mut res = zp.one();
         let mut x = x;
@@ -482,6 +487,12 @@ pub fn pseudoprime(p: Uint) -> bool {
 
 #[test]
 fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
+    let fs = factor(Uint::ZERO, Algo::Auto, &Preferences::default());
+    assert_eq!(fs, vec![Uint::ZERO]);
+
+    let fs = factor(Uint::ONE, Algo::Auto, &Preferences::default());
+    assert_eq!(fs, vec![]);
+
     // semiprime
     eprintln!("=> test semiprime");
     let n = Uint::from_str("404385851501206046375042621")?;
@@ -568,6 +579,7 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
 
 #[test]
 fn test_pseudoprime() {
+    assert!(!pseudoprime(1_u64.into()));
     assert!(pseudoprime(2_u64.into()));
     assert!(pseudoprime(17_u64.into()));
     // Large prime
