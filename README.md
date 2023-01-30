@@ -77,17 +77,18 @@ in the P-1 and ECM algorithms.
 
 Multiplication can be sped up on `x86-64` using the `mulx` instruction. This is
 done automatically by the Rust compiler when enabling `target-feature=+bmi2`
-on supported CPUs (at least microarchitecture level `x86-64-v3`). The improvement
+on supported CPUs (or microarchitecture level `target-cpu=x86-64-v3`). The improvement
 may range from 0% to 10%.
 
 ## Vectorization
 
 The polynomial roots step of SIQS is written to benefit from vectorization.
 On architecture `x86-64` you can compile with `RUSTFLAGS='-C target-feature=+avx2'`
-to use AVX2 which can often be faster.
+or `target-cpu=x86-64-v3` to use AVX2 which can often be faster.
 
 The linear algebra step common to quadratic sieve variants can also benefit
 from AVX2 through LLVM automatic vectorization (possibly 5%-10% improvement).
+The NTT implementation with u64-sized primes also benefits from AVX2 auto-vectorization.
 
 On `aarch64` architecture, the NEON feature is usually enabled by default.
 
