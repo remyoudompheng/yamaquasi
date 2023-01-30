@@ -39,6 +39,9 @@
 
 use std::cmp::min;
 
+use bnum::cast::CastFrom;
+use bnum::types::U2048;
+
 use crate::arith;
 use crate::arith_montgomery::{self, MInt, ZmodN};
 
@@ -719,8 +722,6 @@ const NTT_PRIMES: &[(u64, u64)] = &[
     (0x7da000000000001, 0x7344ff51d92abdf),
 ];
 
-use bnum::types::U2048;
-
 // A residue number system for bounded size computations.
 // We select w NTT friendly primes such that 62k is more than the
 // maximal expected integer size.
@@ -739,12 +740,15 @@ pub struct MultiZmodP<'a> {
     roots: Vec<Box<[u64]>>,
     // rpowers[i][j] = R^(j+1) mod p[i]
     rpowers: Vec<Vec<u64>>,
-    // CRT coefficients:
-    // pinv[i] = (P/pi)^-1 mod pi
-    // crt[i] = pinv[i] * (P/pi)
-    // where P is the product of selected primes.
-    crt: Vec<U2048>,
+    // CRT coefficients: P is the product of selected primes.
+    // The CRT basis is crt_pinv * crt_p
+    // crt_pinv[i] = (P/pi)^-1 mod pi (not in Montgomery form)
+    crt_pinv: Vec<u64>,
+    // crt_p[i] = (P/pi) as a multiprecision integer
+    crt_p: Vec<U2048>,
     pprod: U2048,
+    // multiples 1*pprod .. w*pprod
+    pprods: Vec<U2048>,
     w: usize,
     k: u32,
     zn: &'a ZmodN,
@@ -774,8 +778,10 @@ impl<'a> MultiZmodP<'a> {
         }
         // Compute CRT coefficients. This is the same code
         // as siqs::select_siqs_factors.
-        let mut crt = vec![U2048::default(); w];
+        let mut crt_pinv = vec![0; w];
+        let mut crt_p = vec![U2048::default(); w];
         let mut pprod = U2048::from(1_u64);
+        let mut pprods = vec![];
         for i in 0..w {
             // Compute product(pj for j != i) modulo pi and modulo n.
             let mut mi = 1_u128;
@@ -790,9 +796,15 @@ impl<'a> MultiZmodP<'a> {
                 m *= U2048::from(pj);
             }
             // Invert modulo pi.
-            let mi_inv = arith::inv_mod64(mi as u64, pi as u64).unwrap();
-            crt[i] = m * U2048::from(mi_inv);
+            crt_pinv[i] = arith::inv_mod64(mi as u64, pi as u64).unwrap();
+            crt_p[i] = m;
             pprod *= U2048::from(pi);
+        }
+        assert!(pprod > U2048::cast_from(zn.n) * U2048::cast_from(zn.n) << logsize);
+        let mut pprod_k = pprod;
+        for _ in 0..w {
+            pprods.push(pprod_k);
+            pprod_k += pprod;
         }
         // Prepare roots of unity (in Montgomery form).
         let mut ωs = vec![0_u64; w];
@@ -840,8 +852,10 @@ impl<'a> MultiZmodP<'a> {
         MultiZmodP {
             primes,
             roots: roots_packed,
-            crt,
+            crt_pinv,
+            crt_p,
             pprod,
+            pprods,
             rpowers,
             w,
             k: logsize,
@@ -897,75 +911,60 @@ impl<'a> MultiZmodP<'a> {
 
     pub fn _crt(&self, res: &mut [u64], x: &[u64]) {
         debug_assert!(x.len() == self.w);
+        if self.w == 1 {
+            // nothing to do.
+            let pi = self.primes[0].0;
+            res[0] = arith_montgomery::mg_redc(pi, pi - 2, x[0] as u128);
+            return;
+        }
+        // Assume w >= 2.
         // Reconstruct number as (sum xi CRT[i] - kP)
-        // We compute modulo n but kP must be subtracted.
-        // k = sum(xi pinv[i] // pi)
-        // where pinv[i] = (P/pi)^-1 mod pi
+        // xi crt[i] % P = (xi crt_pinv % pi) * crt_p
+        // where (xi crt_pinv % pi) is computed using 64-bit arithmetic
+        //
+        // The sum of these terms is at most w*P.
+        // We can subtract the correct multiple using precomputed tables.
         let w = self.w;
         debug_assert!(res.len() >= w + 1);
         const WORDS: usize = U2048::BITS as usize / 64;
-        let mut buf = [0; WORDS];
         let mut xs = [0; NTT_PRIMES.len()];
         for i in 0..w {
+            // REDC(xR * pinv) = (x * pinv) % pi
             let pi = self.primes[i].0;
-            xs[i] = arith_montgomery::mg_redc(pi, pi - 2, x[i] as u128);
+            xs[i] = arith_montgomery::mg_mul(pi, pi - 2, x[i], self.crt_pinv[i]);
         }
         let mut carry = 0;
         for i in 0..w {
+            // Compute sum(xi * crt_p) word by word.
+            // The sum of xi * digit is bounded by (sum pi) << 64 so it fits u128.
             let mut z = carry as u128;
             for j in 0..w {
-                z += xs[j] as u128 * self.crt[j].digits()[i] as u128;
+                z += unsafe {
+                    *xs.get_unchecked(j) as u128
+                        * *self.crt_p.get_unchecked(j).digits().get_unchecked(i) as u128
+                };
             }
             res[i] = z as u64;
             carry = (z >> 64) as u64;
         }
-        res[w] = carry;
+        // The total sum is less than w*P so it fits w words (P has less than 63w bits).
+        assert!(carry == 0);
+        debug_assert!(self.pprod.bits() as isize > 64 * (w - 2) as isize);
         // Reduce modulo pprod.
-        // Product of primes has size ~59w bits, it has w or w-1 words
-        let pdigits = self.pprod.digits();
-        let plen: usize = {
-            let mut i = w;
-            loop {
-                if pdigits[i] != 0 {
-                    break i;
-                }
-                i -= 1;
+        // It is enough to compare top words, because the result is less than P/2.
+        let mut q = 0;
+        let &[r0, r1] = &res[w - 2..w] else { unreachable!("impossible") };
+        let r_top = ((r1 as u128) << 64) | r0 as u128;
+        for i in 0..w {
+            let kp = self.pprods[i].digits();
+            let &[w0, w1] = &kp[w - 2..w] else { unreachable!("impossible") };
+            let kp_top = ((w1 as u128) << 64) | w0 as u128;
+            if kp_top <= r_top {
+                q += 1
             }
-        };
-        debug_assert!(pdigits[w + 1] == 0);
-        // Use top 64 bits to compute an approximate quotient.
-        // This quotient must be exact up to 1 unit.
-        // Because the quotient is at most 63 bits.
-        fn topwords(r: &[u64], p: &[u64], plen: usize) -> (u128, u64) {
-            let pad = p[plen].leading_zeros();
-            let mut rtop = ((r[plen + 1] as u128) << (64 + pad)) + ((r[plen] as u128) << pad);
-            let mut ptop = p[plen] << pad;
-            if pad > 0 {
-                rtop += (r[plen - 1] as u128) >> (64 - pad);
-                ptop += p[plen - 1] >> (64 - pad);
-            }
-            (rtop, ptop)
         }
-        let qapprox: u128 = if plen == 0 {
-            let restop = ((res[plen + 1] as u128) << 64) + res[plen] as u128;
-            restop / (pdigits[0] as u128)
-        } else {
-            let (restop, ptop) = topwords(res, pdigits, plen);
-            restop / (ptop as u128 + 1)
-        };
-        debug_assert!(qapprox >> 64 == 0);
-        _mul_slice(&mut buf[..w + 1], &pdigits[..w + 1], qapprox as u64);
-        _sub_slices(&mut res[..w + 1], &buf[..w + 1]);
-        // Values must be less than P/2 in all cases, so the top word must be less than pprod.
-        if plen > 0 {
-            loop {
-                let (restop, ptop) = topwords(res, pdigits, plen);
-                if restop >= ptop as u128 {
-                    _sub_slices(&mut res[..w + 1], &pdigits[..w + 1]);
-                } else {
-                    break;
-                }
-            }
+        if q > 0 {
+            _sub_slices(&mut res[..w], &self.pprods[q - 1].digits()[..w]);
         }
         debug_assert!({
             let mut r = [0; WORDS];
@@ -978,7 +977,7 @@ impl<'a> MultiZmodP<'a> {
     // - butterfly (x,y) -> (x+y,x-y)
     // - multiply by ω^i
     // - divide by 2^l
-
+    #[allow(dead_code)]
     fn addsub(&self, a: &mut [u64], b: &mut [u64], x: &[u64], y: &[u64]) {
         debug_assert!(x.len() == self.w);
         debug_assert!(y.len() == self.w);
@@ -1046,6 +1045,7 @@ impl<'a> MultiZmodP<'a> {
         }
     }
 
+    #[allow(dead_code)]
     fn ntt(&self, src: &[u64], dst: &mut [u64], depth: u32, k: u32, fwd: bool) {
         // At each stage, transform src[i<<depth] for i in 0..2^k into dst.
         assert!(dst.len() == self.w << k);
