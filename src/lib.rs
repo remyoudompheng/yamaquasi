@@ -220,23 +220,25 @@ fn factor_impl(
             // Only in automatic mode, for large inputs, Pollard P-1 and ECM can be useful.
             if !prefs.pm1_done.load(Ordering::Relaxed) {
                 let start_pm1 = std::time::Instant::now();
-                if let Some((a, b)) = pollard_pm1::pm1_quick(n, prefs.verbosity) {
+                let pm1_res = pollard_pm1::pm1_quick(n, prefs.verbosity);
+                // P-1 should be only run once.
+                prefs.pm1_done.store(true, Ordering::Relaxed);
+                if let Some((a_s, b)) = pm1_res {
                     if prefs.verbose(Verbosity::Info) {
                         eprintln!(
-                            "Pollard P-1 success with factor p={a} in {:.3}s",
+                            "Pollard P-1 success with factors {a_s:?} in {:.3}s",
                             start_pm1.elapsed().as_secs_f64()
                         );
                     }
-                    factor_impl(a, alg, prefs, factors, tpool);
+                    for a in a_s {
+                        factor_impl(a, alg, prefs, factors, tpool);
+                    }
                     if prefs.verbose(Verbosity::Info) {
                         eprintln!("Recursively factor {b}");
                     }
                     factor_impl(b, alg, prefs, factors, tpool);
                     return;
                 } else if prefs.verbose(Verbosity::Info) {
-                    // Once Pollard P-1 has failed, all further runs with smaller
-                    // parameters will probably fail.
-                    prefs.pm1_done.store(true, Ordering::Relaxed);
                     eprintln!(
                         "Pollard P-1 failure in {:.3}s",
                         start_pm1.elapsed().as_secs_f64()
@@ -255,14 +257,16 @@ fn factor_impl(
         Algo::Pm1 => {
             // Pure Pollard P-1
             let start_pm1 = std::time::Instant::now();
-            if let Some((a, b)) = pollard_pm1::pm1_only(n, prefs.verbosity) {
+            if let Some((a_s, b)) = pollard_pm1::pm1_only(n, prefs.verbosity) {
                 if prefs.verbose(Verbosity::Info) {
                     eprintln!(
-                        "Pollard P-1 success with factor p={a} in {:.3}s",
+                        "Pollard P-1 success with factors p={a_s:?} in {:.3}s",
                         start_pm1.elapsed().as_secs_f64()
                     );
                 }
-                factor_impl(a, alg, prefs, factors, tpool);
+                for a in a_s {
+                    factor_impl(a, alg, prefs, factors, tpool);
+                }
                 if prefs.verbose(Verbosity::Info) {
                     eprintln!("Recursively factor {b}");
                 }

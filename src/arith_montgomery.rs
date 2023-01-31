@@ -10,6 +10,8 @@
 
 use std::borrow::Borrow;
 
+use num_integer::Integer;
+
 use crate::arith;
 use crate::Uint;
 
@@ -400,6 +402,48 @@ fn mint_sub(x: &mut [u64; MINT_WORDS], y: &[u64], sz: u32) {
     }
 }
 
+/// Determine factors from a sequence of values mod n
+///
+/// The sequence of values is supposed to have increasing GCD with n,
+/// i.e. for i <= j, gcd(n, vals[i]) divides gcd(n, vals[j]).
+///
+/// The product of returned factors is gcd(n, last)/gcd(n, first).
+///
+/// This is satisfied if vals represents iterated powers of
+/// a group element (ECM and P±1 stage 1) or a cumulative product
+/// (ECM and P±1 stage 2).
+pub fn gcd_factors(n: &Uint, vals: &[MInt]) -> (Vec<Uint>, Uint) {
+    // Recursively split input slice and check whether
+    // gcd(first, n) = gcd(last, n).
+    // If they differ by a single prime factor, stop recursion.
+    // gcd1 = gcd(n, vals[0])
+    // gcd2 = gcd(n, vals.last())
+    fn find_factors(n: &Uint, vals: &[MInt], gcd1: &Uint, gcd2: &Uint, factors: &mut Vec<Uint>) {
+        if gcd1 == gcd2 {
+            return;
+        }
+        let p = gcd2 / gcd1;
+        debug_assert!(gcd2 > gcd1 && *gcd2 == p * gcd1);
+        if crate::pseudoprime(p) || vals.len() <= 2 {
+            factors.push(p);
+            return;
+        }
+        let mid = vals.len() / 2;
+        let d = Integer::gcd(n, &Uint::from(vals[mid]));
+        find_factors(n, &vals[..=mid], gcd1, &d, factors);
+        find_factors(n, &vals[mid..], &d, gcd2, factors);
+    }
+    let mut facs = vec![];
+    let d1 = Integer::gcd(n, &Uint::from(vals[0]));
+    let d2 = Integer::gcd(n, &Uint::from(vals[vals.len() - 1]));
+    find_factors(n, vals, &d1, &d2, &mut facs);
+    let mut n = *n;
+    for f in &facs {
+        n /= f;
+    }
+    (facs, n)
+}
+
 #[test]
 fn test_montgomery() {
     use crate::arith::Num;
@@ -445,4 +489,37 @@ fn test_montgomery() {
     )
     .unwrap();
     assert_eq!(zn.to_int(x_y), expect);
+}
+
+#[test]
+fn test_gcd_factors() {
+    let n = Uint::from_digit(13 * 17 * 19 * 31 * 37);
+    assert_eq!(Integer::gcd(&Uint::ZERO, &n), n);
+
+    let vals64 = [
+        79,
+        77 * 13,
+        7 * 13,
+        9 * 13,
+        97 * 13 * 37,
+        5 * 13 * 37,
+        13 * 17 * 37,
+        13 * 17 * 37 * 8,
+    ];
+    let zn = ZmodN::new(n);
+    let vals: Vec<MInt> = vals64
+        .into_iter()
+        .map(|x| zn.from_int(Uint::from_digit(x)))
+        .collect();
+    let (facs, nn) = gcd_factors(&n, &vals);
+    eprintln!("factors={facs:?}");
+    assert_eq!(
+        facs,
+        vec![
+            Uint::from_digit(13),
+            Uint::from_digit(37),
+            Uint::from_digit(17)
+        ]
+    );
+    assert_eq!(nn, Uint::from_digit(19 * 31));
 }

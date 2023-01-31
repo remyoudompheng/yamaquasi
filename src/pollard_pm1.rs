@@ -56,7 +56,7 @@
 use num_integer::Integer;
 
 use crate::arith_fft::convolve_modn_ntt;
-use crate::arith_montgomery::{mg_2adic_inv, mg_mul, mg_redc, MInt, ZmodN};
+use crate::arith_montgomery::{gcd_factors, mg_2adic_inv, mg_mul, mg_redc, MInt, ZmodN};
 use crate::arith_poly::{Poly, PolyRing};
 use crate::fbase;
 use crate::{Uint, Verbosity};
@@ -200,7 +200,7 @@ impl PM1Base {
 // Similarly to ECM implementation, run Pollard P-1 with small parameters
 // to possibly detect a small factor. The cost is 2 multiplications per large
 // prime and it should use a CPU budget similar to 1 ECM run.
-pub fn pm1_quick(n: Uint, v: Verbosity) -> Option<(Uint, Uint)> {
+pub fn pm1_quick(n: Uint, v: Verbosity) -> Option<(Vec<Uint>, Uint)> {
     // Choose B1 so that stage 1 is a large part of CPU time.
     match n.bits() {
         // Extremely quick run
@@ -230,7 +230,7 @@ pub fn pm1_quick(n: Uint, v: Verbosity) -> Option<(Uint, Uint)> {
 /// Perform Pollard P-1 with a large CPU budget.
 /// This is however unlikely to produce interesting results
 /// but should be faster than ECM with similar B1/B2.
-pub fn pm1_only(n: Uint, v: Verbosity) -> Option<(Uint, Uint)> {
+pub fn pm1_only(n: Uint, v: Verbosity) -> Option<(Vec<Uint>, Uint)> {
     match n.bits() {
         0..=80 => pm1_impl(n, 16 << 10, 450e3, v),
         81..=120 => pm1_impl(n, 64 << 10, 8e6, v),
@@ -250,25 +250,26 @@ pub fn pm1_only(n: Uint, v: Verbosity) -> Option<(Uint, Uint)> {
 const MULTIEVAL_THRESHOLD: f64 = 300e3;
 
 #[doc(hidden)]
-pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Uint, Uint)> {
+pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Vec<Uint>, Uint)> {
+    let mut factors = vec![];
     let start1 = std::time::Instant::now();
     let (b2real, _, _) = stage2_params(b2);
     if verbosity >= Verbosity::Info {
         eprintln!("Attempting P-1 with B1={b1} B2={b2real:e}");
     }
     assert!(b1 > 3);
-    let zn = ZmodN::new(n);
+    // The modulus/ring can shrink as we find factors.
+    let mut nred = n;
+    let mut zn = ZmodN::new(n);
     let mut sieve = fbase::PrimeSieve::new();
     let mut block = sieve.next();
     let mut expblock = 1u64;
     // Stage 1
     let mut g = zn.from_int(Uint::from(2_u64));
-    let mut p_prev: u32 = 3;
-    'stage1: loop {
+    let mut p_prev: u32 = 1;
+    let mut gpows = vec![zn.one()];
+    loop {
         for &p in block {
-            if p > b1 as u32 {
-                break 'stage1;
-            }
             let p = p as u64;
             let mut pow = p;
             while pow * p < b1 {
@@ -276,26 +277,43 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Uint
             }
             if 1 << expblock.leading_zeros() <= pow {
                 // process exponent block
-                let gexp = exp_modn(&zn, &g, expblock);
-                if gexp == zn.one() {
+                g = exp_modn(&zn, &g, expblock);
+                gpows.push(zn.sub(&g, &zn.one()));
+                if g == zn.one() {
                     // We can reach 1 if φ(n) is B1-smooth.
                     // No need to continue, maybe the previous value
                     // was the answer.
                     break;
                 }
-                g = gexp;
                 expblock = 1;
             }
             expblock *= pow;
             p_prev = p as u32;
+            if p > b1 {
+                break;
+            }
         }
-        // Check GCD after each prime block
-        let d = Integer::gcd(&n, &Uint::from(zn.sub(&g, &zn.one())));
-        if d > Uint::ONE && d < n {
-            return Some((d, n / d));
+        // Check GCD after each prime block (several thousands primes)
+        let logstage = Some(1).filter(|_| verbosity >= Verbosity::Verbose);
+        if check_gcd_factors(&n, &mut factors, &mut nred, &mut gpows, logstage) {
+            return if factors.is_empty() {
+                None
+            } else {
+                Some((factors, nred))
+            };
+        }
+        if zn.n != nred {
+            // Shrink ring
+            let gint = zn.to_int(g);
+            zn = ZmodN::new(nred);
+            g = zn.from_int(gint % nred);
         }
         block = sieve.next();
+        if p_prev > b1 as u32 {
+            break;
+        }
     }
+    drop(gpows);
     let elapsed1 = start1.elapsed();
 
     // Stage 2
@@ -322,9 +340,14 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Uint
         }
     };
     if b2 > MULTIEVAL_THRESHOLD {
-        let res = pm1_stage2_polyeval(&zn, b2, g);
+        let (mut f2, n2) = pm1_stage2_polyeval(&zn, b2, g);
+        factors.append(&mut f2);
+        nred = n2;
         logtime();
-        return res;
+        if !factors.is_empty() {
+            return Some((factors, nred));
+        }
+        return None;
     }
     let g2 = zn.mul(&g, &g);
     let mut gaps = vec![g2];
@@ -333,12 +356,10 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Uint
     let mut x = exp_modn(&zn, &g, p_prev as u64);
     // Accumulate product of (g^p-1)
     let one = zn.one();
+    let mut products = vec![one];
     let mut product = zn.sub(&x, &one);
-    'stage2: loop {
+    loop {
         for &p in block {
-            if p > b2 as u32 {
-                break 'stage2;
-            }
             if p <= p_prev {
                 continue;
             }
@@ -350,23 +371,59 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Uint
             assert!(gap > 0 && gap % 2 == 0, "gap={gap} p_prev={p_prev} p={p}");
             x = zn.mul(x, gaps[gap / 2 - 1]);
             product = zn.mul(&product, &zn.sub(&x, &one));
+            products.push(product);
             p_prev = p;
+            if p > b2 as u32 {
+                break;
+            }
+        }
+        // Check GCD after each prime block (several thousands primes)
+        let logstage = Some(2).filter(|_| verbosity >= Verbosity::Verbose);
+        if check_gcd_factors(&n, &mut factors, &mut nred, &mut products, logstage) {
+            return if factors.is_empty() {
+                None
+            } else {
+                Some((factors, nred))
+            };
+        }
+        if p_prev > b2 as u32 {
+            break;
         }
         block = sieve.next();
-        // Check GCD after each prime block
-        let d = Integer::gcd(&n, &Uint::from(product));
-        if d > Uint::ONE && d < n {
-            logtime();
-            return Some((d, n / d));
-        }
-    }
-    let d = Integer::gcd(&n, &Uint::from(product));
-    if d > Uint::ONE && d < n {
-        logtime();
-        return Some((d, n / d));
     }
     logtime();
+    if factors.len() > 0 {
+        return Some((factors, nred));
+    }
     None
+}
+
+/// Extract factors by computing GCD and update arrays.
+fn check_gcd_factors(
+    n: &Uint,
+    factors: &mut Vec<Uint>,
+    nred: &mut Uint,
+    values: &mut Vec<MInt>,
+    stage: Option<usize>,
+) -> bool {
+    let (mut fs, nred_) = gcd_factors(nred, &values[..]);
+    if fs.contains(&n) {
+        return true;
+    }
+    if let Some(stage) = stage {
+        for &f in &fs {
+            eprintln!("Found factor {f} during stage {stage}");
+        }
+    };
+    factors.append(&mut fs);
+    *nred = nred_;
+    if *nred == Uint::ONE || crate::pseudoprime(*nred) {
+        return true;
+    }
+    let last = values[values.len() - 1];
+    values.clear();
+    values.push(last);
+    false
 }
 
 fn exp_modn(zn: &ZmodN, g: &MInt, exp: u64) -> MInt {
@@ -446,7 +503,7 @@ fn exp_modn(zn: &ZmodN, g: &MInt, exp: u64) -> MInt {
     res
 }
 
-fn pm1_stage2_polyeval(zn: &ZmodN, b2: f64, g: MInt) -> Option<(Uint, Uint)> {
+fn pm1_stage2_polyeval(zn: &ZmodN, b2: f64, g: MInt) -> (Vec<Uint>, Uint) {
     let (_, d1, d2) = stage2_params(b2);
     // Instead of computing g^p for all primes p in [b1, b2]
     // write the unknown p as qD - r where r < D and gcd(r,D)=1
@@ -466,7 +523,6 @@ fn pm1_stage2_polyeval(zn: &ZmodN, b2: f64, g: MInt) -> Option<(Uint, Uint)> {
     // because K+(i²-j²)D/2 = K+k(2i-k)D/2 = (K-k²D/2) + ikD
     //
     // If Q has size 2^n we recover 2^n - deg P evaluations of P.
-    let n = &zn.n;
     assert!(d1 % 6 == 0);
     // Compute baby steps.
     let bsteps = {
@@ -536,31 +592,15 @@ fn pm1_stage2_polyeval(zn: &ZmodN, b2: f64, g: MInt) -> Option<(Uint, Uint)> {
     }
     let q = gsteps;
     let mut z = vec![MInt::default(); d2];
-    convolve_modn_ntt(&mzp, d2, &p, &q, &mut z, 0);
-    let vals = &z[p.len() - 1..];
-    let mut buffer = zn.one();
-    let mut buffer_start = 0;
-    for (idx, &v) in vals.iter().enumerate() {
-        // Compute the gcd every few rows for finer granularity.
-        buffer = zn.mul(buffer, v);
-        if idx % 64 == 0 || idx == vals.len() - 1 {
-            let d = Integer::gcd(n, &Uint::from(buffer));
-            if d > Uint::ONE && d < *n {
-                return Some((d, n / d));
-            }
-            if d == *n {
-                // Backtrack.
-                for v in &vals[buffer_start..idx + 1] {
-                    let d = Integer::gcd(n, &Uint::from(*v));
-                    if d > Uint::ONE && d < *n {
-                        return Some((d, n / d));
-                    }
-                }
-            }
-            buffer_start = idx + 1;
-        }
+    convolve_modn_ntt(mzp, d2, &p, &q, &mut z, 0);
+    let vals = &mut z[p.len() - 2..];
+    // Compute cumulative product
+    // The first interesting value is z[deg p = len(p)-1].
+    vals[0] = zn.one();
+    for i in 1..vals.len() {
+        vals[i] = zn.mul(&vals[i - 1], &vals[i]);
     }
-    None
+    gcd_factors(&zn.n, vals)
 }
 
 fn stage2_params(b2: f64) -> (f64, u64, u64) {
@@ -679,38 +719,39 @@ fn test_pm1_uint() {
     let n = p128 * p256;
     let Some((p, q)) = pm1_impl(n, 30000, 1e6, v)
         else { panic!("failed Pollard P-1") };
-    assert_eq!(p, p128);
+    assert_eq!(p, vec![p128]);
     assert_eq!(q, p256);
 
     // 2^3 * 3 * 7 * 11 * 31 * 131 * 1109 * 1699 * 8317 * 5984903
     let p = Uint::from_str("703855808397033138741049").unwrap();
     let n = p * p256;
-    let Some((p, q)) = pm1_impl(n, 30000, 18e6, v)
+    let Some((ps, q)) = pm1_impl(n, 30000, 18e6, v)
         else { panic!("failed Pollard P-1") };
-    assert_eq!(p, p);
+    assert_eq!(ps, vec![p]);
     assert_eq!(q, p256);
 
     // p-1 = 2^2 * 3^2 * 11 * 41 * 71 * 379 * 613 * 1051 * 13195979
     // 13195979 % 9240 = 1259 is small, positive
     let p = Uint::from_str("3714337881767344119949").unwrap();
     let n = p * p256;
-    let Some((p, q)) = pm1_impl(n, 2000, 19e6, v)
+    let Some((ps, q)) = pm1_impl(n, 2000, 19e6, v)
         else { panic!("failed Pollard P-1") };
-    assert_eq!(p, p);
+    assert_eq!(ps, vec![p]);
     assert_eq!(q, p256);
 
     // All factors are smooth:
     // 271750259454572315341 = 91033 * 6472621 * 461201737
     let n = Uint::from_str("271750259454572315341").unwrap();
-    let Some((p, q)) = pm1_impl(n, 16384, 40e3, v)
+    let Some((ps, q)) = pm1_impl(n, 16384, 40e3, v)
         else { panic!("failed Pollard P-1") };
-    assert_eq!(p * q, n);
+    assert!(q == Uint::ONE && ps.len() == 3);
+    assert_eq!(ps[0] * ps[1] * ps[2], n);
 
     // Has factor p=25362180101
     // p-1 = 2*2*5*5*53*53*90289 where 53*53 > 1024
     let n = Uint::from_str("11006826704494670034453871933878113282264711716157472884058231906746817631612072806760744802006592942296873294117168841323692902345209717573").unwrap();
     let Some((p, q)) = pm1_impl(n, 16384, 100e3, v)
         else { panic!("failed Pollard P-1") };
-    assert_eq!(p, Uint::from_digit(25_362_180_101));
-    assert_eq!(p * q, n);
+    assert_eq!(p, vec![Uint::from_digit(25_362_180_101)]);
+    assert_eq!(p[0] * q, n);
 }
