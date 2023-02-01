@@ -53,6 +53,7 @@
 //! Richard P. Brent, Alexander Kruppa, Paul Zimmermann
 //! https://hal.inria.fr/hal-01630907/document
 
+use bnum::types::U1024;
 use num_integer::Integer;
 
 use crate::arith_fft::convolve_modn_ntt;
@@ -264,6 +265,8 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Vec<
     let mut sieve = fbase::PrimeSieve::new();
     let mut block = sieve.next();
     let mut expblock = 1u64;
+    let mut expblock_lg = U1024::ONE;
+    let largeblocks = b1 >= 65536;
     // Stage 1
     let mut g = zn.from_int(Uint::from(2_u64));
     let mut p_prev: u32 = 1;
@@ -275,21 +278,30 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Vec<
             while pow * p < b1 {
                 pow *= p;
             }
-            if p > b1 || 1 << expblock.leading_zeros() <= pow {
-                // process exponent block
-                g = exp_modn(&zn, &g, expblock);
-                gpows.push(zn.sub(&g, &zn.one()));
-                if g == zn.one() {
-                    // We can reach 1 if φ(n) is B1-smooth.
-                    // No need to continue, maybe the previous value
-                    // was the answer.
-                    break;
+            let stop = p > b1;
+            // process exponent block
+            if stop || 1 << expblock.leading_zeros() <= pow {
+                if !largeblocks {
+                    g = exp_modn(&zn, &g, expblock);
+                    gpows.push(zn.sub(&g, &zn.one()));
+                    expblock = 1;
+                } else {
+                    expblock_lg *= U1024::from_digit(expblock);
+                    expblock = 1;
                 }
-                expblock = 1;
+            }
+            if stop || expblock_lg.bits() > 1024 - 32 {
+                g = exp_modn_large(&zn, &g, &expblock_lg);
+                gpows.push(zn.sub(&g, &zn.one()));
+                expblock_lg = U1024::ONE;
+            }
+            p_prev = p as u32;
+            if stop {
+                break;
             }
             expblock *= pow;
-            p_prev = p as u32;
-            if p > b1 {
+            if g == zn.one() {
+                // We can reach 1 if φ(n) is B1-smooth, no need to go further.
                 break;
             }
         }
@@ -504,6 +516,88 @@ fn exp_modn(zn: &ZmodN, g: &MInt, exp: u64) -> MInt {
         i += consumed;
     }
     res
+}
+
+type LargeExpType = U1024;
+
+#[inline(never)]
+fn exp_modn_large(zn: &ZmodN, g: &MInt, exp: &LargeExpType) -> MInt {
+    // The optimal strategy for 1024-bit exponent is to use 6-bit blocks.
+    // It requires 32 precomputed multiplications (exponents 1, 3, ... 63)
+    // and at most 1024/6 multiplications in addition to squarings.
+    let bitlen = match exp.bits() {
+        0 => return zn.one(),
+        1 => return *g,
+        n if n <= 64 => return exp_modn(zn, g, exp.digits()[0]),
+        n => n,
+    };
+    // Consume bits starting with MSB.
+    let g2 = zn.mul(g, g);
+    let mut gk = g.clone();
+    // Powers g, g^3 .. g^63.
+    let g_smalls = {
+        let v = std::mem::MaybeUninit::<[MInt; 32]>::uninit();
+        let mut v = unsafe { v.assume_init() };
+        v[0] = *g;
+        for i in 1..32 {
+            gk = zn.mul(&gk, &g2);
+            v[i] = gk;
+        }
+        v
+    };
+    // Extract 6 bits (exp >> offset & 63)
+    fn expblock(exp: &LargeExpType, offset: u32) -> u64 {
+        let digs = exp.digits();
+        if offset >= LargeExpType::BITS - 64 {
+            let w = digs[offset as usize / 64];
+            (w >> (offset - (LargeExpType::BITS - 64))) & 63
+        } else if offset % 64 <= 64 - 6 {
+            let w = digs[offset as usize / 64];
+            (w >> (offset % 64)) & 63
+        } else {
+            let w0 = digs[offset as usize / 64] as u128;
+            let w1 = digs[offset as usize / 64 + 1] as u128;
+            let w = (w1 << 64) | w0;
+            (w >> (offset % 64)) as u64 & 63
+        }
+    }
+    // Exponent is guaranteed to have more than 64 bits.
+    let mut rem_bits = bitlen;
+    // First block.
+    let blk = expblock(exp, rem_bits - 6);
+    let tz = blk.trailing_zeros();
+    gk = g_smalls[(blk as usize) >> (tz + 1)];
+    for _ in 0..tz {
+        gk = zn.mul(&gk, &gk);
+    }
+    rem_bits -= 6;
+    loop {
+        if rem_bits == 0 {
+            return gk;
+        }
+        if !exp.bit(rem_bits - 1) {
+            gk = zn.mul(&gk, &gk);
+            rem_bits -= 1;
+            continue;
+        }
+        // Next bit is 1, fetch a block.
+        if rem_bits >= 6 {
+            let blk = expblock(exp, rem_bits - 6);
+            let tz = blk.trailing_zeros();
+            for _ in tz..6 {
+                gk = zn.mul(&gk, &gk);
+            }
+            gk = zn.mul(&gk, &g_smalls[(blk as usize) >> (tz + 1)]);
+            for _ in 0..tz {
+                gk = zn.mul(&gk, &gk);
+            }
+            rem_bits -= 6
+        } else {
+            gk = zn.mul(&gk, &gk);
+            gk = zn.mul(&gk, &g);
+            rem_bits -= 1;
+        }
+    }
 }
 
 fn pm1_stage2_polyeval(zn: &ZmodN, b2: f64, g: MInt) -> (Vec<Uint>, Uint) {
@@ -776,4 +870,26 @@ fn test_pm1_uint() {
         else { panic!("failed Pollard P-1") };
     assert_eq!(p, vec![Uint::from_digit(285_355_513)]);
     assert_eq!(p[0] * q, n);
+}
+
+#[test]
+fn test_exp_modn() {
+    use bnum::cast::CastFrom;
+    use std::str::FromStr;
+    // Test Fermat theorem.
+    let p63 = Uint::from_digit(4347206819778221123);
+    let p480 = Uint::from_str("801643889160962459503567529599420993581193510766215918385643775834136080985009029500140562854896402036056836567241446409601881132259487327233447").unwrap();
+
+    let two = Uint::from_digit(2);
+    let zn = ZmodN::new(p63);
+    assert_eq!(
+        zn.one(),
+        exp_modn(&zn, &zn.from_int(two), p63.digits()[0] - 1)
+    );
+
+    let zn = ZmodN::new(p480);
+    assert_eq!(
+        zn.one(),
+        exp_modn_large(&zn, &zn.from_int(two), &U1024::cast_from(p480 - Uint::ONE))
+    );
 }

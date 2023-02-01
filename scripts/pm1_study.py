@@ -63,10 +63,10 @@ for blksize in (32, 64, 128, 256):
             muls += mul
         print(f"{blksize=} {w=} cost={sqs+muls} ({sqs}S + {muls}M)")
 
-for blksize in (512, 1024, 2048):
+for blksize in (512, 1024, 2048, 4096):
     blks = pblocks(blksize)
     print(f"exponent blocks {len(blks)}x {blksize} bits")
-    for w in range(4, 10):
+    for w in range(4, 12):
         sqs, muls = 0, 0
         for b in blks:
             sq, mul = cost(b, w)
