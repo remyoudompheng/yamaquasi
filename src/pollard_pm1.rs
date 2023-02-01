@@ -212,7 +212,7 @@ pub fn pm1_quick(n: Uint, v: Verbosity) -> Option<(Vec<Uint>, Uint)> {
         // Takes less than 0.01 second
         221..=250 => pm1_impl(n, 50_000, 8e6, v),
         // Takes less than 0.1 second
-        251..=280 => pm1_impl(n, 200_000, 300e6, v),
+        251..=280 => pm1_impl(n, 500_000, 300e6, v),
         // Takes less than 0.5 second
         281..=310 => pm1_impl(n, 1_000_000, 1.2e9, v),
         // Takes about 1 second
