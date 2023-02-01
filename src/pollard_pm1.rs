@@ -247,7 +247,7 @@ pub fn pm1_only(n: Uint, v: Verbosity) -> Option<(Vec<Uint>, Uint)> {
     }
 }
 
-const MULTIEVAL_THRESHOLD: f64 = 300e3;
+const MULTIEVAL_THRESHOLD: f64 = 80e3;
 
 #[doc(hidden)]
 pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Vec<Uint>, Uint)> {
@@ -356,7 +356,8 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Vec<
     let mut x = exp_modn(&zn, &g, p_prev as u64);
     // Accumulate product of (g^p-1)
     let one = zn.one();
-    let mut products = vec![one];
+    let mut products = Vec::with_capacity(block.len());
+    products.push(one);
     let mut product = zn.sub(&x, &one);
     loop {
         for &p in block {
@@ -410,15 +411,17 @@ fn check_gcd_factors(
     if fs.contains(&n) {
         return true;
     }
-    if let Some(stage) = stage {
-        for &f in &fs {
-            eprintln!("Found factor {f} during stage {stage}");
+    if !fs.is_empty() {
+        if let Some(stage) = stage {
+            for &f in &fs {
+                eprintln!("Found factor {f} during stage {stage}");
+            }
+        };
+        factors.append(&mut fs);
+        *nred = nred_;
+        if *nred == Uint::ONE || crate::pseudoprime(*nred) {
+            return true;
         }
-    };
-    factors.append(&mut fs);
-    *nred = nred_;
-    if *nred == Uint::ONE || crate::pseudoprime(*nred) {
-        return true;
     }
     let last = values[values.len() - 1];
     values.clear();
