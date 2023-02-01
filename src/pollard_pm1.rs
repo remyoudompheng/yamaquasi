@@ -308,10 +308,10 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Vec<
             zn = ZmodN::new(nred);
             g = zn.from_int(gint % nred);
         }
-        block = sieve.next();
         if p_prev > b1 as u32 {
             break;
         }
+        block = sieve.next();
     }
     drop(gpows);
     let elapsed1 = start1.elapsed();
@@ -720,6 +720,14 @@ fn test_pm1_uint() {
     let Some((p, q)) = pm1_impl(n, 30000, 1e6, v)
         else { panic!("failed Pollard P-1") };
     assert_eq!(p, vec![p128]);
+    assert_eq!(q, p256);
+
+    // p-1 = 2*59*35509
+    // Checks that blocks of primes are properly iterated (35509 is in the first block).
+    let n = Uint::from_digit(2 * 59 * 35509 + 1) * p256;
+    let Some((ps, q)) = pm1_impl(n, 200, 40e3, v)
+        else { panic!("failed Pollard P-1") };
+    assert_eq!(ps, vec![Uint::from_digit(2 * 59 * 35509 + 1)]);
     assert_eq!(q, p256);
 
     // 2^3 * 3 * 7 * 11 * 31 * 131 * 1109 * 1699 * 8317 * 5984903
