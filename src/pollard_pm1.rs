@@ -275,7 +275,7 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Vec<
             while pow * p < b1 {
                 pow *= p;
             }
-            if 1 << expblock.leading_zeros() <= pow {
+            if p > b1 || 1 << expblock.leading_zeros() <= pow {
                 // process exponent block
                 g = exp_modn(&zn, &g, expblock);
                 gpows.push(zn.sub(&g, &zn.one()));
@@ -516,6 +516,8 @@ fn pm1_stage2_polyeval(zn: &ZmodN, b2: f64, g: MInt) -> (Vec<Uint>, Uint) {
     // Pg = [P[i] g^(-i² D/2)]
     // Q = [1, g^D/2, g^4D/2 ... g^(D/2 k²)]
     //
+    // FIXME: start Q at g^(D/2 i^2) where iD > B1
+    //
     // Then the convolution (Pg * Q)[k] is:
     //     sum(i+j=k, P[i] g^(i² D/2) g^(K-j² D/2))
     //   = g^? * sum(i+j=k, P[i] (g^kD)^i)
@@ -534,8 +536,8 @@ fn pm1_stage2_polyeval(zn: &ZmodN, b2: f64, g: MInt) -> (Vec<Uint>, Uint) {
         let mut bexp = 1;
         v.push(bg.clone());
         while b < d1 {
-            b += 6;
-            if Integer::gcd(&b, &d1) != 1 {
+            b += 2;
+            if b % 3 == 0 || Integer::gcd(&b, &d1) != 1 {
                 continue;
             }
             let gap = b - bexp;
@@ -757,9 +759,18 @@ fn test_pm1_uint() {
 
     // Has factor p=25362180101
     // p-1 = 2*2*5*5*53*53*90289 where 53*53 > 1024
+    // 90289 == 240 * 377 - 191
     let n = Uint::from_str("11006826704494670034453871933878113282264711716157472884058231906746817631612072806760744802006592942296873294117168841323692902345209717573").unwrap();
     let Some((p, q)) = pm1_impl(n, 16384, 100e3, v)
         else { panic!("failed Pollard P-1") };
     assert_eq!(p, vec![Uint::from_digit(25_362_180_101)]);
+    assert_eq!(p[0] * q, n);
+
+    // Has factor p=285355513 such that p-1 = 8*9*13*304867
+    // 304867 % 6 = 1
+    let n = Uint::from_str("71269410553363907234778342302207120711196110927").unwrap();
+    let Some((p, q)) = pm1_impl(n, 20, 450e3, v)
+        else { panic!("failed Pollard P-1") };
+    assert_eq!(p, vec![Uint::from_digit(285_355_513)]);
     assert_eq!(p[0] * q, n);
 }
