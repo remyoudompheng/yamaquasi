@@ -715,6 +715,10 @@ impl Curve {
     }
 
     pub fn scalar64_chainmul(&self, k: u64, p: &Point) -> Point {
+        if k == 0 {
+            let zn = &self.zn;
+            return Point(zn.zero(), zn.one(), zn.one());
+        }
         // Compute an addition chain for k as in
         // https://eprint.iacr.org/2007/455.pdf
         // We find that m=7 is optimal for 64-bit blocks (~14 adds instead of 28 for ~56-bit blocks)
@@ -735,9 +739,13 @@ impl Curve {
             let op = c[l - 1 - idx];
             if op == 0 {
                 q = self.double(&q);
+            } else if op == 2 {
+                q = self.add(&q, &p2);
             } else if op > 0 {
+                debug_assert!(op & 1 == 1);
                 q = self.add(&q, gaps[op as usize / 2]);
             } else if op < 0 {
+                debug_assert!(op & 1 == 1);
                 q = self.sub(&q, gaps[(-op) as usize / 2]);
             }
         }
@@ -843,6 +851,10 @@ impl Curve {
 #[cfg(test)]
 use std::str::FromStr;
 
+#[cfg(test)]
+const MODULUS256: &'static str =
+    "107910248100432407082438802565921895527548119627537727229429245116458288637047";
+
 #[test]
 fn test_curve() {
     use std::str::FromStr;
@@ -926,7 +938,12 @@ fn test_addition_chain() {
         let l = Curve::make_addition_chain(&mut c, k);
         assert_eq!(k, eval_chain(&c[..l]), "chain={:?}", &c[..l]);
     }
-
+    {
+        let k = 602768647071432_u64;
+        let mut c = [0i8; 128];
+        let l = Curve::make_addition_chain(&mut c, k);
+        assert_eq!(k, eval_chain(&c[..l]), "chain={:?}", &c[..l]);
+    }
     let mut adds = 0;
     for i in 1..=1000_u64 {
         let mut c = [0i8; 128];
@@ -952,8 +969,9 @@ fn test_addition_chain() {
     let p1 = c.scalar64_mul(k, &c.gen());
     let p2 = c.scalar64_chainmul(k, &c.gen());
     assert!(c.equal(&p1, &p2));
+    for k in 0..2000 {
+        let p1 = c.scalar64_mul(k, &c.gen());
+        let p2 = c.scalar64_chainmul(k, &c.gen());
+        assert!(c.equal(&p1, &p2), "failure for k={k}");
+    }
 }
-
-#[cfg(test)]
-const MODULUS256: &'static str =
-    "107910248100432407082438802565921895527548119627537727229429245116458288637047";
