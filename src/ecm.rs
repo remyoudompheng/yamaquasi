@@ -16,7 +16,7 @@
 //!
 //! It implements the "baby step giant step" optimization for stage 2
 //! as described in section 5.2 of <https://eecm.cr.yp.to/eecm-20111008.pdf>
-//! This is about 3x faster than the prime-by-prime approach.
+//! and the FFT continuation giving complexity O(sqrt(B2) log B2)
 //!
 //! Due to slow big integer arithmetic, we use projective coordinates without
 //! normalization, causing extra multiplications during stage 2.
@@ -25,6 +25,16 @@
 //! Like the rest of Yamaquasi, it only supports numbers under 512 bits.
 //!
 //! Curves are enumerated in a deterministic order.
+//!
+//! # Extraction of almost equal factors
+//!
+//! When prime factors are extremely close to each other, they may be caught
+//! in the same exponent block, preventing them from being resolved individually.
+//! The problem is mitigated by binary searching for the most precise common
+//! divisor and using smaller blocks for the few first primes.
+//!
+//! If a curve is exceptionally unlucky, another one can modify curve orders
+//! to avoid sharing factors.
 //!
 //! TODO: merge exponent base with Pollard P-1
 
@@ -35,7 +45,7 @@ use num_integer::Integer;
 use rayon::prelude::*;
 
 use crate::arith;
-use crate::arith_montgomery::{MInt, ZmodN};
+use crate::arith_montgomery::{gcd_factors, MInt, ZmodN};
 use crate::arith_poly::Poly;
 use crate::fbase;
 use crate::params::stage2_params;
@@ -326,14 +336,18 @@ fn ecm_curve(
     // ECM stage 1
     let start1 = std::time::Instant::now();
     let mut g = c.gen();
-    for block in sb.factors.chunks(4) {
+    const GCD_INTERVAL: usize = 1000;
+    let mut gxs = Vec::with_capacity(GCD_INTERVAL);
+    for block in sb.factors.chunks(GCD_INTERVAL) {
+        // Once g.0 is divisible by p, it will be for the rest of the loop.
+        gxs.clear();
+        gxs.push(g.0);
         for &f in block {
             g = c.scalar64_mul(f, &g);
+            gxs.push(g.0);
         }
-        if let Some(d) = c.is_2_torsion(&g) {
-            if d > Uint::ONE && d < *n {
-                return Some((d, n / d));
-            }
+        if let Some(d) = check_gcd_factor(n, &gxs) {
+            return Some((d, n / d));
         }
     }
     assert!(
@@ -473,6 +487,14 @@ fn ecm_curve(
     None
 }
 
+/// Extract a single factor using GCD.
+fn check_gcd_factor(n: &Uint, values: &[MInt]) -> Option<Uint> {
+    // FIXME: we should return all factors. We just
+    // return the largest one.
+    let fs = gcd_factors(n, &values[..]).0;
+    fs.iter().filter(|f| f != &n).max().copied()
+}
+
 // Normalize projective coordinates (z=1) for multiple points.
 fn batch_normalize(zn: &ZmodN, pts: &mut [Point]) -> Option<()> {
     // Use Montgomery's batch inversion.
@@ -524,13 +546,16 @@ impl SmoothBase {
             while pow * p < b1 as u64 {
                 pow *= p;
             }
+            // Curve order has extra 2 and 3 factors.
             if p == 2 {
                 pow *= 16;
             }
             if p == 3 {
                 pow *= 3;
             }
-            if 1 << buffer.leading_zeros() <= pow {
+            // Avoid too many primes in exponent buffer.
+            // Small primes must make smaller blocks.
+            if (p < 256 && buffer > 1 << 32) || 1 << buffer.leading_zeros() <= pow {
                 factors.push(buffer);
                 buffer = 1;
             }

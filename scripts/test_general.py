@@ -15,6 +15,7 @@ p = argparse.ArgumentParser()
 p.add_argument(
     "-j", dest="threads", type=int, default=os.cpu_count(), help="number of threads"
 )
+p.add_argument("--algo", default="auto", help="auto or ecm")
 p.add_argument("minsize", metavar="SIZE1", type=int, help="lower range of number size")
 p.add_argument("maxsize", metavar="SIZE2", type=int, help="upper range of number size")
 args = p.parse_args()
@@ -40,7 +41,7 @@ for sz in range(args.minsize, args.maxsize + 1):
 
     def test_number(n):
         try:
-            factors = pymqs.factor(n)
+            factors = pymqs.factor(n, algo=args.algo)
         except Exception:
             print(f"Exception during factor({n})")
             raise

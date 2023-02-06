@@ -430,7 +430,7 @@ fn factor_impl(
 fn check_factors(n: &Uint, factors: &[Uint]) {
     if let &[p] = &factors {
         assert_eq!(n, p);
-        assert!(pseudoprime(*p));
+        assert!(pseudoprime(*p), "could not find any factor for {n}");
     }
     assert_eq!(*n, factors.iter().product::<Uint>());
 }
@@ -572,11 +572,33 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     let n = Uint::from_str("34084481733943226418420736441")?;
     factor(n, Algo::Siqs, &Preferences::default());
 
-    // In pure ECM mode, the factor 75763 = 239*317 is difficult to isolate.
+    // ECM with very small factors.
+    // A number with 2 very close small factors can be difficult to fully factor with ECM.
     // This could cause an infinite loop or a crash.
-    // FIXME: make sure the factorization actually succeeds.
+
     let n = Uint::from_str("149765065983515097066869381115702138825777596")?;
-    factor(n, Algo::Ecm, &Preferences::default());
+    let fs = factor(n, Algo::Ecm, &Preferences::default());
+    assert_eq!(fs.len(), 18);
+
+    // Products of small primes
+    #[rustfmt::skip]
+    let smalls = [
+        211 * 251, 211 * 263, 229 * 283, 653 * 821,
+        769 * 797, 1399 * 1559, 1433 * 1613,
+    ];
+    for n in smalls {
+        let n = Uint::from_digit(n);
+        let fs = factor(n, Algo::Ecm, &Preferences::default());
+        assert_eq!(fs.len(), 2);
+        assert!(fs[0] * fs[1] == n);
+    }
+    let smalls = [1621 * 1709 * 1733, 1697 * 1787 * 1831];
+    for n in smalls {
+        let n = Uint::from_digit(n);
+        let fs = factor(n, Algo::Ecm, &Preferences::default());
+        assert_eq!(fs.len(), 3);
+        assert!(fs[0] * fs[1] * fs[2] == n);
+    }
 
     Ok(())
 }
