@@ -350,6 +350,7 @@ fn ecm_curve(
             return Some((d, n / d));
         }
     }
+    drop(gxs);
     assert!(
         c.is_valid(&g),
         "invalid point G=[{}:{}:{}] for d={} mod {}",
@@ -436,20 +437,20 @@ fn ecm_curve(
     if d1 < 4000 {
         // Compute O(d*phi(d)) products
         let mut buffer = zn.one();
-        for (idx, pg) in gsteps.iter().enumerate() {
+        let mut prods = Vec::with_capacity(gsteps.len());
+        prods.push(buffer);
+        for pg in gsteps {
             // Compute the gcd after each row for finer granularity.
             for pb in bsteps {
                 // y(G) - y(B)
                 let delta_y = zn.sub(&pg.1, &pb.1);
                 buffer = zn.mul(&buffer, &delta_y);
             }
-            if idx % 8 == 0 || idx == gsteps.len() - 1 {
-                let d = Integer::gcd(n, &Uint::from(buffer));
-                if d > Uint::ONE && d < *n {
-                    logtime();
-                    return Some((d, n / d));
-                }
-            }
+            prods.push(buffer);
+        }
+        if let Some(d) = check_gcd_factor(n, &prods) {
+            logtime();
+            return Some((d, n / d));
         }
     } else {
         // Usually D > 4 phi(D) (phi(2*3*5*7) < N/4)
@@ -469,18 +470,18 @@ fn ecm_curve(
         // and if PG/PB can be computed efficiently.
         let pbs: Vec<MInt> = bsteps.iter().map(|p| p.1).collect();
         let pgs: Vec<MInt> = gsteps.iter().map(|p| p.1).collect();
-        let vals = Poly::roots_eval(zn, &pgs, &pbs);
-        let mut buffer = zn.one();
-        for (idx, &v) in vals.iter().enumerate() {
-            // Compute the gcd every few rows for finer granularity.
-            buffer = zn.mul(buffer, v);
-            if idx % 8 == 0 || idx == vals.len() - 1 {
-                let d = Integer::gcd(n, &Uint::from(buffer));
-                if d > Uint::ONE && d < *n {
-                    logtime();
-                    return Some((d, n / d));
-                }
-            }
+        let mut vals = Poly::roots_eval(zn, &pgs, &pbs);
+        let mut prod = zn.one();
+        // Replace array by cumulative products.
+        for i in 0..vals.len() {
+            let v = vals[i];
+            vals[i] = prod;
+            prod = zn.mul(&prod, &v);
+        }
+        vals.push(prod);
+        if let Some(d) = check_gcd_factor(n, &vals) {
+            logtime();
+            return Some((d, n / d));
         }
     }
     logtime();
