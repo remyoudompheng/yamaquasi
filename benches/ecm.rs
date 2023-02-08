@@ -28,7 +28,7 @@ fn main() {
             let n: u64 = 1511 * 1523 * 1531;
             Bench::new("scalar mul n32 x G (p256)")
                 .with_timeout(Duration::from_secs(3))
-                .run_seeded((), |_| c.scalar64_mul(n, &g))
+                .run_seeded((), |_| c.scalar64_mul_dbladd(n, &g))
         },
         {
             let zn = ZmodN::new(p256);
@@ -37,7 +37,7 @@ fn main() {
             let n: u64 = 1511 * 1523 * 1531 * 1543 * 1549 * 1553;
             Bench::new("scalar mul n64 x G (p256)")
                 .with_timeout(Duration::from_secs(3))
-                .run_seeded((), |_| c.scalar64_mul(n, &g))
+                .run_seeded((), |_| c.scalar64_mul_dbladd(n, &g))
         },
         {
             let zn = ZmodN::new(p256);
@@ -103,7 +103,7 @@ fn main() {
             );
         }
     }
-    for b1 in [1000, 10_000, 100_000, 1_000_000] {
+    for b1 in [1000, 10_000, 100_000, 1_000_000, 10_000_000] {
         let b2 = 38e6;
         let start = std::time::Instant::now();
         // Use P256 so what ECM cannot work.

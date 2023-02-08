@@ -18,13 +18,15 @@
 //! as described in section 5.2 of <https://eecm.cr.yp.to/eecm-20111008.pdf>
 //! and the FFT continuation giving complexity O(sqrt(B2) log B2)
 //!
-//! Due to slow big integer arithmetic, we use projective coordinates without
-//! normalization, causing extra multiplications during stage 2.
-//!
-//! It does not try to be particularly efficient (it is at least 5x slower than GMP-ECM).
 //! Like the rest of Yamaquasi, it only supports numbers under 512 bits.
 //!
 //! Curves are enumerated in a deterministic order.
+//!
+//! # Performance of stage 1
+//!
+//! Using batch modular inversion, running ECM on a given curve computes
+//! a bounded amount of inversions, and scalar multiplication using 1024-bit
+//! integers costs 1 doubling and 0.16 point addition per exponent bit in stage 1,
 //!
 //! # Extraction of almost equal factors
 //!
@@ -41,6 +43,7 @@
 use std::cmp::{max, min};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use bnum::types::U1024;
 use num_integer::Integer;
 use rayon::prelude::*;
 
@@ -343,12 +346,21 @@ fn ecm_curve(
         gxs.clear();
         gxs.push(g.0);
         for &f in block {
-            g = c.scalar64_mul(f, &g);
+            g = c.scalar64_chainmul(f, &g);
             gxs.push(g.0);
         }
         if let Some(d) = check_gcd_factor(n, &gxs) {
             return Some((d, n / d));
         }
+    }
+    gxs.clear();
+    gxs.push(g.0);
+    for f in sb.larges.iter() {
+        g = c.scalar1024_chainmul(f, &g);
+        gxs.push(g.0);
+    }
+    if let Some(d) = check_gcd_factor(n, &gxs) {
+        return Some((d, n / d));
     }
     drop(gxs);
     assert!(
@@ -424,7 +436,7 @@ fn ecm_curve(
         bexp = b;
     }
     // Compute the giant steps
-    let dg = c.scalar64_mul(d1, &g);
+    let dg = c.scalar64_chainmul(d1, &g);
     let mut gg = dg.clone();
     for _ in 0..d2 {
         steps.push(gg.clone());
@@ -530,13 +542,18 @@ fn batch_normalize(zn: &ZmodN, pts: &mut [Point]) -> Option<()> {
 pub struct SmoothBase {
     /// Chunks of primes multiplied into u64 integers.
     factors: Box<[u64]>,
+    /// Large chunks of primes (1024 bits)
+    larges: Box<[Uint]>,
 }
 
 impl SmoothBase {
     pub fn new(b1: usize) -> Self {
+        const LARGE_THRESHOLD: u64 = 4096;
         let primes = fbase::primes(b1 as u32 / 2);
         let mut factors = vec![];
+        let mut factors_lg = vec![];
         let mut buffer = 1_u64;
+        let mut buffer_lg = U1024::ONE;
         for p in primes {
             // Small primes are raised to some power (until B1).
             if p >= b1 as u32 {
@@ -556,17 +573,38 @@ impl SmoothBase {
             }
             // Avoid too many primes in exponent buffer.
             // Small primes must make smaller blocks.
-            if (p < 256 && buffer > 1 << 32) || 1 << buffer.leading_zeros() <= pow {
+            if p < 256 && buffer > 1 << 32 {
                 factors.push(buffer);
                 buffer = 1;
+            }
+            if 1 << buffer.leading_zeros() <= pow {
+                if p < LARGE_THRESHOLD {
+                    factors.push(buffer);
+                    buffer = 1;
+                } else {
+                    buffer_lg *= Uint::from_digit(buffer);
+                    buffer = 1;
+                }
+            }
+            if buffer_lg.bits() > 1024 - 64 {
+                factors_lg.push(buffer_lg);
+                buffer_lg = Uint::ONE;
             }
             buffer *= pow;
         }
         if buffer > 1 {
-            factors.push(buffer)
+            if (b1 as u64) < LARGE_THRESHOLD {
+                factors.push(buffer);
+            } else {
+                buffer_lg *= Uint::from_digit(buffer);
+            }
+        }
+        if buffer_lg > Uint::ONE {
+            factors_lg.push(buffer_lg)
         }
         SmoothBase {
             factors: factors.into_boxed_slice(),
+            larges: factors_lg.into_boxed_slice(),
         }
     }
 }
@@ -725,7 +763,9 @@ impl Curve {
         Point(x, y, z)
     }
 
-    pub fn scalar64_mul(&self, k: u64, p: &Point) -> Point {
+    /// Naïve double-and-add scalar multiplication.
+    /// It must not be used in ordinary code, and exists only for testing purposes.
+    pub fn scalar64_mul_dbladd(&self, k: u64, p: &Point) -> Point {
         let zn = &self.zn;
         let mut res = Point(zn.zero(), zn.one(), zn.one());
         let mut sq: Point = p.clone();
@@ -827,6 +867,107 @@ impl Curve {
                 l += 1;
             }
         }
+    }
+
+    pub fn scalar1024_chainmul(&self, k: &U1024, p: &Point) -> Point {
+        if k.is_zero() {
+            let zn = &self.zn;
+            return Point(zn.zero(), zn.one(), zn.one());
+        }
+        let p2 = self.double(p);
+        // Store p, 3p ... 63p
+        let mut gaps = Vec::with_capacity(32);
+        gaps.push(p.clone());
+        for i in 1..32 {
+            let pi = self.add(&gaps[i - 1], &p2);
+            gaps.push(pi);
+        }
+        // Construct chain
+        let mut c = [0_i8; 384];
+        let l = Self::make_addition_chain_long(&mut c, k);
+        // Get initial element (chain[l-1] = 1 or 3 or 5 or 7)
+        let mut q = gaps[c[l - 1] as usize / 2].clone();
+        for idx in 1..l {
+            let op = c[l - 1 - idx];
+            if op % 2 == 0 {
+                for _ in 0..op / 2 {
+                    q = self.double(&q);
+                }
+            } else if op > 0 {
+                debug_assert!(op & 1 == 1);
+                q = self.add(&q, &gaps[op as usize / 2]);
+            } else if op < 0 {
+                debug_assert!(op & 1 == 1);
+                q = self.sub(&q, &gaps[(-op) as usize / 2]);
+            }
+        }
+        q
+    }
+
+    fn make_addition_chain_long(chain: &mut [i8; 384], n: &U1024) -> usize {
+        // We intentionally assert that Uint is 1024 bits.
+        // The add/sub will use odd integers from 1 to 63 (6 bits)
+        // After each add/sub we expect to perform >= 6 doubles
+        // The chain length cannot be more than 340
+        // (there are at most 1024/6 blocks)
+        //
+        // This function does not implement the special edge cases
+        // that save 1/2 adds in `make_addition_chain`
+        //
+        // Encoding:
+        // 2k => double, repeated k times (k <= 63)
+        // +k => add kP (k is odd)
+        // -k => sub kP (k is odd)
+        let nd: &[u64; 16] = n.digits();
+        // Start from LSB and work with 2 words at a time.
+        let mut exp = nd[0] as u128;
+        let mut nextword = 1;
+        let mut idx = 0;
+        // How many bits were processed
+        let mut bits = 0;
+        // How many bits are stored in exp.
+        let mut curbits = if n.bits() >= 64 {
+            64
+        } else {
+            u128::BITS - u128::leading_zeros(exp)
+        };
+        let nbits = n.bits();
+        let lastword = (nbits as usize - 1) / 64;
+        while bits < nbits || exp > 0 {
+            if curbits <= 32 && nextword <= lastword {
+                exp += (nd[nextword] as u128) << curbits;
+                nextword += 1;
+                curbits += 64;
+            }
+            if exp & 1 == 0 {
+                // We cannot shift right by 128 and we cannot store
+                // large numbers in the chain, so limit tz to 60.
+                let tz = min(60, min(exp.trailing_zeros(), curbits));
+                exp >>= tz;
+                bits += tz;
+                curbits -= tz;
+                chain[idx] = 2 * tz as i8;
+                idx += 1;
+            } else {
+                let low = exp & 127;
+                debug_assert!(low % 2 == 1);
+                if low < 64 {
+                    chain[idx] = low as i8;
+                    idx += 1;
+                    exp -= low;
+                    if exp == 0 && nbits - bits <= 6 {
+                        // Finished!
+                        break;
+                    }
+                } else {
+                    chain[idx] = -((128 - low) as i8);
+                    idx += 1;
+                    // Note: exp may become larger than 1 << curbits.
+                    exp += 128 - low;
+                }
+            }
+        }
+        idx
     }
 
     #[cfg(test)]
@@ -992,12 +1133,85 @@ fn test_addition_chain() {
     let zn = ZmodN::new(n);
     let c = Curve::from_point(zn, 2, 132).unwrap();
     let k: u64 = 1511 * 1523 * 1531 * 1543 * 1549 * 1553;
-    let p1 = c.scalar64_mul(k, &c.gen());
+    let p1 = c.scalar64_mul_dbladd(k, &c.gen());
     let p2 = c.scalar64_chainmul(k, &c.gen());
     assert!(c.equal(&p1, &p2));
     for k in 0..2000 {
-        let p1 = c.scalar64_mul(k, &c.gen());
+        let p1 = c.scalar64_mul_dbladd(k, &c.gen());
         let p2 = c.scalar64_chainmul(k, &c.gen());
         assert!(c.equal(&p1, &p2), "failure for k={k}");
+    }
+}
+
+#[test]
+fn test_addition_chain_long() {
+    use bnum::cast::CastFrom;
+    use bnum::types::U2048;
+    use rand::Rng;
+
+    fn eval_chain(c: &[i8]) -> U1024 {
+        let mut k = U2048::from_digit(c[c.len() - 1] as u64);
+        for idx in 1..c.len() {
+            let op = c[c.len() - 1 - idx];
+            if op % 2 == 0 {
+                k <<= (op / 2) as u32;
+            } else if op > 0 {
+                k += U2048::from_digit(op as u64);
+            } else {
+                k -= U2048::from_digit((-op) as u64);
+            }
+        }
+        U1024::cast_from(k)
+    }
+
+    // Some sparse numbers
+    for i in 900..1020 {
+        let j = i - 400;
+        let k = U1024::power_of_two(i) | U1024::power_of_two(j);
+        let mut c = [0i8; 384];
+        let l = Curve::make_addition_chain_long(&mut c, &k);
+        assert_eq!(k, eval_chain(&c[..l]), "chain={:?}", &c[..l]);
+        // Test negative steps
+        let j1 = i - 300;
+        let j2 = i / 2;
+        let k = U1024::power_of_two(i) + U1024::power_of_two(j1) - U1024::power_of_two(j2);
+        let l = Curve::make_addition_chain_long(&mut c, &k);
+        assert_eq!(k, eval_chain(&c[..l]), "chain={:?}", &c[..l]);
+    }
+
+    // Random numbers: assume that 10000 is enough to express
+    // all 8-bit patterns.
+    let mut adds = 0;
+    let mut maxsize = 0;
+    for _ in 0..10000 {
+        let mut rng = rand::thread_rng();
+        let mut digits = [0; 16];
+        let mut c = [0i8; 384];
+        rng.fill(&mut digits);
+        let k = U1024::from_digits(digits);
+        let l = Curve::make_addition_chain_long(&mut c, &k);
+        assert_eq!(k, eval_chain(&c[..l]), "chain={:?}", &c[..l]);
+        adds += c[..l - 1].iter().filter(|&x| x & 1 == 1).count();
+        maxsize = max(maxsize, l);
+    }
+    eprintln!(
+        "average additions {:.2} for 1024-bit integers",
+        adds as f64 / 10000.0
+    );
+    eprintln!("max chain size {maxsize}");
+
+    let n = Uint::from_str(MODULUS256).unwrap();
+    let zn = ZmodN::new(n);
+    let c = Curve::from_point(zn, 2, 132).unwrap();
+    let k: u64 = 1511 * 1523 * 1531 * 1543 * 1549 * 1553;
+    let p1 = c.scalar64_mul_dbladd(k, &c.gen());
+    let p2 = c.scalar1024_chainmul(&(k.into()), &c.gen());
+    assert!(c.equal(&p1, &p2), "failure for k={k}");
+    for k in 0..100 {
+        let k = k * 12345678_123456789;
+        let k2 = Uint::from(k) * Uint::from(k);
+        let p1 = c.scalar64_mul_dbladd(k, &c.scalar64_mul_dbladd(k, &c.gen()));
+        let p2 = c.scalar1024_chainmul(&k2, &c.gen());
+        assert!(c.equal(&p1, &p2), "failure for k={k}^2");
     }
 }

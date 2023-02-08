@@ -120,7 +120,6 @@ print("=== 128 bit blocks ===")
 blocks128 = pblocks(128)
 for m in (0, 1, 3, 7, 11, 13, 15, 17, 19):
     print("M", m)
-    continue
     ds = []
     a_s = []
     bits = []
@@ -160,7 +159,6 @@ for m in (0, 1, 7, 13, 19, 25, 31, 35):
 print("=== 512 bit blocks ===")
 blocks512 = pblocks(512)
 for m in [1, 3, 7, 15, 19, 23, 27, 31, 35]:
-    continue
     print("M", m)
     ds = []
     a_s = []
@@ -178,7 +176,6 @@ for m in [1, 3, 7, 15, 19, 23, 27, 31, 35]:
 print("=== 1024 bit blocks ===")
 blocks1024 = pblocks(1024)
 for m in [1, 3, 7, 15, 31, 39, 47, 55, 63, 69]:
-    continue
     print("M", m)
     ds = []
     a_s = []
