@@ -123,56 +123,24 @@ pub fn ecm_only(
 ) -> Option<(Uint, Uint)> {
     // B1 values should be such that step 1 takes about as much time as step 2.
     // D values are only such that phi(D) is a bit less than a power of 2.
-    match n.bits() {
-        // The following parameters work well even for balanced semiprimes.
-        0..=64 => ecm(n, 100, 256, 20e3, prefs, tpool),
-        65..=80 => ecm(n, 100, 500, 40e3, prefs, tpool),
-        81..=96 => ecm(n, 300, 1000, 100e3, prefs, tpool),
-        97..=119 => ecm(n, 1000, 10_000, 1e6, prefs, tpool),
-        // May require 100-300 curves for 72-bit factors
-        120..=144 => ecm(n, 1000, 30_000, 4.7e6, prefs, tpool),
-        145..=168 => {
-            // Can find a 80 bit factor after a few dozen curves.
-            ecm(n, 1000, 60_000, 20e6, prefs, tpool)
-        }
-        169..=192 => {
-            // Can find a 90 bit factor after a few hundreds curves.
-            ecm(n, 2000, 100_000, 70e6, prefs, tpool)
-        }
-        193..=224 => {
-            // Should be able to find 100 bit factors after
-            // a few hundred curves
-            ecm(n, 5000, 500_000, 640e6, prefs, tpool)
-        }
-        225..=256 => {
-            // May find 100-120 bit factors after ~1000 curves
-            // Similar to GMP-ECM recommended for 35 digit factors.
-            ecm(n, 20, 2_000, 100e3, prefs, tpool)
-                .or_else(|| ecm(n, 15000, 1_000_000, 1.3e9, prefs, tpool))
-        }
-        257..=320 => {
-            // May find 120-140 bit factors after a few thousand curves.
-            // Similar to GMP-ECM recommended for 40 digit factors.
-            ecm(n, 20, 10_000, 400e3, prefs, tpool)
-                .or_else(|| ecm(n, 40000, 3_000_000, 5e9, prefs, tpool))
-        }
-        321..=384 => {
-            // Similar to GMP-ECM recommended for 40-45 digit factors.
-            ecm(n, 10, 500_000, 400e6, prefs, tpool)
-                .or_else(|| ecm(n, 40000, 8_000_000, 22e9, prefs, tpool))
-        }
-        385..=448 => {
-            // Similar to GMP-ECM recommended for 45-50 digit factors.
-            ecm(n, 10, 500_000, 400e6, prefs, tpool)
-                .or_else(|| ecm(n, 40000, 20_000_000, 130e9, prefs, tpool))
-        }
-        449.. => {
-            // Similar to GMP-ECM recommended for 50-55 digit factors.
-            // May exceed 1 minute per curve.
-            ecm(n, 10, 500_000, 400e6, prefs, tpool)
-                .or_else(|| ecm(n, 40000, 50_000_000, 600e9, prefs, tpool))
-        }
-    }
+
+    // Only try as many curves as required by a reference factor size.
+    // There is no use running too many curves for given B1/B2 choices.
+
+    // Target 32 bit primes
+    ecm(n, 10, 200, 10e3, prefs, tpool)
+        // Or 48-bit primes (20x longer)
+        .or_else(|| ecm(n, 30, 2000, 130e3, prefs, tpool))
+        // Or 64-bit primes (15x longer)
+        .or_else(|| ecm(n, 60, 10_000, 1.8e6, prefs, tpool))
+        // Or 80-bit primes (10-15x longer)
+        .or_else(|| ecm(n, 100, 100_000, 28e6, prefs, tpool))
+        // Or 96-bit primes (10x longer)
+        .or_else(|| ecm(n, 200, 500_000, 156e6, prefs, tpool))
+        // Or 128-bit primes (50x longer, several CPU hours)
+        .or_else(|| ecm(n, 1000, 5_000_000, 21e9, prefs, tpool))
+        // Or 160-bit primes (~30x longer?, several CPU days)
+        .or_else(|| ecm(n, 3000, 50_000_000, 543e9, prefs, tpool))
 }
 
 // Run ECM for a given number of curves and bounds B1, B2.

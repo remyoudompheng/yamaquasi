@@ -32,7 +32,8 @@ B1 = [
     100, 200, 500, 1000, 2000,
     5000, 10000, 20000, 50_000,
     100_000, 200_000, 500_000, 1e6,
-    2e6, 5e6, 10e6, 20e6, 50e6, 100e6,
+    2e6, 5e6, 10e6, 20e6, 50e6,
+    100e6, 200e6, 300e6,
 ]
 B2 = [
     10e3, 15e3, 30e3, 65e3,
@@ -73,9 +74,9 @@ def ecm_cost(b1, b2):
     # Bevahiour is similar between x86-64 and aarch64 platforms
     stage1 = 1.44 * 9.8 * b1
     if b2 < 3e6:
-        stage2 = 2.5 * b2**0.75
+        stage2 = 3.5 * b2**0.75
     else:
-        stage2 = 10 * sqrt(b2) * log(b2)
+        stage2 = 14 * sqrt(b2) * log(b2)
     return stage1, stage2
 
 
@@ -87,7 +88,7 @@ for u in range(2, 6):
 
 for bits in (24, 32, 36, 40, 44, 48, 52, 56, 64, 72, 80, 96, 112, 128, 144, 160):
     print(f"=== ECM for {bits}-bit factor ===")
-    extra_bits = EXTRA_SMOOTHNESS if bits < 50 else 4.8
+    extra_bits = EXTRA_SMOOTHNESS if bits > 50 else 4.8
     # Find best cost
     best = 1e100
     for b1 in B1:
