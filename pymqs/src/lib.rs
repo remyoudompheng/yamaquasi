@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::ffi::CString;
+use std::ffi::{c_char, CString};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -103,7 +103,7 @@ fn factor(
         // FIXME: this is ugly.
         let s = CString::new(f.to_string()).unwrap();
         let sptr = s.as_ptr();
-        let nullptr: *mut *mut i8 = std::ptr::null::<*mut i8>() as *mut _;
+        let nullptr: *mut *mut c_char = std::ptr::null::<*mut c_char>() as *mut _;
         let obj = unsafe {
             let obj_ptr = PyLong_FromString(sptr, nullptr, 0);
             PyObject::from_owned_ptr(py, obj_ptr)
@@ -169,7 +169,7 @@ fn ecm(
         // FIXME: this is ugly.
         let s = CString::new(f.to_string()).unwrap();
         let sptr = s.as_ptr();
-        let nullptr: *mut *mut i8 = std::ptr::null::<*mut i8>() as *mut _;
+        let nullptr: *mut *mut c_char = std::ptr::null::<*mut c_char>() as *mut _;
         let obj = unsafe {
             let obj_ptr = PyLong_FromString(sptr, nullptr, 0);
             PyObject::from_owned_ptr(py, obj_ptr)
