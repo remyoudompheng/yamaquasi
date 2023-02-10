@@ -47,7 +47,7 @@ use bnum::types::U1024;
 use num_integer::Integer;
 use rayon::prelude::*;
 
-use crate::arith;
+use crate::arith_gcd;
 use crate::arith_montgomery::{gcd_factors, MInt, ZmodN};
 use crate::arith_poly::Poly;
 use crate::fbase;
@@ -658,11 +658,10 @@ impl Curve {
                 n - Uint::from((-x) as u64) % n
             }
         }
-        let Some(binv) = arith::inv_mod(to_uint(zn.n, b), zn.n)
-            else {
-                let babs = b.abs() as u64;
-                return Err(UnexpectedFactor(Integer::gcd(&(zn.n % babs), &babs)));
-            };
+        let binv = match arith_gcd::inv_mod(&to_uint(zn.n, b), &zn.n) {
+            Ok(inv) => inv,
+            Err(d) => return Err(UnexpectedFactor(d.digits()[0])),
+        };
         Ok(zn.mul(zn.from_int(to_uint(zn.n, a)), zn.from_int(binv)))
     }
 
@@ -998,7 +997,7 @@ impl Curve {
     }
 
     fn is_2_torsion(&self, p: &Point) -> Option<Uint> {
-        let d = Integer::gcd(&Uint::from(p.0), &self.zn.n);
+        let d = self.zn.gcd(&p.0);
         if d == Uint::ONE {
             None
         } else {

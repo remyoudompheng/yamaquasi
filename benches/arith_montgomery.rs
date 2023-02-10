@@ -134,10 +134,25 @@ fn main() {
         },
         {
             let zn = ZmodN::new(p256);
-            let x = zn.from_int(Uint::from(12345_u64));
+            let mut x = zn.from_int(p127);
+            for _ in 0..4 {
+                x = zn.mul(&x, &x);
+            }
             Bench::new("1000x Z/pZ inv (p=p256)").run_seeded(x, |x| {
                 for _ in 0..1000 {
                     zn.inv(x);
+                }
+            })
+        },
+        {
+            let zn = ZmodN::new(p256);
+            let mut x = zn.from_int(p127);
+            for _ in 0..4 {
+                x = zn.mul(&x, &x);
+            }
+            Bench::new("1000x Z/pZ gcd (p=p256)").run_seeded(x, |x| {
+                for _ in 0..1000 {
+                    zn.gcd(&x);
                 }
             })
         },
@@ -179,10 +194,25 @@ fn main() {
         },
         {
             let zn = ZmodN::new(p480);
-            let x = zn.from_int(Uint::from(12345_u64));
+            let mut x = zn.from_int(p127);
+            for _ in 0..4 {
+                x = zn.mul(&x, &x);
+            }
             Bench::new("1000x Z/pZ inv (p=p480)").run_seeded(x, |x| {
                 for _ in 0..1000 {
                     zn.inv(x);
+                }
+            })
+        },
+        {
+            let zn = ZmodN::new(p480);
+            let mut x = zn.from_int(p127);
+            for _ in 0..4 {
+                x = zn.mul(&x, &x);
+            }
+            Bench::new("1000x Z/pZ gcd (p=p480)").run_seeded(x, |x| {
+                for _ in 0..1000 {
+                    zn.gcd(&x);
                 }
             })
         },

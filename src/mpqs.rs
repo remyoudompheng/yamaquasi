@@ -14,7 +14,8 @@ use bnum::cast::CastFrom;
 use num_traits::One;
 use rayon::prelude::*;
 
-use crate::arith::{self, inv_mod, isqrt, pow_mod, Num, U256};
+use crate::arith::{self, isqrt, pow_mod, Num, U256};
+use crate::arith_gcd::inv_mod;
 use crate::fbase::{self, FBase};
 use crate::params::{self, BLOCK_SIZE};
 use crate::relations::{self, Relation, RelationSet};
@@ -294,7 +295,7 @@ fn make_poly(d: Uint, r: Uint, n: &Uint) -> Poly {
     // Since D*D < N, computations can be done using the same integer width.
     let h1 = r;
     let c = ((n - h1 * h1) / d) % d;
-    let h2 = (c * inv_mod(h1 << 1, d).unwrap()) % d;
+    let h2 = (c * inv_mod(&(h1 << 1), &d).unwrap()) % d;
     // (h1 + h2*D)**2 = n mod D^2
     let mut b = (h1 + h2 * d) % (d * d);
 
@@ -438,9 +439,9 @@ fn mpqs_poly(
     }
     // Precompute inverse of D^2
     let d = Uint::cast_from(pol.d);
-    let d2inv = inv_mod(d * d, n).unwrap();
+    let d2inv = inv_mod(&(d * d), &n).unwrap();
     // Precompute inverse of D
-    let dinv = inv_mod(d, n).unwrap();
+    let dinv = inv_mod(&d, &n).unwrap();
 
     // Sieve from -M to M
     let sieve = SieveMPQS {

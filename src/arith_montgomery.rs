@@ -10,9 +10,10 @@
 
 use std::borrow::Borrow;
 
-use num_integer::Integer;
+use bnum::cast::CastFrom;
+use bnum::BUint;
 
-use crate::arith;
+use crate::arith_gcd;
 use crate::Uint;
 
 /// Returns ninv such that n*ninv = -1
@@ -94,7 +95,7 @@ impl MInt {
 impl ZmodN {
     pub fn new(n: Uint) -> Self {
         assert!(n.bit(0));
-        assert!(n.bits() < Uint::BITS / 2);
+        assert!(n.bits() <= 64 * MINT_WORDS as u32);
         let k = (n.bits() + 63) / 64;
         assert!(n.bits() <= 64 * k);
         let rsqrt = Uint::ONE << (32 * k);
@@ -163,8 +164,19 @@ impl ZmodN {
 
     pub fn inv(&self, x: MInt) -> Option<MInt> {
         // No optimization, use ordinary modular inversion.
-        let i = arith::inv_mod(self.to_int(x), self.n)?;
-        Some(self.from_int(i))
+        // Input is xR we want R/x
+        let i = arith_gcd::inv_mod(&BUint::from_digits(x.0), &BUint::cast_from(self.n)).ok()?;
+        // Multiply by R twice
+        let i = self.from_int(Uint::cast_from(i));
+        Some(self.mul(&i, &self.r2))
+    }
+
+    pub fn gcd(&self, x: &MInt) -> Uint {
+        // No optimization, use ordinary modular inversion.
+        Uint::cast_from(arith_gcd::big_gcd(
+            &BUint::cast_from(self.n),
+            &BUint::from_digits(x.0),
+        ))
     }
 
     pub fn add<M: Borrow<MInt>>(&self, x: M, y: M) -> MInt {
@@ -429,13 +441,13 @@ pub fn gcd_factors(n: &Uint, vals: &[MInt]) -> (Vec<Uint>, Uint) {
             return;
         }
         let mid = vals.len() / 2;
-        let d = Integer::gcd(n, &Uint::from(vals[mid]));
+        let d = arith_gcd::big_gcd(n, &Uint::from(vals[mid]));
         find_factors(n, &vals[..=mid], gcd1, &d, factors);
         find_factors(n, &vals[mid..], &d, gcd2, factors);
     }
     let mut facs = vec![];
-    let d1 = Integer::gcd(n, &Uint::from(vals[0]));
-    let d2 = Integer::gcd(n, &Uint::from(vals[vals.len() - 1]));
+    let d1 = arith_gcd::big_gcd(n, &Uint::from(vals[0]));
+    let d2 = arith_gcd::big_gcd(n, &Uint::from(vals[vals.len() - 1]));
     find_factors(n, vals, &d1, &d2, &mut facs);
     let mut n = *n;
     for f in &facs {
@@ -493,6 +505,8 @@ fn test_montgomery() {
 
 #[test]
 fn test_gcd_factors() {
+    use num_integer::Integer;
+
     let n = Uint::from_digit(13 * 17 * 19 * 31 * 37);
     assert_eq!(Integer::gcd(&Uint::ZERO, &n), n);
 

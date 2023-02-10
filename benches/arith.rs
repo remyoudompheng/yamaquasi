@@ -1,7 +1,10 @@
 use brunch::Bench;
+use num_integer::Integer;
 use std::str::FromStr;
 use std::time::Duration;
-use yamaquasi::arith::{self, inv_mod, isqrt, sqrt_mod, U1024, U256, U512};
+
+use yamaquasi::arith::{self, isqrt, sqrt_mod, U1024, U256, U512};
+use yamaquasi::arith_gcd::inv_mod;
 use yamaquasi::{pseudoprime, Uint};
 
 const N256: &str = "23374454829417248628572084580131596971714744792262629806178559231363799527559";
@@ -48,15 +51,32 @@ brunch::benches! {
     {
         let prime160 = U512::from_str(P160).unwrap();
         Bench::new("inv_mod(3, 160-bit prime) = Some(...)")
+        .with_samples(500_000)
         .with_timeout(Duration::from_secs(1))
-        .run_seeded(3, |k: u64| inv_mod(U512::from(k), prime160).unwrap())
+        .run_seeded(3, |k: u64| inv_mod(&U512::from(k), &prime160).unwrap())
     },
     {
         let prime160 = U1024::from_str(P160).unwrap();
         let n = U1024::from_str(PQ256).unwrap();
         Bench::new("inv_mod(160-bit prime, 256-bit modulus) = Some(...)")
+        .with_samples(500_000)
         .with_timeout(Duration::from_secs(1))
-        .run_seeded(prime160, |k: Uint| inv_mod(k, n).unwrap())
+        .run_seeded(prime160, |k: Uint| inv_mod(&k, &n).unwrap())
+    },
+    {
+        let prime160 = U512::from_str(P160).unwrap();
+        Bench::new("slow xgcd(3, 160-bit prime) = Some(...)")
+        .with_samples(500_000)
+        .with_timeout(Duration::from_secs(1))
+        .run_seeded(3, |k: u64| Integer::extended_gcd(&U512::from(k), &prime160))
+    },
+    {
+        let prime160 = U1024::from_str(P160).unwrap();
+        let n = U1024::from_str(PQ256).unwrap();
+        Bench::new("slow xgcd(160-bit prime, 256-bit modulus) = Some(...)")
+        .with_samples(500_000)
+        .with_timeout(Duration::from_secs(1))
+        .run_seeded(prime160, |k: Uint| Integer::extended_gcd(&k, &n))
     },
     // Modular square roots
     Bench::new("sqrt_mod(6, 2500213) = None")

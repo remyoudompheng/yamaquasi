@@ -5,11 +5,12 @@
 //! A collection of functions working on multi-precision
 //! and/or modular arithmetic.
 
+use std::ops::{Shl, Shr};
+use std::str::FromStr;
+
 pub use num_integer::sqrt as isqrt;
 use num_integer::{Integer, Roots};
 use num_traits::{One, Pow, ToPrimitive};
-use std::ops::{Shl, Shr};
-use std::str::FromStr;
 
 pub use bnum::types::{I1024, U1024, U256, U512};
 use bnum::{BInt, BUint};
@@ -147,23 +148,6 @@ pub fn inv_mod64(n: u64, p: u64) -> Option<u64> {
         let x = if e.x < 0 { e.x + p as i64 } else { e.x };
         assert!(x >= 0);
         Some(x as u64 % p)
-    } else {
-        None
-    }
-}
-
-/// Modular inversion for multiprecision integers.
-pub fn inv_mod<const N: usize>(n: BUint<N>, p: BUint<N>) -> Option<BUint<N>> {
-    // Not generic, we need to switch to signed realm.
-    let e = Integer::extended_gcd(&BInt::from_bits(n), &BInt::from_bits(p));
-    if e.gcd.is_one() {
-        let x = if e.x.is_negative() {
-            e.x + BInt::from_bits(p)
-        } else {
-            e.x
-        };
-        assert!(!x.is_negative());
-        Some(x.to_bits() % p)
     } else {
         None
     }
@@ -562,17 +546,6 @@ mod tests {
                     r
                 )
             }
-        }
-    }
-
-    #[test]
-    fn test_inv_mod() {
-        let n =
-            U1024::from_str("2953951639731214343967989360202131868064542471002037986749").unwrap();
-        for k in 1..100u64 {
-            let k = U1024::from(k);
-            let kinv = inv_mod(k, n).unwrap();
-            assert_eq!((kinv * k) % n, U1024::one());
         }
     }
 
