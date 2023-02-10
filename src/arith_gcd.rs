@@ -197,7 +197,7 @@ fn dot_product<const N: usize>(
         let neg = (ax > by && a < 0) || (ax < by && b < 0);
         (ax.abs_diff(by), neg)
     } else {
-        (mulword(au, sz, x) + mulword(bu, sz, y), true)
+        (mulword(au, sz, x) + mulword(bu, sz, y), a < 0 || b < 0)
     }
 }
 
@@ -274,4 +274,14 @@ fn test_invmod() {
         let kinv = inv_mod(&k, &n).unwrap();
         assert_eq!((kinv * k) % n, U1024::ONE);
     }
+
+    // Observed regressions
+    let n = U1024::from_str("26984400680641981219").unwrap();
+    let (a, b) = (73427761, 30894741361);
+    let binv = inv_mod(&U1024::from_digit(b), &n).unwrap();
+    assert_eq!(binv, U1024::from_str("18748949926630253258").unwrap());
+    assert_eq!(
+        (U1024::from_digit(a) * binv) % n,
+        U1024::from_str("22160499496729207058").unwrap()
+    );
 }
