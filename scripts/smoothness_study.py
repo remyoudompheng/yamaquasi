@@ -24,7 +24,7 @@ Sample results:
 128 bit (40 digits): B1=5M B2=21e9 (~900 curves)
 """
 
-from math import log, log2, sqrt
+from math import log2, sqrt
 from sage.all import dickman_rho
 
 # fmt:off
@@ -68,15 +68,15 @@ def semismooth(u, v):
 
 def ecm_cost(b1, b2):
     # Run the ECM benchmark to calibrate constants.
-    # Stage 1 costs 9.8 MULMOD per exponent bit (1.44 B1 bits)
-    # Stage 2 is O(sqrt(B2) log(B2))
-    # Stage 2 constant is 8-9 for large inputs, 10-12 for small inputs.
-    # Bevahiour is similar between x86-64 and aarch64 platforms
-    stage1 = 1.44 * 9.8 * b1
+    # Stage 1 costs 8.92 MULMOD per exponent bit (1.44 B1 bits)
+    # Stage 2 is O(sqrt(B2) log2(B2))
+    # Stage 2 constant is 6-7 for large inputs, 9-11 for small inputs.
+    # On a Cortex-A76 constant was 5.5 for large inputs, 8-9 for small inputs
+    stage1 = 1.44 * 8.92 * b1
     if b2 < 3e6:
-        stage2 = 3.5 * b2**0.75
+        stage2 = 2.2 * b2 / log2(b2)
     else:
-        stage2 = 14 * sqrt(b2) * log(b2)
+        stage2 = 9 * sqrt(b2) * log2(b2)
     return stage1, stage2
 
 

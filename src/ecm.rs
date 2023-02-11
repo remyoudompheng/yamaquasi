@@ -355,24 +355,6 @@ fn ecm_curve(
     //
     // After stage 1 we know that [ad]G and [abs(b)]G are never zero.
     let start2 = std::time::Instant::now();
-    let logtime = || {
-        if verbosity >= Verbosity::Verbose {
-            let elapsed2 = start2.elapsed();
-            if elapsed2.as_secs_f64() < 0.01 {
-                eprintln!(
-                    "ECM stage1={:.6}s stage2={:.6}s",
-                    elapsed1.as_secs_f64(),
-                    elapsed2.as_secs_f64()
-                );
-            } else {
-                eprintln!(
-                    "ECM stage1={:.3}s stage2={:.3}s",
-                    elapsed1.as_secs_f64(),
-                    elapsed2.as_secs_f64()
-                );
-            }
-        }
-    };
 
     // Prepare values of abs(b): there are phi(d1)/2 < d1/4 such values.
     let mut bs = Vec::with_capacity(d1 as usize / 4);
@@ -412,8 +394,12 @@ fn ecm_curve(
     }
     // Normalize, 1 modular inversion using batch inversion.
     batch_normalize(zn, &mut steps);
+
+    let stage2_roots_time = start2.elapsed().as_secs_f64();
+
     let bsteps = &steps[..n_bsteps];
     let gsteps = &steps[n_bsteps..];
+    let mut result = None;
     if d1 < 4000 {
         // Compute O(d*phi(d)) products
         let mut buffer = zn.one();
@@ -429,8 +415,7 @@ fn ecm_curve(
             prods.push(buffer);
         }
         if let Some(d) = check_gcd_factor(n, &prods) {
-            logtime();
-            return Some((d, n / d));
+            result = Some((d, n / d));
         }
     } else {
         // Usually D > 4 phi(D) (phi(2*3*5*7) < N/4)
@@ -460,12 +445,19 @@ fn ecm_curve(
         }
         vals.push(prod);
         if let Some(d) = check_gcd_factor(n, &vals) {
-            logtime();
-            return Some((d, n / d));
+            result = Some((d, n / d));
         }
     }
-    logtime();
-    None
+    if verbosity >= Verbosity::Verbose {
+        let stage1 = elapsed1.as_secs_f64();
+        let stage2 = start2.elapsed().as_secs_f64();
+        if stage2 < 0.01 {
+            eprintln!("ECM stage1={stage1:.6}s stage2={stage2:.6}s (stage2 roots {stage2_roots_time:.6}s)");
+        } else {
+            eprintln!("ECM stage1={stage1:.3}s stage2={stage2:.3}s (stage2 roots {stage2_roots_time:.3}s)");
+        }
+    }
+    result
 }
 
 /// Extract a single factor using GCD.
