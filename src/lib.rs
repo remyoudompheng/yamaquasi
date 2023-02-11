@@ -29,6 +29,7 @@ pub mod relations;
 pub mod ecm;
 pub mod mpqs;
 pub mod pollard_pm1;
+pub mod pp1;
 pub mod qsieve;
 pub mod qsieve64;
 pub mod sieve;
