@@ -11,6 +11,9 @@
 //! It includes a selection of Edwards "good curves" from
 //! <https://eecm.cr.yp.to/goodcurves.html>
 //!
+//! An Edwards curve ax²+y²=1+dx²y² can be converted to Weierstrass
+//! form (y²=x³+ a2 x²+ a4) with a2 = (a+d)/2 and a4=(a-d)²/16
+//!
 //! After good curves (Q-torsion Z/12 or Z/2 x Z/8) it iterates over
 //! a simple infinite family of curves with rational Z/2 x Z/4 torsion.
 //!
@@ -306,7 +309,7 @@ fn ecm_curve(
     let (_, d1, d2) = stage2_params(b2);
     // ECM stage 1
     let start1 = std::time::Instant::now();
-    let mut g = c.gen();
+    let mut g = c.gen().clone();
     const GCD_INTERVAL: usize = 1000;
     let mut gxs = Vec::with_capacity(GCD_INTERVAL);
     for block in sb.factors.chunks(GCD_INTERVAL) {
@@ -365,32 +368,38 @@ fn ecm_curve(
     }
     let g2 = c.double(&g);
     let g4 = c.double(&g2);
-    let mut gaps = vec![g2.clone(), g4];
+    let mut gaps = vec![c.to_extended(&g2), c.to_extended(&g4)];
     // Baby/giant steps in a single vector.
     let mut steps = Vec::with_capacity(d1 as usize / 4 + d2 as usize);
     // Compute the baby steps
-    let mut bg = g.clone();
+    let mut bg = c.to_extended(&g);
     let mut bexp = 1;
     assert_eq!(bs[0], 1);
-    steps.push(bg.clone());
+    steps.push(g.clone());
     let mut n_bsteps = 1 as usize;
     for &b in &bs[1..] {
         let gap = b - bexp;
         while gaps.len() < gap as usize / 2 {
-            let gap2 = c.add(&g2, &gaps[gaps.len() - 1]);
+            let gap2 = c.addext(&gaps[0], &gaps[gaps.len() - 1]);
             gaps.push(gap2);
         }
-        bg = c.add(&bg, &gaps[gap as usize / 2 - 1]);
-        steps.push(bg.clone());
+        bg = c.addext(&bg, &gaps[gap as usize / 2 - 1]);
+        steps.push(bg.to_proj());
         n_bsteps += 1;
         bexp = b;
     }
     // Compute the giant steps
+    // WARNING: extended coordinate addition must not be used
+    // to compute the first step.
     let dg = c.scalar64_chainmul(d1, &g);
-    let mut gg = dg.clone();
-    for _ in 0..d2 {
-        steps.push(gg.clone());
-        gg = c.add(&gg, &dg);
+    let dg2 = c.double(&dg);
+    let dgext = c.to_extended(&dg);
+    let mut gg = c.to_extended(&dg2);
+    steps.push(dg);
+    steps.push(dg2);
+    for _ in 2..d2 {
+        gg = c.addext(&gg, &dgext);
+        steps.push(gg.to_proj());
     }
     // Normalize, 1 modular inversion using batch inversion.
     batch_normalize(zn, &mut steps);
@@ -569,21 +578,57 @@ impl SmoothBase {
     }
 }
 
-// Edwards curves
-// x²+y² = 1 + dx²y²
+/// An elliptic curve in (twisted) Edwards form ax²+y² = 1 + dx²y²
+/// where a = ±1
 pub struct Curve {
-    // The base ring
+    /// The base ring
     zn: ZmodN,
-    // Parameter
+    /// Whether the curve has a=-1
+    twisted: bool,
     d: MInt,
-    // Coordinates of a "non-torsion" point.
-    gx: MInt,
-    gy: MInt,
+    // Coordinates of a "non-torsion" base point.
+    g: Point,
 }
 
-// A point in projective coordinates.
+/// A point in the projective plane using homogeneous coordinates.
 #[derive(Clone, Debug)]
 pub struct Point(MInt, MInt, MInt);
+
+/// An Edwards curve point in extended coordinates (x,y,z,t)
+/// located in the quadric xy=zt.
+///
+/// The equation of the Edwards curve in these coordinates is:
+/// a x^2 + y^2 = z^2 + d t^2
+///
+/// Addition in this representation costs 8 multiplications
+/// instead of 12, making it ideal for stage 2.
+#[derive(Clone, Debug)]
+pub struct ExtPoint(MInt, MInt, MInt, MInt);
+
+impl ExtPoint {
+    fn to_proj(&self) -> Point {
+        Point(self.0, self.1, self.2)
+    }
+}
+
+#[derive(Debug)]
+#[doc(hidden)]
+pub struct UnexpectedLargeFactor(Uint);
+
+impl UnexpectedLargeFactor {
+    fn new(zn: &ZmodN, x: &MInt) -> Self {
+        let d = Integer::gcd(&zn.n, &Uint::from(*x));
+        assert!(d != Uint::ONE);
+        Self(d)
+    }
+}
+
+fn zn_divide(zn: &ZmodN, a: &MInt, b: &MInt) -> Result<MInt, UnexpectedLargeFactor> {
+    match zn.inv(*b) {
+        Some(binv) => Ok(zn.mul(a, &binv)),
+        None => Err(UnexpectedLargeFactor::new(zn, b)),
+    }
+}
 
 // Special curves from https://eecm.cr.yp.to/goodcurves.html
 // We only need the coordinates of the generator (d can be computed).
@@ -643,9 +688,14 @@ impl Curve {
         let dden: i64 = x1 * x1 * y1 * y1;
         let d = Self::fraction_modn(&zn, dnum, dden)?;
         let one = zn.one();
-        let c = Curve { zn, d, gx, gy };
+        let c = Curve {
+            zn,
+            twisted: false,
+            d,
+            g: Point(gx, gy, one),
+        };
         assert!(
-            c.is_valid(&Point(gx, gy, one)),
+            c.is_valid(&c.g),
             "invalid point G=({x1}/{x2}={},{y1}/{y2}={}) for d={dnum}/{dden}={} mod {}",
             c.zn.to_int(gx),
             c.zn.to_int(gy),
@@ -666,15 +716,40 @@ impl Curve {
         let dn = Self::fraction_modn(&zn, (x * x + y * y - 1) as i64, 1)?;
         let dd = Self::fraction_modn(&zn, 1, (x * y) as i64)?;
         let d = zn.mul(zn.mul(dn, dd), dd);
-        Ok(Curve { zn, d, gx, gy })
+        let g = Point(gx, gy, zn.one());
+        Ok(Curve {
+            zn,
+            twisted: false,
+            d,
+            g,
+        })
     }
 
-    pub fn gen(&self) -> Point {
-        Point(self.gx, self.gy, self.zn.from_int(Uint::ONE))
+    pub fn twisted_from_point(zn: ZmodN, g: Point) -> Result<Curve, UnexpectedLargeFactor> {
+        // (-x²+y²)z² = z^4 + dx²y²
+        // d = (y^2 - x^2 - z^2)z^2 / x^2 y^2
+        let x2 = zn.mul(&g.0, &g.0);
+        let y2 = zn.mul(&g.1, &g.1);
+        let z2 = zn.mul(&g.2, &g.2);
+        let dn = zn.mul(&z2, &zn.sub(&zn.sub(&y2, &x2), &z2));
+        let dd = zn.mul(&x2, &y2);
+        let d = zn_divide(&zn, &dn, &dd)?;
+        Ok(Curve {
+            zn,
+            twisted: true,
+            d,
+            g,
+        })
     }
 
-    // Addition formula following add-2007-bl
+    pub fn gen(&self) -> &Point {
+        &self.g
+    }
+
+    // Addition formula following add-2007-bl (a=1) and add-2008-bbjlp (a=-1)
     // https://hyperelliptic.org/EFD/g1p/auto-edwards-projective.html#addition-add-2007-bl
+    //
+    // Both formulas are strongly unified and work even for P=Q.
     fn add(&self, p: &Point, q: &Point) -> Point {
         // 12 multiplications are required.
         let zn = &self.zn;
@@ -685,16 +760,79 @@ impl Curve {
         let c = zn.mul(&p.0, &q.0);
         let d = zn.mul(&p.1, &q.1);
         let cd = zn.mul(&zn.add(&p.0, &p.1), &zn.add(&q.0, &q.1));
-        let cross = zn.sub(&cd, &zn.add(&c, &d));
+        let c_plus_d = zn.add(&c, &d);
+        let cross = zn.sub(&cd, &c_plus_d);
 
         let e = zn.mul(&self.d, &zn.mul(&c, &d));
         let f = zn.sub(&b, &e);
         let g = zn.add(&b, &e);
 
+        // See formula add-2008-bbjlp for the a=-1 case.
         let x = zn.mul(&zn.mul(&a, &f), &cross);
-        let y = zn.mul(zn.mul(&a, &g), zn.sub(&d, &c));
+        let y = zn.mul(
+            zn.mul(&a, &g),
+            if self.twisted {
+                c_plus_d
+            } else {
+                zn.sub(&d, &c)
+            },
+        );
         let z = zn.mul(&f, &g);
         Point(x, y, z)
+    }
+
+    /// Addition formmula for extended coordinates on twisted Edwards curves.
+    ///
+    /// For a=-1, it requires 8 modular multiplications
+    /// https://hyperelliptic.org/EFD/g1p/auto-twisted-extended-1.html#addition-add-2008-hwcd-4
+    /// For a=1, it requires 9 modular multiplications
+    /// https://hyperelliptic.org/EFD/g1p/auto-twisted-extended.html#addition-add-2008-hwcd-2
+    ///
+    /// Warning: these formulas are not "strongly unified" and will return
+    /// zero coordinates if P=Q. We expect this case to only happen by
+    /// accident (finding a factor during stage 2 steps) and not
+    /// by design (doubling a point).
+    fn addext(&self, p: &ExtPoint, q: &ExtPoint) -> ExtPoint {
+        let zn = &self.zn;
+        let (a, b, c, d) = if self.twisted {
+            // Formula add-2008-hwcd-4 in Explicit Formula Database
+            // (yP - xP)(yQ + xQ), (yP + xP)(yQ - xQ)
+            let a = zn.mul(&zn.sub(&p.1, &p.0), &zn.add(q.1, q.0));
+            let b = zn.mul(&zn.add(&p.1, &p.0), &zn.sub(q.1, q.0));
+            // 2 zP tQ, 2 zQ tP
+            let c = zn.mul(&p.2, &q.3);
+            let c = zn.add(&c, &c);
+            let d = zn.mul(&p.3, &q.2);
+            let d = zn.add(&d, &d);
+            (a, b, c, d)
+        } else {
+            // Formula add-2008-hwcd-2 in Explicit Formula Database
+            (
+                zn.mul(&p.0, &q.0),
+                zn.mul(&p.1, &q.1),
+                zn.mul(&p.2, &q.3),
+                zn.mul(&p.3, &q.2),
+            )
+        };
+        let e = zn.add(&d, &c);
+        let f = if self.twisted {
+            zn.sub(&b, &a)
+        } else {
+            // xP yQ - xQ yP = (xP-yP)*(xQ+yQ) +yPyQ -xPxQ
+            zn.add(
+                &zn.mul(&zn.sub(p.0, p.1), &zn.add(q.0, q.1)),
+                &zn.sub(&b, &a),
+            )
+        };
+        let g = zn.add(&b, &a);
+        let h = zn.sub(&d, &c);
+        // xy(P+Q) = zt(P+Q) = efgh
+        ExtPoint(
+            zn.mul(&e, &f),
+            zn.mul(&g, &h),
+            zn.mul(&f, &g),
+            zn.mul(&e, &h),
+        )
     }
 
     fn sub(&self, p: &Point, q: &Point) -> Point {
@@ -712,14 +850,26 @@ impl Curve {
         let b = zn.mul(&x_plus_y, &x_plus_y);
         let c = zn.mul(&p.0, &p.0);
         let d = zn.mul(&p.1, &p.1);
-        let e = zn.add(&c, &d);
-        let h = zn.mul(&p.2, &p.2);
-        let j = zn.sub(&zn.sub(&e, &h), &h);
-        // Final result
-        let x = zn.mul(&zn.sub(&b, &e), &j);
-        let y = zn.mul(&e, &zn.sub(&c, &d));
-        let z = zn.mul(&e, &j);
-        Point(x, y, z)
+        if self.twisted {
+            // Formula dbl-2008-bbjlp
+            let c_plus_d = zn.add(&c, &d);
+            let f = zn.sub(&d, &c);
+            let h = zn.mul(&p.2, &p.2);
+            let j = zn.sub(&zn.sub(&f, &h), &h);
+            let x = zn.mul(&zn.sub(&b, &c_plus_d), &j);
+            let y = zn.mul(&f, &zn.sub(&zn.zero(), &c_plus_d));
+            let z = zn.mul(&f, &j);
+            Point(x, y, z)
+        } else {
+            let e = zn.add(&c, &d);
+            let h = zn.mul(&p.2, &p.2);
+            let j = zn.sub(&zn.sub(&e, &h), &h);
+            // Final result
+            let x = zn.mul(&zn.sub(&b, &e), &j);
+            let y = zn.mul(&e, &zn.sub(&c, &d));
+            let z = zn.mul(&e, &j);
+            Point(x, y, z)
+        }
     }
 
     /// Naïve double-and-add scalar multiplication.
@@ -945,14 +1095,47 @@ impl Curve {
         res
     }
 
+    /// A projective plane point [x:y:z] defines an extended point by
+    /// the Segre embedding of ([x:z], [y:z])
+    fn to_extended(&self, p: &Point) -> ExtPoint {
+        let zn = &self.zn;
+        ExtPoint(
+            zn.mul(&p.0, &p.2),
+            zn.mul(&p.1, &p.2),
+            zn.mul(&p.2, &p.2),
+            zn.mul(&p.0, &p.1),
+        )
+    }
+
     fn is_valid(&self, p: &Point) -> bool {
-        // (x²+y²)z² = z^4 + dx²y²
+        // (±x²+y²)z² = z^4 + dx²y²
         let zn = &self.zn;
         let x2 = zn.mul(p.0, p.0);
         let y2 = zn.mul(p.1, p.1);
         let z2 = zn.mul(p.2, p.2);
-        let lhs = zn.mul(zn.add(x2, y2), z2);
+        let lhs = if self.twisted {
+            zn.mul(zn.sub(y2, x2), z2)
+        } else {
+            zn.mul(zn.add(x2, y2), z2)
+        };
         let rhs = zn.add(zn.mul(z2, z2), zn.mul(self.d, zn.mul(x2, y2)));
+        lhs == rhs
+    }
+
+    #[cfg(test)]
+    fn is_validext(&self, p: &ExtPoint) -> bool {
+        // ax²+ y² = z² + dt²
+        let zn = &self.zn;
+        let x2 = zn.mul(p.0, p.0);
+        let y2 = zn.mul(p.1, p.1);
+        let z2 = zn.mul(p.2, p.2);
+        let t2 = zn.mul(p.3, p.3);
+        let lhs = if self.twisted {
+            zn.sub(&y2, &x2)
+        } else {
+            zn.add(&y2, &x2)
+        };
+        let rhs = zn.add(&z2, &zn.mul(&self.d, &t2));
         lhs == rhs
     }
 
@@ -1011,6 +1194,56 @@ fn test_curve() {
         c.is_2_torsion(&g2),
         Uint::from_str("59528557881167220232630894403").ok()
     );
+
+    // Test extended coordinates.
+    let g1 = c.scalar64_chainmul(123_456_789, &g);
+    let g2 = c.scalar64_chainmul(987_654_321, &g);
+    let g1ext = c.to_extended(&g1);
+    let g2ext = c.to_extended(&g2);
+    assert!(c.is_validext(&g1ext));
+    assert!(c.is_validext(&g2ext));
+    let g12 = c.add(&g1, &g2);
+    let g12ext = c.addext(&g1ext, &g2ext);
+    assert!(c.is_validext(&g12ext));
+    assert!(c.equal(&g12, &g12ext.to_proj()));
+}
+
+#[test]
+fn test_twisted_curve() {
+    let p = Uint::from(602768606663711_u64);
+    let q = Uint::from(957629686686973_u64);
+    let n = p * q;
+    let zn = ZmodN::new(n);
+    // The σ=11 twisted Edwards curve.
+    // Its order is:
+    // mod p: 602768647071432 = 2^3 * 3^2 * 17 * 251 * 4679 * 419317
+    // mod q: 957629727109848 = 2^3 * 3 * 13 * 359 * 8549654731
+    let gx = Curve::fraction_modn(&zn, -11, 60).unwrap();
+    let gy = Curve::fraction_modn(&zn, 11529, 12860).unwrap();
+    let g = Point(gx, gy, zn.one());
+    let c = Curve::twisted_from_point(zn.clone(), g).unwrap();
+    let g = c.gen();
+    assert!(c.is_valid(&g));
+
+    let g1 = c.scalar64_chainmul(602768647071432, &g);
+    assert!(c.is_valid(&g1));
+    let g2 = c.scalar64_chainmul(957629727109848, &g1);
+    assert!(c.is_valid(&g2));
+
+    assert!(c.is_2_torsion(&g1) == Some(p));
+    assert!(&g2.0 == &zn.zero());
+
+    // Test extended coordinates.
+    let g1 = c.scalar64_chainmul(123_456_789, &g);
+    let g2 = c.scalar64_chainmul(987_654_321, &g);
+    let g1ext = c.to_extended(&g1);
+    let g2ext = c.to_extended(&g2);
+    assert!(c.is_validext(&g1ext));
+    assert!(c.is_validext(&g2ext));
+    let g12 = c.add(&g1, &g2);
+    let g12ext = c.addext(&g1ext, &g2ext);
+    assert!(c.is_validext(&g12ext));
+    assert!(c.equal(&g12, &g12ext.to_proj()));
 }
 
 #[test]
