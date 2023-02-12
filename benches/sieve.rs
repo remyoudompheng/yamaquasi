@@ -204,6 +204,24 @@ fn main() {
         },
     }
 
+    for b1 in [100_000, 1_000_000, 10_000_000, 100_000_000] {
+        let start = std::time::Instant::now();
+        let mut ps = fbase::PrimeSieve::new();
+        let mut s = vec![];
+        loop {
+            let b = ps.next();
+            s.extend_from_slice(b);
+            if b[b.len() - 1] > b1 as u32 {
+                break;
+            }
+        }
+        eprintln!(
+            "Sieved {} primes until {} in {:.3}s",
+            s.len(),
+            s.last().unwrap(),
+            start.elapsed().as_secs_f64()
+        );
+    }
     // Full prime sieve.
     let start = std::time::Instant::now();
     let mut s = fbase::PrimeSieve::new();

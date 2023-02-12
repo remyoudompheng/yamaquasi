@@ -518,7 +518,20 @@ pub struct SmoothBase {
 impl SmoothBase {
     pub fn new(b1: usize) -> Self {
         const LARGE_THRESHOLD: u64 = 4096;
-        let primes = fbase::primes(b1 as u32 / 2);
+        let primes = if b1 < 65_536 {
+            fbase::primes(b1 as u32 / 2)
+        } else {
+            let mut s = fbase::PrimeSieve::new();
+            let mut primes = vec![];
+            loop {
+                let b = s.next();
+                primes.extend_from_slice(b);
+                if b[b.len() - 1] > b1 as u32 {
+                    break;
+                }
+            }
+            primes
+        };
         let mut factors = vec![];
         let mut factors_lg = vec![];
         let mut buffer = 1_u64;
