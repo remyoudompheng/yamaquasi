@@ -205,9 +205,9 @@ pub fn pm1_quick(n: Uint, v: Verbosity) -> Option<(Vec<Uint>, Uint)> {
     // Choose B1 so that stage 1 is a large part of CPU time.
     match n.bits() {
         // Extremely quick run
-        0..=128 => pm1_impl(n, 256, 20e3, v),
+        0..=128 => pm1_impl(n, 400, 15e3, v),
         // Catches many 24-bit factors in 1-5ms.
-        129..=190 => pm1_impl(n, 256, 50e3, v),
+        129..=190 => pm1_impl(n, 600, 40e3, v),
         // Takes less than a few ms
         191..=220 => pm1_impl(n, 10_000, 270e3, v),
         // Takes less than 0.01 second
@@ -223,8 +223,8 @@ pub fn pm1_quick(n: Uint, v: Verbosity) -> Option<(Vec<Uint>, Uint)> {
         // Above this size, quadratic sieve will be extremely
         // long so allow a lot of CPU budget into Pollard P-1.
         371..=420 => pm1_impl(n, 16 << 20, 150e9, v),
-        421..=470 => pm1_impl(n, 64 << 20, 1.4e12, v),
-        471.. => pm1_impl(n, 256 << 20, 10e12, v),
+        421..=470 => pm1_impl(n, 45_000_000, 2.5e12, v),
+        471.. => pm1_impl(n, 160_000_000, 22e12, v),
     }
 }
 

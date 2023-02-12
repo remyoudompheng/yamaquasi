@@ -66,6 +66,21 @@ def semismooth(u, v):
     return g
 
 
+def pm1_cost(b1, b2):
+    # Constants are calibrated to follow trends of the P-1 benchmark
+    # Stage 1 costs 1.2 MULMOD per exponent bit (1.44 B1 bits)
+    # Stage 2 constant is 3 for smaller inputs, 2 for larger inputs
+    # On a Cortex-A76 constant was 2 for smaller inputs, 1.5 for larger inputs
+    stage1 = 1.44 * 1.2 * b1
+    if b2 < 80e3:
+        stage2 = b2 / log2(b2)
+    elif b2 < 200e9:
+        stage2 = 3 * sqrt(b2) * log2(b2)
+    else:
+        stage2 = 2 * sqrt(b2) * log2(b2)
+    return stage1, stage2
+
+
 def ecm_cost(b1, b2):
     # Run the ECM benchmark to calibrate constants.
     # Stage 1 costs 8.92 MULMOD per exponent bit (1.44 B1 bits)
@@ -85,6 +100,38 @@ for u in range(2, 6):
     for v in range(2, u + 1):
         g = semismooth(u, v)
         print(f"G({u=:.2f}, {v=:.2f}) = {g:.3e}")
+
+print(f"=== P-1 EFFICIENCY ===")
+PM1_PARAMS = [
+    (400, 15e3),
+    (600, 40e3),
+    (10_000, 270e3),
+    (50_000, 8e6),
+    (500_000, 300e6),
+    (1_000_000, 1.2e9),
+    (2_000_000, 5e9),
+    (7_000_000, 18e9),
+    (16 << 20, 150e9),
+    (45e6, 2.5e12),
+    (160e6, 20e12),
+]
+for b1ref, b2ref in PM1_PARAMS:
+    print(f"Compare B1={b1ref:.3e} B2={b2ref:.3e}")
+    for b1, b2 in [
+        (b1ref, b2ref),
+        (0.4 * b1ref, 2 * b2ref),
+        (1.4 * b1ref, 0.5 * b2ref),
+    ]:
+        lb1, lb2 = log2(b1), log2(b2)
+        p = [
+            100 * semismooth((bits - 1.5) / lb1, (bits - 1.5) / lb2)
+            for bits in (24, 32, 48, 64, 80, 96)
+        ]
+        c1, c2 = pm1_cost(b1, b2)
+        cost = c1 + c2
+        print(
+            f"B1={b1:.2e} B2={b2:.2e} cost={cost:.2e} success ratio 24b={p[0]:.1f}% 32b={p[1]:.1f}% 48b={p[2]:.1f}% 64b={p[3]:.1f}% 80b={p[4]:.1f}% 96b={p[5]:.1f}%"
+        )
 
 for bits in (24, 32, 36, 40, 44, 48, 52, 56, 64, 72, 80, 96, 112, 128, 144, 160):
     print(f"=== ECM for {bits}-bit factor ===")
