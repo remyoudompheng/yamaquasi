@@ -88,51 +88,37 @@ pub fn ecm_auto(
 ) -> Option<(Uint, Uint)> {
     // The CPU budget here is only a few seconds (at most 1% of SIQS time).
     // So we intentionally use small parameters hoping to be very lucky.
-    // Best D values have D/phi(D) > 4.3
-    //
-    // Sample parameters can be found at https://eecm.cr.yp.to/performance.html
+    // This means that the parameters should be tuned to find factors
+    // smaller than about n^1/4.
     match n.bits() {
-        0..=160 => {
-            // Very quick run.
-            ecm(n, 4, 120, 10e3, prefs, tpool)
-        }
-        161..=190 => {
-            // Will quite often find a 30-32 bit factor (budget 10-20ms)
-            ecm(n, 16, 120, 40e3, prefs, tpool)
-        }
-        191..=220 => {
-            // Will quite often find a 40-45 bit factor (budget <100ms)
-            ecm(n, 16, 800, 80e3, prefs, tpool)
-        }
-        221..=250 => {
-            // Will quite often find a factor of size 50-55 bits (budget 0.1-0.5s)
-            ecm(n, 30, 3000, 300e3, prefs, tpool)
-        }
-        251..=280 => {
-            // Will quite often find a factor of size 60-65 bits (budget 2-3s)
-            ecm(n, 100, 8000, 1.2e6, prefs, tpool)
-        }
-        281..=310 => {
-            // Will often find a factor of size 70-75 bits (budget 5-10s)
-            ecm(n, 100, 30_000, 4.7e6, prefs, tpool)
-        }
-        311..=340 => {
-            // Will often find a factor of size 75-80 bits (budget 20-30s)
-            ecm(n, 100, 60_000, 20e6, prefs, tpool)
-        }
-        341..=370 => {
-            // Try to find a factor of size 80-85 bits (budget 1min)
-            ecm(n, 200, 100_000, 70e6, prefs, tpool)
-        }
+        // Minimal parameters for 20-bit factors
+        0..=64 => ecm(n, 2, 100, 7.7e3, prefs, tpool),
+        // Target 32-bit factors
+        65..=160 => ecm(n, 8, 200, 7.7e3, prefs, tpool),
+        // Target 40 bit factors (budget 10-20ms)
+        161..=190 => ecm(n, 20, 500, 20e3, prefs, tpool),
+        // Target 48 bit factors (budget <100ms)
+        191..=220 => ecm(n, 25, 2000, 80e3, prefs, tpool),
+        // Target 52 bit factors (budget 0.1-0.5s)
+        221..=250 => ecm(n, 50, 2000, 126e3, prefs, tpool),
+        // Target 64 bit factors (budget 2-3s)
+        251..=280 => ecm(n, 100, 10000, 554e3, prefs, tpool),
+        // Target 72 bit factors (budget 5-10s)
+        281..=310 => ecm(n, 180, 20_000, 1.37e6, prefs, tpool),
+        // Target 80 bit factors (budget 20-30s)
+        311..=340 => ecm(n, 100, 100_000, 20e6, prefs, tpool),
+        // Target 92 bit factors (budget 1mn)
+        341..=370 => ecm(n, 250, 200_000, 38e6, prefs, tpool),
         // For very large numbers, we don't expect quadratic sieve to complete
         // in reasonable time, so all hope is on ECM.
         371..=450 => {
-            // May find a 100-110 bit factor. Budget is more than 10 minutes
-            ecm(n, 400, 500_000, 640e6, prefs, tpool)
+            // Target 108-bit factors, budget is more than 10 minutes
+            ecm(n, 400, 1000_000, 640e6, prefs, tpool)
         }
         451.. => {
-            // Budget is virtually unlimited (several seconds per curve)
-            ecm(n, 500, 5_000_000, 21e9, prefs, tpool)
+            // Try 108-bits or 128 bit factors(several seconds per curve)
+            ecm(n, 400, 1000_000, 640e6, prefs, tpool)
+                .or_else(|| ecm(n, 1000, 5_000_000, 5.3e9, prefs, tpool))
         }
     }
 }
@@ -150,19 +136,21 @@ pub fn ecm_only(
     // There is no use running too many curves for given B1/B2 choices.
 
     // Target 32 bit primes
-    ecm(n, 10, 200, 10e3, prefs, tpool)
+    ecm(n, 10, 200, 7.7e3, prefs, tpool)
         // Or 48-bit primes (20x longer)
-        .or_else(|| ecm(n, 30, 2000, 130e3, prefs, tpool))
+        .or_else(|| ecm(n, 30, 2000, 81e3, prefs, tpool))
         // Or 64-bit primes (15x longer)
-        .or_else(|| ecm(n, 60, 10_000, 1.8e6, prefs, tpool))
+        .or_else(|| ecm(n, 90, 10_000, 554e3, prefs, tpool))
         // Or 80-bit primes (10-15x longer)
-        .or_else(|| ecm(n, 100, 100_000, 28e6, prefs, tpool))
+        .or_else(|| ecm(n, 100, 100_000, 19e6, prefs, tpool))
         // Or 96-bit primes (10x longer)
         .or_else(|| ecm(n, 200, 500_000, 156e6, prefs, tpool))
-        // Or 128-bit primes (50x longer, several CPU hours)
-        .or_else(|| ecm(n, 1000, 5_000_000, 21e9, prefs, tpool))
-        // Or 160-bit primes (~30x longer?, several CPU days)
-        .or_else(|| ecm(n, 3000, 50_000_000, 543e9, prefs, tpool))
+        // Or 120-bit primes (15-20x longer)
+        .or_else(|| ecm(n, 1000, 2_000_000, 1.3e9, prefs, tpool))
+        // Or 144-bit primes (10-15x longer)
+        .or_else(|| ecm(n, 3000, 10_000_000, 21e9, prefs, tpool))
+        // Or 168-bit primes (10x longer, several CPU days)
+        .or_else(|| ecm(n, 5000, 100_000_000, 543e9, prefs, tpool))
 }
 
 // Run ECM for a given number of curves and bounds B1, B2.
@@ -1458,7 +1446,7 @@ fn test_ecm_curve2() {
     // Order has largest prime factors 11329 and 802979
     let c = Curve::from_point(zn.clone(), 2, 132).unwrap();
     let sb = SmoothBase::new(15000);
-    let res = ecm_curve(&sb, &zn, &c, 1e6, Verbosity::Silent);
+    let res = ecm_curve(&sb, &zn, &c, 1.37e6, Verbosity::Silent);
     eprintln!("{:?}", res);
     assert_eq!(res, Some((p, q)));
 }

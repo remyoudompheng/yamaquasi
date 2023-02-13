@@ -32,7 +32,22 @@ proof.arithmetic(False)
 
 # Ideal values of D/B2
 # We cannot reach D > 6 φ(D) (it requires D >= 223092870)
-for k in range(4, 21):
+smooths = sorted([
+    product(_pks)
+    for _pks in itertools.product(
+        (1, 2, 4, 8, 16), (1, 3, 9, 27), (1, 5, 25), (1, 7, 49), (1, 11),
+        (1, 13), (1, 17), (1, 19), (1, 23), (1, 29), (1, 31)
+    )
+])
+# For small values, we want "square" patterns (1 block)
+for t in [32, 40, 48, 64, 80, 100, 120, 150, 180, 210, 240, 320, 360, 420]:
+    nbest = 0
+    for n in smooths:
+        if 0.80 <= euler_phi(n) / 2 / t <= 1.01:
+            nbest = n
+    phi = euler_phi(nbest) // 2
+    print(f"D1={nbest} D2={phi} B2={float(phi*nbest):.3e} φ(D)/2={phi} (cost {phi**2} products)")
+for k in range(9, 21):
     t = 1 << k
     nbest = 0
     for n in range(int((k // 2 - 1) * t), 12 * t):

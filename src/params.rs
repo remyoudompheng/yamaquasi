@@ -39,20 +39,25 @@ pub fn large_prime_factor(n: &Uint) -> u64 {
 ///     multiplied by a number of blocks (2, 3, 4)
 ///
 /// For small values where multipoint evaluation is not used,
-/// the power of 2 constraint can be relaxed.
+/// the power of 2 constraint can be relaxed and d2 should be very close
+/// to φ(d1)/2 for optimal cost.
 const STAGE2_PARAMS: &[(f64, u64, u64)] = &[
     // B2, d1, d2
-    (15e3, 240, 64),    // φ/2=48, 1152 products
-    (30e3, 240, 128),   // φ/2=48, 2304 products
-    (65e3, 510, 128),   // φ/2=72, 5700 products
-    (98e3, 510, 192),   // φ/2=64
-    (130e3, 510, 256),  // φ/2=64
-    (268e3, 1050, 256), // φ/2=120
-    (400e3, 1050, 384), // φ/2=120
-    (540e3, 1050, 512),
-    (1.18e6, 2310, 512), // φ/2=240
-    (1.77e6, 2310, 768), // φ/2=240
-    (2.36e6, 2310, 1024),
+    // Using quadratic method, d2=φ(d1)/2, cost d2^2
+    (7.7e3, 240, 32),
+    (13.2e3, 330, 40),
+    (20e3, 420, 48),
+    (33e3, 510, 64),
+    (53e3, 660, 80),
+    (81e3, 840, 96),
+    (126e3, 1050, 120),
+    (181e3, 1260, 144),
+    (323e3, 1680, 192),
+    (554e3, 2310, 240),
+    (786e3, 2730, 288),
+    (1.37e6, 3570, 384),
+    // Use polyeval starting from here
+    (2.3e6, 4620, 512),       // φ/2=480
     (4.7e6, 4620, 1024),      // φ/2=480
     (7.1e6, 4620, 1536),      // φ/2=480
     (9.5e6, 4620, 2048),      // φ/2=480

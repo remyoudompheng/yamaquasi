@@ -85,7 +85,8 @@ fn main() {
     // ECM complexity (O(b1 log(b1)) + O(b2^(0.5+eps)))
     eprintln!("ECM timings stage 2");
     let b2_values = [
-        15e3, 65e3, 268e3, 1.18e6, 7.1e6, 28e6, 117e6, 643e6, 2.6e9, 10.5e9, 43e9, 136e9, 543e9,
+        7.7e3, 20e3, 33e3, 81e3, 181e3, 554e3, 1.37e6, 2.3e6, 7.1e6, 28e6, 117e6, 643e6, 2.6e9,
+        10.5e9, 43e9, 136e9, 543e9,
     ];
     let mut tt256 = vec![];
     let mut tt480 = vec![];
@@ -93,9 +94,12 @@ fn main() {
         let b1 = 200;
         let start = std::time::Instant::now();
         // Use P256 so what ECM cannot work.
-        let res = ecm::ecm(p256, 1, b1, b2, &prefs, None);
-        assert!(res.is_none());
-        let t = start.elapsed().as_secs_f64();
+        let iters = if b2 < 100e3 { 1000 } else { 1 };
+        for _ in 0..iters {
+            let res = ecm::ecm(p256, 1, b1, b2, &prefs, None);
+            assert!(res.is_none());
+        }
+        let t = start.elapsed().as_secs_f64() / (iters as f64);
         eprintln!("p256 ECM(B1={b1},B2={b2:.3e}) in {t:.3}s");
         tt256.push(t);
 
@@ -115,9 +119,12 @@ fn main() {
         let b2 = 38e6;
         let start = std::time::Instant::now();
         // Use P256 so what ECM cannot work.
-        let res = ecm::ecm(p256, 1, b1, b2, &prefs, None);
-        assert!(res.is_none());
-        let t = start.elapsed().as_secs_f64();
+        let iters = if b2 < 100e3 { 1000 } else { 1 };
+        for _ in 0..iters {
+            let res = ecm::ecm(p256, 1, b1, b2, &prefs, None);
+            assert!(res.is_none());
+        }
+        let t = start.elapsed().as_secs_f64() / (iters as f64);
         eprintln!("p256 ECM(B1={b1},B2={b2:.3e}) in {t:.3}s");
         t256.push(t);
 
@@ -147,7 +154,7 @@ fn main() {
     let mut large2_c480 = vec![];
     for i in 1..b2_values.len() {
         let b2 = b2_values[i] as f64;
-        if b2 < 3e6 {
+        if b2 < 2e6 {
             let c = (tt256[i] - tt256[0]) / (b2 / b2.log2()) * 1e9;
             small2_c256.push(c.round() as u64);
             let c = (tt480[i] - tt480[0]) / (b2 / b2.log2()) * 1e9;
