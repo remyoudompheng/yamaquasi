@@ -61,7 +61,6 @@ pub struct Preferences {
     // Yes, storing state variables in a Preferences object
     // is quite awkward.
     pm1_done: AtomicBool,
-    eecm_done: AtomicBool,
 }
 
 impl Preferences {
@@ -601,6 +600,18 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
         assert_eq!(fs.len(), 3);
         assert!(fs[0] * fs[1] * fs[2] == n);
     }
+
+    // Exceptional primes for the Suyama-11 family
+    // The generator (12,24) of the modular curve has order 17, 19, 23
+    // for the prime factors of this number:
+    // 4076109244408937005985066831
+    // 6705163953466859722567402034832167
+    // 6164159587123652872394951179302664763814309093309197470628088016151
+    // As a consequence ECM must find all factors quickly "accidentally".
+    let n = Uint::from_str("168472527175896339170265431590477670742294002583447818106088193178591923790722222786096568695941644944559115227634107731116901327")?;
+    let fs = factor(n, Algo::Ecm, &Preferences::default());
+    assert_eq!(fs.len(), 3);
+    assert_eq!(fs[0] * fs[1] * fs[2], n);
 
     Ok(())
 }

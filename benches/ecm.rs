@@ -58,6 +58,13 @@ fn main() {
                 .run_seeded((), |_| c.scalar64_chainmul(n, &g))
         },
         {
+            let zn = ZmodN::new(p256);
+            let c = ecm::Suyama11::new(&zn).unwrap();
+            Bench::new("generate Suyama curve (p256)")
+                .with_timeout(Duration::from_secs(3))
+                .run_seeded((), |_| c.params_point(&c.element(123_456_789).unwrap()))
+        },
+        {
             // 5 primes where the "good curves" often have non-smooth order.
             let primes24: &[u64] = &[
                 13377491,

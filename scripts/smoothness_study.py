@@ -51,7 +51,7 @@ B2 = [
 # => equivalent to 4 fewer bits
 # Suyama-11 curves have average 2^3.66 3^1.69 (alpha=-3.38)
 # => equivalent to 4.8 fewer bits
-EXTRA_SMOOTHNESS = 4
+EXTRA_SMOOTHNESS = 4.8
 
 
 def semismooth(u, v):
@@ -135,7 +135,7 @@ for b1ref, b2ref in PM1_PARAMS:
 
 for bits in (24, 32, 36, 40, 44, 48, 52, 56, 64, 72, 80, 96, 112, 128, 144, 160):
     print(f"=== ECM for {bits}-bit factor ===")
-    extra_bits = EXTRA_SMOOTHNESS if bits > 50 else 4.8
+    extra_bits = EXTRA_SMOOTHNESS
     # Find best cost
     best = 1e100
     for b1 in B1:
