@@ -25,20 +25,31 @@ ANTS-X 10th Algorithmic Number Theory Symposium - 2012
 https://hal.inria.fr/hal-00671948v2
 """
 
-from sage.all import euler_phi, factor, random_prime, proof, GF, EllipticCurve, QQ
+from sage.all import (
+    euler_phi,
+    factor,
+    product,
+    random_prime,
+    proof,
+    GF,
+    EllipticCurve,
+    QQ,
+)
 from math import gcd
+import itertools
 
 proof.arithmetic(False)
 
 # Ideal values of D/B2
 # We cannot reach D > 6 φ(D) (it requires D >= 223092870)
+# fmt:off
 smooths = sorted([
-    product(_pks)
-    for _pks in itertools.product(
+    product(_pks) for _pks in itertools.product(
         (1, 2, 4, 8, 16), (1, 3, 9, 27), (1, 5, 25), (1, 7, 49), (1, 11),
-        (1, 13), (1, 17), (1, 19), (1, 23), (1, 29), (1, 31)
+        (1, 13), (1, 17), (1, 19), (1, 23), (1, 29), (1, 31),
     )
 ])
+# fmt:on
 # For small values, we want "square" patterns (1 block)
 for t in [32, 40, 48, 64, 80, 100, 120, 150, 180, 210, 240, 320, 360, 420]:
     nbest = 0
@@ -46,11 +57,13 @@ for t in [32, 40, 48, 64, 80, 100, 120, 150, 180, 210, 240, 320, 360, 420]:
         if 0.80 <= euler_phi(n) / 2 / t <= 1.01:
             nbest = n
     phi = euler_phi(nbest) // 2
-    print(f"D1={nbest} D2={phi} B2={float(phi*nbest):.3e} φ(D)/2={phi} (cost {phi**2} products)")
+    print(
+        f"D1={nbest} D2={phi} B2={float(phi*nbest):.3e} φ(D)/2={phi} (cost {phi**2} products)"
+    )
 for k in range(9, 21):
     t = 1 << k
     nbest = 0
-    for n in range(int((k // 2 - 1) * t), 12 * t):
+    for n in smooths:
         if 0.80 <= euler_phi(n) / 2 / t <= 1.01:
             nbest = n
     phi = euler_phi(nbest) // 2
@@ -95,7 +108,8 @@ for k in (1, 2, 3):
 
 def analyze(primes, b1, b2, x, y, a=1, expect=1):
     stats1, stats2 = [], []
-    exp2, exp3 = 0, 0
+    exp2, exp3 = {}, {}
+    exp2s, exp3s = 0, 0
     t1, t2 = 0, 0
     success = 0
     for p in primes:
@@ -103,8 +117,9 @@ def analyze(primes, b1, b2, x, y, a=1, expect=1):
         d = K(a * x * x + y * y - 1) / K(x * x * y * y)
         c = (K(a) - d) / 4
         E = EllipticCurve(GF(p), [0, K(a) - 2 * c, 0, c * c, 0])
-        fs = factor(E.order())
-        assert E.order() % expect == 0
+        Eord = E.order()
+        fs = factor(Eord)
+        assert Eord % expect == 0
         d1, d2, *_ = E.abelian_group().invariants() + (0,)
         t1 = gcd(t1, d1)
         t2 = gcd(t2, d2)
@@ -117,17 +132,22 @@ def analyze(primes, b1, b2, x, y, a=1, expect=1):
         stats2.append(max2)
         if max1 <= b1 and max2 <= b2:
             success += 1
-        exp2 += E.order().valuation(2)
-        exp3 += E.order().valuation(3)
+        # Examine valuation of 2, 3 depending on p%12
+        val2, val3 = int(Eord.valuation(2)), int(Eord.valuation(3))
+        exp2.setdefault(p % 12, []).append(val2)
+        exp3.setdefault(p % 12, []).append(val3)
+        exp2s += val2
+        exp3s += val3
 
     stats1.sort()
     stats2.sort()
     print(f"Generic torsion: ({t1}, {t2})")
     print(f"Success rate {success/len(primes)*100:.2f}% (B1={b1} B2={b2})")
     l = len(primes)
-    exp2, exp3 = float(exp2), float(exp3)
-    print(f"avg exponent of 2: {exp2/l:.3f}")
-    print(f"avg exponent of 3: {exp3/l:.3f}")
+    print(f"avg exponent of 2,3: {exp2s/l:.3f}, {exp3s/l:.3f}")
+    for r in (1, 5, 7, 11):
+        v2, v3 = sum(exp2[r]) / len(exp2[r]), sum(exp3[r]) / len(exp3[r])
+        print(f"avg exponent of 2,3 for primes 12k+{r}: ({v2:.3f}, {v3:.3f})")
     p25, p50 = stats1[l // 4], stats1[-l // 2]
     p66, p75 = stats1[-l // 3], stats1[-l // 4]
     print(f"needs B1 {p25=} {p50=} {p66=} {p75=:.3g}")
