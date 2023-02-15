@@ -737,18 +737,28 @@ impl Curve {
         Point(x, y, z)
     }
 
-    /// Addition formmula for extended coordinates on twisted Edwards curves.
+    /// Addition formula for extended coordinates on twisted Edwards curves.
     ///
     /// For a=-1, it requires 8 modular multiplications
-    /// https://hyperelliptic.org/EFD/g1p/auto-twisted-extended-1.html#addition-add-2008-hwcd-4
+    /// <https://hyperelliptic.org/EFD/g1p/auto-twisted-extended-1.html#addition-add-2008-hwcd-4>
     /// For a=1, it requires 9 modular multiplications
-    /// https://hyperelliptic.org/EFD/g1p/auto-twisted-extended.html#addition-add-2008-hwcd-2
+    /// <https://hyperelliptic.org/EFD/g1p/auto-twisted-extended.html#addition-add-2008-hwcd-2>
     ///
     /// Warning: these formulas are not "strongly unified" and will return
     /// zero coordinates if P=Q. We expect this case to only happen by
     /// accident (finding a factor during stage 2 steps) and not
     /// by design (doubling a point).
+    ///
+    /// If the caller requires projective coordinates as output, 1 multiplication can be removed.
     fn addext(&self, p: &ExtPoint, q: &ExtPoint) -> ExtPoint {
+        self._addext(p, q, false)
+    }
+
+    fn addextproj(&self, p: &ExtPoint, q: &ExtPoint) -> Point {
+        self._addext(p, q, true).to_proj()
+    }
+
+    fn _addext(&self, p: &ExtPoint, q: &ExtPoint, proj: bool) -> ExtPoint {
         let zn = &self.zn;
         let (a, b, c, d) = if self.twisted {
             // Formula add-2008-hwcd-4 in Explicit Formula Database
@@ -787,6 +797,40 @@ impl Curve {
             zn.mul(&e, &f),
             zn.mul(&g, &h),
             zn.mul(&f, &g),
+            // Skip multiplication if unneeded.
+            if proj { zn.zero() } else { zn.mul(&e, &h) },
+        )
+    }
+
+    /// Doubling formula for extended coordinates on Edwards curves with a=±1
+    ///
+    /// Due to invariance properties, this formula can be expressed without the last coordinates,
+    /// so it can take projective coordinates as input, costing 8 multiplications.
+    ///
+    /// The formula is dbl-2008-hwcd
+    /// <https://hyperelliptic.org/EFD/g1p/auto-twisted-extended.html#doubling-dbl-2008-hwcd>
+    fn dblext(&self, p: &Point) -> ExtPoint {
+        let zn = &self.zn;
+        let x_y = zn.add(&p.0, &p.1);
+        let x_y2 = zn.mul(&x_y, &x_y);
+        let a = zn.mul(&p.0, &p.0);
+        let b = zn.mul(&p.1, &p.1);
+        let c = zn.mul(&p.2, &p.2);
+        let c = zn.add(&c, &c);
+        let e = zn.sub(&zn.sub(&x_y2, &a), &b);
+        let (f, g, h) = if self.twisted {
+            // D=-A, G=B-A, H=-B-A, F=G-C
+            let g = zn.sub(&b, &a);
+            (zn.sub(&g, &c), g, zn.sub(zn.zero(), zn.add(&a, &b)))
+        } else {
+            // D=A, G=B+A, H=A-B, F=G-C
+            let g = zn.add(&a, &b);
+            (zn.sub(&g, &c), g, zn.sub(&a, &b))
+        };
+        ExtPoint(
+            zn.mul(&e, &f),
+            zn.mul(&g, &h),
+            zn.mul(&f, &g),
             zn.mul(&e, &h),
         )
     }
@@ -794,6 +838,16 @@ impl Curve {
     fn sub(&self, p: &Point, q: &Point) -> Point {
         let q = Point(self.zn.sub(&self.zn.zero(), &q.0), q.1, q.2);
         self.add(p, &q)
+    }
+
+    fn subextproj(&self, p: &ExtPoint, q: &ExtPoint) -> Point {
+        let q = ExtPoint(
+            self.zn.sub(&self.zn.zero(), &q.0),
+            q.1,
+            q.2,
+            self.zn.sub(&self.zn.zero(), &q.3),
+        );
+        self.addextproj(p, &q)
     }
 
     // Doubling formula following dbl-2007-bl
@@ -854,116 +908,126 @@ impl Curve {
         // https://eprint.iacr.org/2007/455.pdf
         // We find that m=7 is optimal for 64-bit blocks (~14 adds instead of 28 for ~56-bit blocks)
         // For 32-bit blocks, the optimal value is m=5 (7 adds instead of 12 for ~22-bit blocks)
-        let p2 = self.double(p);
-        let p3 = self.add(p, &p2);
-        let p5 = self.add(&p3, &p2);
-        let p7 = self.add(&p5, &p2);
-        let gaps = [p, &p3, &p5, &p7];
+        //
+        // Doubling in projective coordinates costs 7 multiplications.
+        // Doubling and add in extended coordinates costs 15 multiplications (16 if a=1).
+        // See also https://eprint.iacr.org/2008/522, section 4.3
+        let pext = self.to_extended(p);
+        let p2 = self.dblext(p);
+        let p3 = self.addext(&pext, &p2);
+        let p5 = self.addext(&p3, &p2);
+        let p7 = self.addext(&p5, &p2);
+        let gaps = [&pext, &p3, &p5, &p7];
         // Encode the chain as:
         // 0 (doubling)
         // ±k (add/sub kP)
-        let mut c = [0_i8; 128];
+        let mut c = [0_i8; 32];
         let l = Self::make_addition_chain(&mut c, k);
         // Get initial element (chain[l-1] = 1 or 3 or 5 or 7)
-        let mut q = gaps[c[l - 1] as usize / 2].clone();
-        for idx in 1..l {
-            let op = c[l - 1 - idx];
-            if op == 0 {
-                q = self.double(&q);
-            } else if op == 2 {
-                q = self.add(&q, &p2);
-            } else if op > 0 {
-                debug_assert!(op & 1 == 1);
-                q = self.add(&q, gaps[op as usize / 2]);
-            } else if op < 0 {
-                debug_assert!(op & 1 == 1);
-                q = self.sub(&q, gaps[(-op) as usize / 2]);
-            }
-        }
-        q
-    }
-
-    fn make_addition_chain(chain: &mut [i8; 128], k: u64) -> usize {
-        // Build an addition chain as a reversed list of opcodes:
-        // - first opcode retrieves xP for x in (1, 3, 5, 7)
-        // - opcode 0 means double
-        // - opcode y means add yP
-        if k == 0 {
-            chain[0] = 0;
-            return 1;
-        }
-        const M: u64 = 7;
-        let mut l = 0;
-        let mut kk = k;
-        loop {
-            if kk % 2 == 0 {
-                // make K/2, double
-                chain[l] = 0;
-                kk /= 2;
-                l += 1;
-            } else if kk <= M {
-                chain[l] = kk as i8;
-                return l + 1;
-            } else if kk == M + 2 {
-                // make M, add 2
-                chain[l] = 2;
-                kk = M;
-                l += 1;
-            } else if M + 4 <= kk && kk < 3 * M {
-                // make 2x+1, double, add k-(4x+2) (<= M)
-                let x = kk / 6;
-                chain[l] = (kk - 4 * x - 2) as i8;
-                chain[l + 1] = 0;
-                l += 2;
-                kk = 2 * x + 1;
-            } else {
-                // select in window
-                let mut best = 1;
-                let mut best_tz = (kk - 1).trailing_zeros();
-                for x in [-7, -5, -3, -1, 1_i64, 3, 5, 7] {
-                    let tz = (kk as i64 - x).trailing_zeros();
-                    if tz > best_tz {
-                        best = x;
-                        best_tz = tz
-                    }
-                }
-                chain[l] = best as i8;
-                kk = ((kk as i64) - best) as u64;
-                l += 1;
-            }
-        }
-    }
-
-    pub fn scalar1024_chainmul(&self, k: &U1024, p: &Point) -> Point {
-        if k.is_zero() {
-            let zn = &self.zn;
-            return Point(zn.zero(), zn.one(), zn.one());
-        }
-        let p2 = self.double(p);
-        // Store p, 3p ... 63p
-        let mut gaps = Vec::with_capacity(32);
-        gaps.push(p.clone());
-        for i in 1..32 {
-            let pi = self.add(&gaps[i - 1], &p2);
-            gaps.push(pi);
-        }
-        // Construct chain
-        let mut c = [0_i8; 384];
-        let l = Self::make_addition_chain_long(&mut c, k);
-        // Get initial element (chain[l-1] = 1 or 3 or 5 or 7)
-        let mut q = gaps[c[l - 1] as usize / 2].clone();
+        let mut q = gaps[c[l - 1] as usize / 2].to_proj();
         for idx in 1..l {
             let op = c[l - 1 - idx];
             if op % 2 == 0 {
                 for _ in 0..op / 2 {
                     q = self.double(&q);
                 }
-            } else if op > 0 {
-                debug_assert!(op & 1 == 1);
-                q = self.add(&q, &gaps[op as usize / 2]);
-            } else if op < 0 {
-                debug_assert!(op & 1 == 1);
-                q = self.sub(&q, &gaps[(-op) as usize / 2]);
+            } else {
+                let q2 = self.dblext(&q);
+                if op > 0 {
+                    q = self.addextproj(&q2, &gaps[op as usize / 2]);
+                } else {
+                    q = self.subextproj(&q2, &gaps[(-op) as usize / 2]);
+                }
+            }
+        }
+        q
+    }
+
+    fn make_addition_chain(chain: &mut [i8; 32], k: u64) -> usize {
+        // Build an addition chain for a 64-bit multiplier
+        // as a reversed list of opcodes:
+        // - an odd opcode x (|x| <= 7) means: P -> 2P + xG
+        // The combined double-add is because it can be computed
+        // with 16 MULs instead of 19 MULs.
+        // - an even opcode 2y means: P -> 2^y P
+        //
+        // For any integer, 2 opcodes can remove 4 bits, so the chain length
+        // is never more than 32.
+        if k == 0 {
+            chain[0] = 0;
+            return 1;
+        }
+        let mut l = 0;
+        let mut kk = k;
+        loop {
+            if kk % 2 == 0 {
+                let tz = kk.trailing_zeros();
+                chain[l] = 2 * tz as i8;
+                kk >>= tz;
+                l += 1;
+            } else if kk <= 7 {
+                chain[l] = kk as i8;
+                return l + 1;
+            } else {
+                // Integer is odd, look at 4 LSB.
+                let r = kk % 16;
+                if r < 8 {
+                    // Encode as 2k+r
+                    chain[l] = r as i8;
+                    l += 1;
+                    kk = (kk - r) / 2;
+                } else {
+                    // Encode as 2k-r
+                    let rop = 16 - r;
+                    chain[l] = -(rop as i8);
+                    l += 1;
+                    kk = (kk + rop) / 2;
+                }
+            }
+        }
+    }
+
+    pub fn scalar1024_chainmul(&self, k: &U1024, p: &Point) -> Point {
+        // Use blocks of 6 bits in the double-add-sub chains.
+        // On average, 8 bits will be consumed. The expected average cost is:
+        // - 12 MUL for initial doubling, conversion to extended
+        // - 1024 DBL (7 multiplications each)
+        // - 31 ADDEXT to compute 3P...63P (8 multiplications each)
+        // - ~128 point additions (8 multiplications each)
+        // so about 8.25 multiplications per exponent bit.
+        if k.is_zero() {
+            let zn = &self.zn;
+            return Point(zn.zero(), zn.one(), zn.one());
+        }
+        // Use mixed projective/extended coordinates.
+        // This is the same code as `scalar64_chainmul`.
+        let pext = self.to_extended(p);
+        let p2 = self.dblext(p);
+        // Store p, 3p ... 63p
+        let mut gaps = Vec::with_capacity(32);
+        gaps.push(pext);
+        for i in 1..32 {
+            let pi = self.addext(&gaps[i - 1], &p2);
+            gaps.push(pi);
+        }
+        // Construct chain
+        let mut c = [0_i8; 384];
+        let l = Self::make_addition_chain_long(&mut c, k);
+        // Get initial element (chain[l-1] = 1 or 3 or ... 63)
+        let mut q = gaps[c[l - 1] as usize / 2].to_proj();
+        for idx in 1..l {
+            let op = c[l - 1 - idx];
+            if op % 2 == 0 {
+                for _ in 0..op / 2 {
+                    q = self.double(&q);
+                }
+            } else {
+                let q2 = self.dblext(&q);
+                if op > 0 {
+                    q = self.addextproj(&q2, &gaps[op as usize / 2]);
+                } else {
+                    q = self.subextproj(&q2, &gaps[(-op) as usize / 2]);
+                }
             }
         }
         q
@@ -980,9 +1044,9 @@ impl Curve {
         // that save 1/2 adds in `make_addition_chain`
         //
         // Encoding:
-        // 2k => double, repeated k times (k <= 63)
-        // +k => add kP (k is odd)
-        // -k => sub kP (k is odd)
+        // 2k => P -> 2^k P (k <= 63)
+        // +k => P -> 2P + kG (k is odd)
+        // -k => P -> 2P - kG (k is odd)
         let nd: &[u64; 16] = n.digits();
         // Start from LSB and work with 2 words at a time.
         let mut exp = nd[0] as u128;
@@ -1030,6 +1094,11 @@ impl Curve {
                     // Note: exp may become larger than 1 << curbits.
                     exp += 128 - low;
                 }
+                // Always combine additions with doubling.
+                // This means we consume 1 bit after emitting this opcode.
+                exp >>= 1;
+                bits += 1;
+                curbits -= 1;
             }
         }
         idx
@@ -1380,6 +1449,10 @@ fn test_curve() {
     let g12ext = c.addext(&g1ext, &g2ext);
     assert!(c.is_validext(&g12ext));
     assert!(c.equal(&g12, &g12ext.to_proj()));
+
+    // Doubling in extended coordinates
+    assert!(c.equal(&c.double(&g1), &c.dblext(&g1).to_proj()));
+    assert!(c.equal(&c.double(&g2), &c.dblext(&g2).to_proj()));
 }
 
 #[test]
@@ -1418,6 +1491,9 @@ fn test_twisted_curve() {
     let g12ext = c.addext(&g1ext, &g2ext);
     assert!(c.is_validext(&g12ext));
     assert!(c.equal(&g12, &g12ext.to_proj()));
+    // Doubling in extended coordinates
+    assert!(c.equal(&c.double(&g1), &c.dblext(&g1).to_proj()));
+    assert!(c.equal(&c.double(&g2), &c.dblext(&g2).to_proj()));
 }
 
 #[test]
@@ -1491,43 +1567,46 @@ fn test_addition_chain() {
         let mut k = c[c.len() - 1] as u64;
         for idx in 1..c.len() {
             let op = c[c.len() - 1 - idx];
-            if op == 0 {
-                k = 2 * k;
+            if op % 2 == 0 {
+                k <<= (op / 2) as u32;
             } else {
-                k = ((k as i64) + (op as i64)) as u64;
+                k = ((2 * k as i64) + (op as i64)) as u64;
             }
         }
         k
     }
 
     for k in 1..1000_u64 {
-        let mut c = [0i8; 128];
+        let mut c = [0i8; 32];
         let l = Curve::make_addition_chain(&mut c, k);
         assert_eq!(k, eval_chain(&c[..l]), "chain={:?}", &c[..l]);
     }
     {
         let k = 602768647071432_u64;
-        let mut c = [0i8; 128];
+        let mut c = [0i8; 32];
         let l = Curve::make_addition_chain(&mut c, k);
         assert_eq!(k, eval_chain(&c[..l]), "chain={:?}", &c[..l]);
     }
     let mut adds = 0;
+    let mut maxsize = 0;
     for i in 1..=1000_u64 {
-        let mut c = [0i8; 128];
+        let mut c = [0i8; 32];
         let k = i.wrapping_mul(1_234_567_123_456_789);
         let l = Curve::make_addition_chain(&mut c, k);
         assert_eq!(k, eval_chain(&c[..l]), "chain={:?}", &c[..l]);
         adds += 3;
         for &op in &c[..l - 1] {
-            if op != 0 {
+            if op & 1 == 1 {
                 adds += 1;
             }
         }
+        maxsize = max(maxsize, l);
     }
     eprintln!(
         "average additions {:.2} for 64-bit integers",
         adds as f64 / 1000.0
     );
+    eprintln!("max chain size {maxsize}");
 
     let n = Uint::from_str(MODULUS256).unwrap();
     let zn = ZmodN::new(n);
@@ -1556,8 +1635,10 @@ fn test_addition_chain_long() {
             if op % 2 == 0 {
                 k <<= (op / 2) as u32;
             } else if op > 0 {
+                k <<= 1;
                 k += U2048::from_digit(op as u64);
             } else {
+                k <<= 1;
                 k -= U2048::from_digit((-op) as u64);
             }
         }

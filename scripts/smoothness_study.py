@@ -88,7 +88,7 @@ def ecm_cost(b1, b2):
     # Stage 2 is O(sqrt(B2) log2(B2))
     # Stage 2 constant is 6-7 for large inputs, 9-11 for small inputs.
     # On a Cortex-A76 constant was 5.5 for large inputs, 8-9 for small inputs
-    stage1 = 1.44 * 8.92 * b1
+    stage1 = 1.44 * 8.24 * b1
     if b2 < 3e6:
         stage2 = 2.2 * b2 / log2(b2)
     else:
