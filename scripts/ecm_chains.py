@@ -19,8 +19,6 @@ m=73 for 2048 bit blocks (0.14 ADD per bit)
 import sys
 from sage.all import primes
 
-sys.setrecursionlimit(5000)
-
 
 def pblocks(sz):
     blocks = []
@@ -40,14 +38,20 @@ def chain(n, m):
         for k in range(3, m + 2, 2):
             c.append(("xadd", k - 2, 2))
         return c
-    if n % 2 == 0:
+    if n > 16 * m and n & 15 == 0:
+        return chain(n // 16, m) + [
+            ("double", x) for x in (n // 16, n // 8, n // 4, n // 2)
+        ]
+    elif n & 1 == 0:
         return chain(n // 2, m) + [("double", n // 2)]
-    elif m == 0:
-        # Standard double-and-add
-        return chain(n - 1, 0) + [("add", n - 1, 1)]
     else:
+        a_s = [-(n & (2**k - 1)) for k in range(1, m.bit_length() + 1)] + [
+            2**k - (n & (2**k - 1)) for k in range(1, m.bit_length() + 1)
+        ]
         (k, a) = max(
-            ((n + _a) ^ (n + _a - 1), _a) for _a in range(-m, m + 1, 2) if n + _a > 0
+            ((n + _a) ^ (n + _a - 1), _a)
+            for _a in a_s
+            if n + _a > 0 and abs(_a) <= min(m, n)
         )
         return chain(n + a, m) + [("add", n + a, -a)]
         # return chain(n-1) + [("add", n-1, 1)]
@@ -96,11 +100,11 @@ for m in (1, 3, 5, 7):
     print(show(chain(n, m)))
 
 blocks32 = pblocks(32)
-find_m(blocks32, [0, 1, 3, 5, 7, 11, 13], verbose=True)
+find_m(blocks32, [1, 3, 5, 7, 11, 13], verbose=True)
 
 print("=== 64 bit blocks ===")
 blocks64 = pblocks(64)
-find_m(blocks64, [0, 1, 3, 5, 7, 11, 15], verbose=True)
+find_m(blocks64, [1, 3, 5, 7, 11, 15], verbose=True)
 
 print(show(chain(1234567890, 7)))
 
@@ -116,14 +120,14 @@ print("=== 512 bit blocks ===")
 blocks512 = pblocks(512)
 find_m(blocks512, [1, 7, 15, 31, 47, 63])
 
+sys.setrecursionlimit(2000)
+
 print("=== 1024 bit blocks ===")
 blocks1024 = pblocks(1024)
 find_m(blocks1024, [1, 7, 15, 31, 47, 63, 95, 127])
 
-print("=== 2048 bit blocks ===")
-blocks2048 = pblocks(2048)
-find_m(blocks2048, [1, 7, 15, 31, 47, 63, 95, 127])
+sys.setrecursionlimit(4000)
 
 print("=== 4096 bit blocks ===")
 blocks4096 = pblocks(4096)
-find_m(blocks4096, [1, 7, 15, 31, 47, 63, 95, 127])
+find_m(blocks4096, [15, 31, 63, 127, 255])

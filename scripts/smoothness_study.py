@@ -41,7 +41,8 @@ B2 = [
     1.37e6, 2.3e6, 4.7e6, 7.1e6,
     9.5e6, 19e6, 28e6, 38e6, 78e6, 117e6, 156e6,
     322e6, 643e6, 1.3e9, 2.6e9, 5.2e9, 10.5e9,
-    21e9, 32e9, 43e9, 136e9, 362e9, 543e9,
+    21e9, 32e9, 43e9, 136e9, 362e9, 543e9, 723e9,
+    1.5e12, 2.24e12, 2.99e12
 ]
 # fmt:on
 
@@ -137,29 +138,51 @@ for bits in (24, 32, 36, 40, 44, 48, 52, 56, 64, 72, 80, 96, 112, 128, 144, 160)
     print(f"=== ECM for {bits}-bit factor ===")
     extra_bits = EXTRA_SMOOTHNESS
     # Find best cost
+    def cost(b1, b2):
+        u = (bits - extra_bits) / log2(b1)
+        v = (bits - extra_bits) / log2(b2)
+        g = semismooth(u, v)
+        c1, c2 = ecm_cost(b1, b2)
+        return (c1 + c2) / g
+
     best = 1e100
-    for b1 in B1:
+    for _pass in (1, 2):
+        # Pass 1 looks for optimal cost
+        # Pass 2 prints results that are close to optimal
         for b2 in B2:
-            if b2 < b1:
+            # For each B2, optimize B1
+            if b2 > 2**(bits - extra_bits):
+                continue
+            # Find the best power of 2 fo B1
+            b1m = min((2**k for k in range(4, 30) if 2**k < b2), key=lambda _b: cost(_b, b2))
+            # Optimize cost by binary search as if it was a convex function
+            b1lo = b1m / 2
+            b1hi = min(b2, b1m * 2)
+            clo = cost(b1lo, b2)
+            cm = cost(b1m, b2)
+            chi = cost(b1hi, b2)
+            while b1hi > 1.05 * b1lo:
+                b1m = int((b1lo + b1hi) / 2)
+                cm = cost(b1m, b2)
+                if cm > max(clo, chi):
+                    assert b1hi / b1lo < 1.5, (b1lo, b1m, b1hi)
+                    break
+                if clo > chi:
+                    b1lo, clo = b1m, cm
+                else:
+                    b1hi, chi = b1m, cm
+            b1 = b1m
+            if _pass == 1:
+                best = min(best, (clo + chi) / 2)
+                continue
+            if (clo + chi) / 2 > 1.5 * best:
                 continue
             u = (bits - extra_bits) / log2(b1)
             v = (bits - extra_bits) / log2(b2)
             g = semismooth(u, v)
             c1, c2 = ecm_cost(b1, b2)
-            best = min(best, (c1 + c2) / g)
-    # Find neighbourhood
-    for b1 in B1:
-        for b2 in B2:
-            if b2 < b1:
-                continue
-            u = (bits - extra_bits) / log2(b1)
-            v = (bits - extra_bits) / log2(b2)
-            g = semismooth(u, v)
-            c1, c2 = ecm_cost(b1, b2)
-            cost = (c1 + c2) / g
-            if cost > 1.5 * best:
-                continue
+            score = (c1 + c2) / g
             pc1, pc2 = 100 * c1 / (c1 + c2), 100 * c2 / (c1 + c2)
             print(
-                f"B1={b1} B2={b2:.2e} G({u=:.2f}, {v=:.2f}) = 1/{1/g:.2f} success, cost {cost:.3e} (stage1 {pc1:.0f}% stage2 {pc2:.0f}%)"
+                f"B1={b1} B2={b2:.2e} G({u=:.2f}, {v=:.2f}) = 1/{1/g:.2f} success, cost {score:.3e} (stage1 {pc1:.0f}% stage2 {pc2:.0f}%)"
             )
