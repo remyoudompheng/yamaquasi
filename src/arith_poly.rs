@@ -62,7 +62,8 @@ impl<'a> MulAssign<&MInt> for Poly<'a> {
 }
 
 const USE_FFT: bool = true;
-const FFT_THRESHOLD: usize = 64;
+// For typical moduli (256-bit), Karatsuba algorithm is never interesting.
+const FFT_THRESHOLD: usize = 28;
 
 #[derive(Clone)]
 pub struct PolyRing<'a> {
@@ -72,7 +73,7 @@ pub struct PolyRing<'a> {
 
 impl<'a> PolyRing<'a> {
     pub fn new(zn: &'a ZmodN, size: usize) -> Self {
-        if size > FFT_THRESHOLD {
+        if size >= FFT_THRESHOLD {
             // Accomodate FFT of size 2*size.
             let logsize = usize::BITS - usize::leading_zeros(size - 1);
             let mzp = MultiZmodP::new(zn, logsize + 1);

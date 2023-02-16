@@ -71,7 +71,7 @@ pub struct ZmodN {
 }
 
 // Store values as 512-bit integers.
-const MINT_WORDS: usize = 8;
+pub(crate) const MINT_WORDS: usize = 8;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub struct MInt(pub [u64; MINT_WORDS]);
