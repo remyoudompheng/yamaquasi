@@ -136,18 +136,18 @@ fn main() {
         t480.push(t);
     }
     // Compare with theoretical complexity.
-    // In stage 1, we need 8.9 modular multiplications per bit.
+    // In stage 1, we need 8.24 modular multiplications per bit.
     let mut stage1_c256 = vec![];
     let mut stage1_c480 = vec![];
     for i in 2..b1s.len() {
         let b1 = b1s[i] as f64;
-        let c = (t256[i] - t256[0]) / (1.44 * 8.92 * b1) * 1e9;
+        let c = (t256[i] - t256[0]) / (1.44 * 8.24 * b1) * 1e9;
         stage1_c256.push(c.round() as u64);
-        let c = (t480[i] - t480[0]) / (1.44 * 8.92 * b1) * 1e9;
+        let c = (t480[i] - t480[0]) / (1.44 * 8.24 * b1) * 1e9;
         stage1_c480.push(c.round() as u64);
     }
-    eprintln!("p256: stage 1 cost 8.92 * 1.44 B1 * {stage1_c256:?}ns");
-    eprintln!("p480: stage 1 cost 8.92 * 1.44 B1 * {stage1_c480:?}ns");
+    eprintln!("p256: stage 1 cost 8.24 * 1.44 B1 * {stage1_c256:?}ns");
+    eprintln!("p480: stage 1 cost 8.24 * 1.44 B1 * {stage1_c480:?}ns");
     let mut small2_c256 = vec![];
     let mut small2_c480 = vec![];
     let mut large2_c256 = vec![];

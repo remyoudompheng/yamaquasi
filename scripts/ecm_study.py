@@ -45,8 +45,8 @@ proof.arithmetic(False)
 # fmt:off
 smooths = sorted([
     product(_pks) for _pks in itertools.product(
-        (1, 2, 4, 8, 16), (1, 3, 9, 27), (1, 5, 25), (1, 7, 49), (1, 11),
-        (1, 13), (1, 17), (1, 19), (1, 23), (1, 29), (1, 31),
+        (1, 2, 4, 8, 16, 32), (1, 3, 9, 27), (1, 5, 25), (1, 7, 49), (1, 11),
+        (1, 13), (1, 17), (1, 19), (1, 23), (1, 29), (1, 31), (1, 37)
     )
 ])
 # fmt:on
@@ -60,7 +60,7 @@ for t in [32, 40, 48, 64, 80, 100, 120, 150, 180, 210, 240, 320, 360, 420]:
     print(
         f"D1={nbest} D2={phi} B2={float(phi*nbest):.3e} φ(D)/2={phi} (cost {phi**2} products)"
     )
-for k in range(9, 21):
+for k in range(9, 25):
     t = 1 << k
     nbest = 0
     for n in smooths:

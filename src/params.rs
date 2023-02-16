@@ -40,7 +40,7 @@ pub fn large_prime_factor(n: &Uint) -> u64 {
 ///
 /// For small values where multipoint evaluation is not used,
 /// the power of 2 constraint can be relaxed and d2 should be very close
-/// to φ(d1)/2 for optimal cost.
+/// to φ(d1)/2 (polynomial degree) for optimal cost.
 const STAGE2_PARAMS: &[(f64, u64, u64)] = &[
     // B2, d1, d2
     // Using quadratic method, d2=φ(d1)/2, cost d2^2
@@ -79,6 +79,13 @@ const STAGE2_PARAMS: &[(f64, u64, u64)] = &[
     (136e9, 690690, 196608),  // φ/2=63360
     (362e9, 1381380, 262144), // φ/2=126720
     (543e9, 1381380, 393216), // φ/2=126720
+    (724e9, 1381380, 524288),
+    (1.5e12, 2852850, 524288), // φ/2=259200
+    (2.99e12, 2852850, 1048576),
+    (5.98e12, 5705700, 1048576), // φ/2=518400
+    (1.2e13, 5705700, 2097152),
+    (2.46e13, 11741730, 2097152), // φ/2=1013760
+    (4.92e13, 11741730, 4194304),
 ];
 
 pub fn stage2_params(b2: f64) -> (f64, u64, u64) {
