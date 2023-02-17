@@ -401,8 +401,24 @@ fn ecm_curve(
         gg = c.addext(&gg, &dgext);
         steps.push(gg.to_proj());
     }
-    // Normalize, 1 modular inversion using batch inversion.
-    batch_normalize(zn, &mut steps);
+    // Normalize Y coordinates, 4 multiplications per point:
+    // replace y[i] by y[i]/z[i] * product(z[j])
+    // Compute u[i] = p[0] * ... * p[i-1]
+    // Compute v[i] = p[i+1] * ... * p[d]
+    // Then product(z[j]) / z[i] = u[i] * v[i]
+    {
+        let l = steps.len();
+        let mut u = steps[0].2;
+        for i in 1..l {
+            steps[i].1 = zn.mul(&steps[i].1, &u);
+            u = zn.mul(&u, &steps[i].2);
+        }
+        u = steps[l - 1].2;
+        for i in 2..=l {
+            steps[l - i].1 = zn.mul(&steps[l - i].1, &u);
+            u = zn.mul(&u, &steps[l - i].2);
+        }
+    }
 
     let stage2_roots_time = start2.elapsed().as_secs_f64();
 
@@ -460,10 +476,11 @@ fn ecm_curve(
     if verbosity >= Verbosity::Verbose {
         let stage1 = elapsed1.as_secs_f64();
         let stage2 = start2.elapsed().as_secs_f64();
+        let roots_pct = 100. * stage2_roots_time / stage2;
         if stage2 < 0.01 {
-            eprintln!("ECM stage1={stage1:.6}s stage2={stage2:.6}s (stage2 roots {stage2_roots_time:.6}s)");
+            eprintln!("ECM stage1={stage1:.6}s stage2={stage2:.6}s (stage2 roots {roots_pct:.1}%)");
         } else {
-            eprintln!("ECM stage1={stage1:.3}s stage2={stage2:.3}s (stage2 roots {stage2_roots_time:.3}s)");
+            eprintln!("ECM stage1={stage1:.3}s stage2={stage2:.3}s (stage2 roots {roots_pct:.1}%)");
         }
     }
     result
@@ -475,36 +492,6 @@ fn check_gcd_factor(n: &Uint, values: &[MInt]) -> Option<Uint> {
     // return the largest one.
     let fs = gcd_factors(n, &values[..]).0;
     fs.iter().filter(|f| f != &n).max().copied()
-}
-
-// Normalize projective coordinates (z=1) for multiple points.
-fn batch_normalize(zn: &ZmodN, pts: &mut [Point]) -> Option<()> {
-    // Use Montgomery's batch inversion.
-    // Compute cumulative products.
-    let mut prod = zn.one();
-    let mut prods = Vec::with_capacity(pts.len());
-    for p in pts.iter() {
-        prod = zn.mul(prod, p.2);
-        prods.push(prod);
-    }
-    // Now prod is the product z0*...*z[n-1]
-    let mut prodinv = zn.inv(prod)?;
-    let one = zn.one();
-    // Loop backwards and multiply by inverses.
-    for i in 0..pts.len() {
-        let j = pts.len() - 1 - i;
-        // Invariant: prodinv is the product 1/z0 ... z[j]
-        let zinv = if j > 0 {
-            zn.mul(prodinv, prods[j - 1])
-        } else {
-            prodinv
-        };
-        let Point(x, y, z) = pts[j];
-        pts[j] = Point(zn.mul(x, zinv), zn.mul(y, zinv), one);
-        // Cancel z[j]
-        prodinv = zn.mul(prodinv, z);
-    }
-    Some(())
 }
 
 /// An exponent base for ECM.
