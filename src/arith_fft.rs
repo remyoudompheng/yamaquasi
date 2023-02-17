@@ -821,14 +821,14 @@ impl<'a> MultiZmodP<'a> {
             pprod_modn = U2048::ZERO;
         }
         // FIXME: don't store zero?
-        let mut pprod_k = U2048::ZERO;
-        let mut pprods_modn = vec![];
-        for _ in 0..w {
-            pprods_modn.push(pprod_k);
+        let mut pprods_modn = vec![U2048::ZERO, pprod_modn];
+        let mut pprod_k = pprod_modn;
+        for _ in 2..w {
             pprod_k += pprod_modn;
-            if pprod_k > n2048 {
+            if pprod_k >= n2048 {
                 pprod_k -= n2048;
             }
+            pprods_modn.push(pprod_k);
         }
         // Prepare roots of unity (in Montgomery form).
         let mut ωs = vec![0_u64; w];
@@ -915,10 +915,8 @@ impl<'a> MultiZmodP<'a> {
     }
 
     pub fn to_mint(&self, x: &[u64]) -> MInt {
-        let mut res = [0; 2 * arith_montgomery::MINT_WORDS];
-        self._crt(&mut res, x);
         // m = res/R
-        let m = self.zn.redc(&res);
+        let m = self.redc(x);
         // m = (res/R)*R
         let m = self.zn.from_int(crate::Uint::from(m));
         m
@@ -941,6 +939,7 @@ impl<'a> MultiZmodP<'a> {
     /// where k is a small integer.
     pub fn _crt(&self, res: &mut [u64], x: &[u64]) {
         debug_assert!(x.len() == self.w);
+        debug_assert!(res.len() >= self.zn.words() + 1);
         if self.w == 1 {
             // nothing to do.
             let pi = self.primes[0].0;
@@ -957,8 +956,6 @@ impl<'a> MultiZmodP<'a> {
 
         // Compute coefficients (xi crt_pinv % pi)
         let w = self.w;
-        debug_assert!(res.len() >= w + 1);
-        const WORDS: usize = U2048::BITS as usize / 64;
         let mut xs = [0; NTT_PRIMES.len()];
         for i in 0..w {
             // REDC(xR * pinv) = (x * pinv) % pi
@@ -975,7 +972,16 @@ impl<'a> MultiZmodP<'a> {
         let pdigs = self.pprod.digits();
         debug_assert!(plen >= 2 && pdigs[plen] == 0);
         let ptop = ((pdigs[plen - 1] as u128) << 64) | pdigs[plen - 2] as u128;
-        let q = if (ptop >> 64) as u64 >= 1 << 8 {
+        let q = if (ptop >> 64) as u64 >= 1 << 56 {
+            // 0. P/Pi has bits in word [plen-1]
+            let mut top = 0_u128;
+            for i in 0..w {
+                let crt = self.crt_p[i].digits();
+                let crti = (crt[plen - 1] << 32) | (crt[plen - 2] >> 32);
+                top += xs[i] as u128 * (crti + 1) as u128;
+            }
+            ((top >> 64) as u64) / (ptop >> 96) as u64
+        } else if (ptop >> 64) as u64 >= 1 << 8 {
             // 1. Try with top word only (P/pi has more than 12 bits in word [plen-2])
             let mut top = 0_u128;
             // Using the top word gives a precision interval of size sum(pi) < 4*2^64
@@ -1392,6 +1398,31 @@ fn test_multimodn() {
         mzn.mul(&mut mxx, &mx);
         let xx = zn.from_int((12345 * 12345 * i * i).into());
         assert_eq!(mzn.redc(&mxx), xx);
+    }
+
+    // All moduli sizes
+    // Test operations for all number sizes.
+    use bnum::types::U4096;
+    assert!(64 * arith_montgomery::MINT_WORDS <= 1024);
+    let a = U4096::from_digit(13).wrapping_pow(123_456_789);
+    let b = U4096::from_digit(19).wrapping_pow(123_456_789);
+    for bits in 100..(64 * arith_montgomery::MINT_WORDS as u32) {
+        let mask = U4096::power_of_two(bits) - U4096::ONE;
+        let rnd = U4096::from_digit(3).wrapping_pow(123_456_789 + 789 * bits);
+        let n = rnd & mask;
+        let zn = ZmodN::new(Uint::cast_from(n));
+        let mzn = MultiZmodP::new(&zn, 3);
+        let a = a % n;
+        let b = b % n;
+        let an = zn.from_int(Uint::cast_from(a));
+        let bn = zn.from_int(Uint::cast_from(b));
+        let abn = zn.mul(&an, &bn);
+        let mut am = vec![0; mzn.w];
+        let mut bm = vec![0; mzn.w];
+        mzn.from_mint(&mut am, &an);
+        mzn.from_mint(&mut bm, &bn);
+        mzn.mul(&mut am, &bm);
+        assert_eq!(mzn.redc(&am), abn);
     }
 }
 
