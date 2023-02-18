@@ -40,7 +40,7 @@
 use std::cmp::min;
 
 use bnum::cast::CastFrom;
-use bnum::types::U2048;
+use bnum::types::{U1024, U2048};
 
 use crate::arith;
 use crate::arith_montgomery::{self, MInt, ZmodN};
@@ -128,9 +128,7 @@ pub fn convolve_modn_ntt(
     mzp.ntt_inplace(&mut f1, 0, logsize, true);
     mzp.ntt_inplace(&mut f2, 0, logsize, true);
     // Pointwise multiply
-    for i in 0..size {
-        mzp.mul(&mut f1[w * i..w * (i + 1)], &f2[w * i..w * (i + 1)]);
-    }
+    mzp.mul(&mut f1, &f2);
     // Reverse bits, inverse NTT
     for i in 0..size {
         let irev = usize::reverse_bits(i) >> (usize::BITS - logsize);
@@ -742,9 +740,15 @@ fn mg_mul64(p: u64, x: u64, y: u64) -> u64 {
 #[derive(Clone)]
 pub struct MultiZmodP<'a> {
     // primes.len() == w
-    primes: &'a [(u64, u64)],
+    primes: Vec<u64>,
+    // A vector of length 32 * w containing a repeated pattern
+    // of primes. This is used for vectorization.
+    primes_cycle: Box<[u64]>,
     // roots[i].len() == w << i for i = 1..k
     // This uses 2x the space of 2^k roots of unity.
+    // roots[i] contains:
+    // 1 << (i-1) roots in forward order
+    // 1 << (i-1) roots in backward order
     roots: Vec<Box<[u64]>>,
     // rpowers[i][j] = R^(j+1) mod p[i]
     rpowers: Vec<Vec<u64>>,
@@ -758,9 +762,9 @@ pub struct MultiZmodP<'a> {
     // The number of u64 words in pprod.
     plen: usize,
     // To reconstruct modulo n, we need crt_p % n
-    crt_p_modn: Vec<U2048>,
+    crt_p_modn: Vec<U1024>,
     // multiples -1*pprod .. -w*pprod mod n
-    pprods_modn: Vec<U2048>,
+    pprods_modn: Vec<U1024>,
     w: usize,
     k: u32,
     zn: &'a ZmodN,
@@ -772,12 +776,12 @@ impl<'a> MultiZmodP<'a> {
         let need = 2 * zn.n.bits() + logsize;
         // 58w > 2 logn + k
         let w = need as usize / 58 + 1;
-        let primes = &NTT_PRIMES[..w];
-        assert!(w as u128 * (primes[w - 1].0 as u128) < 1 << 64);
+        let primes: Vec<u64> = NTT_PRIMES[..w].iter().map(|p| p.0).collect();
+        assert!(w as u128 * (primes[w - 1] as u128) < 1 << 64);
         // Compute R^2 and R^3 = 2^192 mod pi
         let mut rpowers = vec![];
         for i in 0..w {
-            let pi = primes[i].0;
+            let pi = primes[i];
             let r = (1_u128 << 64) % (pi as u128);
             let r2 = (r * r) % (pi as u128);
             let mut rs = vec![r as u64, r2 as u64];
@@ -790,45 +794,46 @@ impl<'a> MultiZmodP<'a> {
         }
         // Compute CRT coefficients. This is the same code
         // as siqs::select_siqs_factors.
+        assert!(zn.n.bits() <= 1024);
         let mut crt_pinv = vec![0; w];
         let mut crt_p = vec![U2048::default(); w];
-        let mut crt_p_modn = vec![U2048::default(); w];
+        let mut crt_p_modn = vec![U1024::default(); w];
         let mut pprod = U2048::ONE;
         let n2048 = U2048::cast_from(zn.n);
         for i in 0..w {
             // Compute product(pj for j != i) modulo pi and modulo n.
             let mut mi = 1_u128;
-            let pi = primes[i].0 as u128;
+            let pi = primes[i] as u128;
             let mut m = U2048::from(1_u64);
             for j in 0..w {
                 if j == i {
                     continue;
                 }
-                let pj = primes[j].0;
+                let pj = primes[j];
                 mi = (mi * pj as u128) % pi;
                 m *= U2048::from(pj);
             }
             // Invert modulo pi.
             crt_pinv[i] = arith::inv_mod64(mi as u64, pi as u64).unwrap();
             crt_p[i] = m;
-            crt_p_modn[i] = m % n2048;
+            crt_p_modn[i] = U1024::cast_from(m % n2048);
             pprod *= U2048::from(pi);
         }
-        assert!(pprod > U2048::cast_from(zn.n) * U2048::cast_from(zn.n) << logsize);
+        assert!(pprod.bits() >= 2 * zn.n.bits() + logsize);
         // Prepare multiples of -pprod = -product(pi) modulo n
         let mut pprod_modn = n2048 - pprod % n2048;
         if pprod_modn == n2048 {
             pprod_modn = U2048::ZERO;
         }
         // FIXME: don't store zero?
-        let mut pprods_modn = vec![U2048::ZERO, pprod_modn];
+        let mut pprods_modn = vec![U1024::ZERO, U1024::cast_from(pprod_modn)];
         let mut pprod_k = pprod_modn;
         for _ in 2..w {
             pprod_k += pprod_modn;
             if pprod_k >= n2048 {
                 pprod_k -= n2048;
             }
-            pprods_modn.push(pprod_k);
+            pprods_modn.push(U1024::cast_from(pprod_k));
         }
         // Prepare roots of unity (in Montgomery form).
         let mut ωs = vec![0_u64; w];
@@ -836,8 +841,8 @@ impl<'a> MultiZmodP<'a> {
         for i in 0..w {
             roots[i] = rpowers[i][0];
             // Build a root of order 2^logsize from an order 2^32 element.
-            let pi = primes[i].0;
-            let mut ω = primes[i].1 as u128;
+            let pi = primes[i];
+            let mut ω = NTT_PRIMES[i].1 as u128;
             for _ in logsize..32 {
                 ω = (ω * ω) % (pi as u128);
             }
@@ -845,24 +850,43 @@ impl<'a> MultiZmodP<'a> {
         }
         for j in 1..(1 << logsize) {
             for i in 0..w {
-                let pi = primes[i].0;
+                let pi = primes[i];
                 roots[j * w + i] = mg_mul64(pi, roots[(j - 1) * w + i], ωs[i]);
             }
         }
+        let mut primes_cycle = Vec::with_capacity(w * 8);
+        for _ in 0..8 {
+            for i in 0..w {
+                primes_cycle.push(primes[i]);
+            }
+        }
+        debug_assert!(primes_cycle.len() == 8 * w);
         // Precompute packed arrays of roots for each power of 2.
+        // In each array store forward and backwards roots.
         let mut roots_packed = vec![];
         for log in 0..=logsize {
-            let mut v = vec![];
-            for idx in 0..(1 << log) {
+            let mut v = Vec::with_capacity(w << log);
+            // Forward
+            for idx in 0..(1 << log) / 2 {
                 let offset = w * idx << (logsize - log);
                 v.extend_from_slice(&roots[offset..offset + w]);
             }
-            assert!(v.len() == w << log);
+            // Backwards roots (ω^-k)
+            if log > 0 {
+                v.extend_from_slice(&roots[..w]);
+                for idx in 1..(1 << log) / 2 {
+                    let offset = w * ((1 << log) - idx) << (logsize - log);
+                    v.extend_from_slice(&roots[offset..offset + w]);
+                }
+            }
+            if log > 0 {
+                assert!(v.len() == w << log);
+            }
             roots_packed.push(v.into_boxed_slice());
         }
         // Sanity check
         for i in 0..w {
-            let pi = primes[i].0;
+            let pi = primes[i];
             let ω_pow_n = mg_mul64(pi, roots[((1 << logsize) - 1) * w + i], ωs[i]);
             debug_assert!(
                 arith_montgomery::mg_redc(pi, pi - 2, ω_pow_n as u128) == 1,
@@ -873,6 +897,7 @@ impl<'a> MultiZmodP<'a> {
         }
         MultiZmodP {
             primes,
+            primes_cycle: primes_cycle.into_boxed_slice(),
             roots: roots_packed,
             crt_pinv,
             crt_p,
@@ -893,7 +918,7 @@ impl<'a> MultiZmodP<'a> {
         assert!(sz <= 8); // help inlining
         for i in 0..self.w {
             unsafe {
-                let pi = self.primes.get_unchecked(i).0;
+                let pi = *self.primes.get_unchecked(i);
                 // Compute x = sum(x[j] R^(j+2) mod pi) = xR^2
                 let ri = &self.rpowers.get_unchecked(i)[..];
                 let mut zi = x.0[0] as u128 * ri[1] as u128;
@@ -942,7 +967,7 @@ impl<'a> MultiZmodP<'a> {
         debug_assert!(res.len() >= self.zn.words() + 1);
         if self.w == 1 {
             // nothing to do.
-            let pi = self.primes[0].0;
+            let pi = self.primes[0];
             res[0] = arith_montgomery::mg_redc(pi, pi - 2, x[0] as u128);
             return;
         }
@@ -959,7 +984,7 @@ impl<'a> MultiZmodP<'a> {
         let mut xs = [0; NTT_PRIMES.len()];
         for i in 0..w {
             // REDC(xR * pinv) = (x * pinv) % pi
-            let pi = self.primes[i].0;
+            let pi = self.primes[i];
             xs[i] = mg_mul64(pi, x[i], self.crt_pinv[i]);
         }
 
@@ -1035,7 +1060,7 @@ impl<'a> MultiZmodP<'a> {
             unsafe {
                 let xi = *x.get_unchecked(i);
                 let yi = *y.get_unchecked(i);
-                let pi = self.primes.get_unchecked(i).0;
+                let pi = *self.primes.get_unchecked(i);
                 let add = if xi + yi >= pi { xi + yi - pi } else { xi + yi };
                 let sub = if xi >= yi { xi - yi } else { xi + pi - yi };
                 *a.get_unchecked_mut(i) = add;
@@ -1044,17 +1069,72 @@ impl<'a> MultiZmodP<'a> {
         }
     }
 
+    /// Replace x and y by x+y and x-y.
+    ///
+    /// Both vectors must be arrays of tuples of w residues.
+    /// The loops are simple enough to benefit from vectorization.
     fn addsub_inplace(&self, x: &mut [u64], y: &mut [u64]) {
+        debug_assert!(x.len() == y.len());
         debug_assert!(x.len() == self.w);
-        debug_assert!(y.len() == self.w);
         for i in 0..self.w {
             unsafe {
                 let xi_ref = x.get_unchecked_mut(i);
                 let yi_ref = y.get_unchecked_mut(i);
+                let pi = *self.primes.get_unchecked(i);
                 let (xi, yi) = (*xi_ref, *yi_ref);
-                let pi = self.primes.get_unchecked(i).0;
-                let add = if xi + yi >= pi { xi + yi - pi } else { xi + yi };
-                let sub = if xi >= yi { xi - yi } else { xi + pi - yi };
+                let (mut add, mut sub) = (xi + yi, xi + pi - yi);
+                if add >= pi {
+                    add -= pi;
+                }
+                if sub >= pi {
+                    sub -= pi;
+                }
+                *xi_ref = add;
+                *yi_ref = sub;
+            }
+        }
+    }
+
+    fn muladdsub_inplace(&self, x: &mut [u64], y: &mut [u64], m: &[u64]) {
+        debug_assert!(x.len() == y.len());
+        debug_assert!(x.len() % self.w == 0);
+        let mut idx = 0;
+        let blocksize = self.primes_cycle.len();
+        while idx + blocksize <= x.len() {
+            for i in 0..blocksize {
+                unsafe {
+                    let xi_ref = x.get_unchecked_mut(idx + i);
+                    let yi_ref = y.get_unchecked_mut(idx + i);
+                    let mi = *m.get_unchecked(idx + i);
+                    let pi = *self.primes_cycle.get_unchecked(i);
+                    let (xi, yi) = (*xi_ref, mg_mul64(pi, *yi_ref, mi));
+                    let (mut add, mut sub) = (xi + yi, xi + pi - yi);
+                    if add >= pi {
+                        add -= pi;
+                    }
+                    if sub >= pi {
+                        sub -= pi;
+                    }
+                    *xi_ref = add;
+                    *yi_ref = sub;
+                }
+            }
+            idx += blocksize;
+        }
+        for i in 0..x.len() - idx {
+            unsafe {
+                let xi_ref = x.get_unchecked_mut(idx + i);
+                let yi_ref = y.get_unchecked_mut(idx + i);
+                let mi = *m.get_unchecked(idx + i);
+                let pi = *self.primes_cycle.get_unchecked(i);
+                let (xi, yi) = (*xi_ref, mg_mul64(pi, *yi_ref, mi));
+                let (mut add, mut sub) = (xi + yi, xi + pi - yi);
+                if add >= pi {
+                    add -= pi;
+                }
+                if sub >= pi {
+                    sub -= pi;
+                }
                 *xi_ref = add;
                 *yi_ref = sub;
             }
@@ -1062,23 +1142,33 @@ impl<'a> MultiZmodP<'a> {
     }
 
     // Multiply x in place, by y.
+    //
+    // x and y can be w-tuples of residues or vectors of tuples
+    // (when length is a multiple of w).
     fn mul(&self, x: &mut [u64], y: &[u64]) {
-        debug_assert!(x.len() == self.w);
-        debug_assert!(y.len() == self.w);
-        for i in 0..self.w {
+        debug_assert!(x.len() == y.len());
+        debug_assert!(x.len() % self.w == 0);
+        let w = self.w;
+        let mut idx = 0;
+        for i in 0..x.len() {
             unsafe {
                 let xi = x.get_unchecked_mut(i);
-                let yi = y.get_unchecked(i);
-                let pi = self.primes.get_unchecked(i).0;
-                *xi = mg_mul64(pi, *xi, *yi);
+                let yi = *y.get_unchecked(i);
+                let pi = *self.primes.get_unchecked(idx);
+                *xi = mg_mul64(pi, *xi, yi);
+            }
+            idx += 1;
+            if idx == w {
+                idx = 0
             }
         }
     }
 
     // Multiply x in place, by ω^i where ω is a 2^k primitive root of unity.
+    #[cfg(test)]
     fn twiddle(&self, x: &mut [u64], i: usize, k: u32) {
         debug_assert!(x.len() == self.w);
-        let i = i & ((1 << k) - 1);
+        debug_assert!(i > 0 && i < 1 << k);
         self.mul(x, &self.roots[k as usize][self.w * i..self.w * (i + 1)]);
     }
 
@@ -1088,14 +1178,14 @@ impl<'a> MultiZmodP<'a> {
         for i in 0..self.w {
             unsafe {
                 let xi = x.get_unchecked_mut(i);
-                let pi = self.primes.get_unchecked(i).0;
+                let pi = *self.primes.get_unchecked(i);
                 // xR -> REDC(xR * R/2^k)
                 *xi = arith_montgomery::mg_redc(pi, pi - 2, (*xi as u128) << (64 - k));
             }
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn ntt(&self, src: &[u64], dst: &mut [u64], depth: u32, k: u32, fwd: bool) {
         // At each stage, transform src[i<<depth] for i in 0..2^k into dst.
         assert!(dst.len() == self.w << k);
@@ -1132,10 +1222,12 @@ impl<'a> MultiZmodP<'a> {
         let (dst1, dst2) = dst.split_at_mut(w * half);
         for idx in 0..half {
             // Compute X + ω^idx Y, X - ω^idx Y where ω is the 2^k primitive root of unity.
-            if fwd {
-                self.twiddle(&mut dst2[w * idx..w * idx + w], idx, k);
-            } else {
-                self.twiddle(&mut dst2[w * idx..w * idx + w], (1 << k) - idx, k);
+            if idx > 0 {
+                if fwd {
+                    self.twiddle(&mut dst2[w * idx..w * idx + w], idx, k);
+                } else {
+                    self.twiddle(&mut dst2[w * idx..w * idx + w], (1 << (k - 1)) + idx, k);
+                }
             }
             self.addsub_inplace(
                 &mut dst1[w * idx..w * idx + w],
@@ -1161,21 +1253,19 @@ impl<'a> MultiZmodP<'a> {
             }
             return;
         }
-        // Transform odd/even indices
         let half = 1 << (k - 1);
+        let roots = if fwd {
+            &self.roots[k as usize][..w * half]
+        } else {
+            &self.roots[k as usize][w * half..]
+        };
+        // Transform each half: start with the second half since
+        // it is twiddled.
         let (v0, v1) = v.split_at_mut(w * half);
         self.ntt_inplace(v0, depth + 1, k - 1, fwd);
         self.ntt_inplace(v1, depth + 1, k - 1, fwd);
         // Twiddle
-        for idx in 0..half {
-            // Compute X + ω^idx Y, X - ω^idx Y where ω is the 2^k primitive root of unity.
-            if fwd {
-                self.twiddle(&mut v1[w * idx..w * idx + w], idx, k);
-            } else {
-                self.twiddle(&mut v1[w * idx..w * idx + w], (1 << k) - idx, k);
-            }
-            self.addsub_inplace(&mut v0[w * idx..w * idx + w], &mut v1[w * idx..w * idx + w]);
-        }
+        self.muladdsub_inplace(v0, v1, roots);
     }
 }
 

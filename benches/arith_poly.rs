@@ -7,7 +7,8 @@ use yamaquasi::Uint;
 fn main() {
     fn bench_poly(zn: &ZmodN) {
         for degree in [
-            8, 16, 32, 64, 128, 240, 480, 960, 1920, 4032, 8192, 16384, 32768, 65536, 131072, 262144,
+            8, 16, 32, 64, 128, 240, 480, 960, 1920, 4032, 8192, 16384, 32768, 65536, 131072,
+            262144, 524288, 1048576,
         ] {
             let zr = PolyRing::new(zn, std::cmp::max(256, degree));
             let p1: Vec<MInt> = (1..degree as u64)
@@ -27,7 +28,7 @@ fn main() {
                 prec = if degree <= 2048 { 6 } else { 3 }
             );
 
-            if degree < 131072 {
+            if degree < 32768 {
                 let start = std::time::Instant::now();
                 let res_k = Poly::mul_karatsuba(&pol1, &pol2);
                 eprintln!(
