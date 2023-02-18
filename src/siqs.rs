@@ -37,7 +37,6 @@ use rayon::prelude::*;
 use crate::arith::{self, Num, U256};
 use crate::fbase::{self, FBase, Prime};
 use crate::params::{self, BLOCK_SIZE};
-use crate::pollard_pm1;
 use crate::relations::{self, Relation, RelationSet};
 use crate::sieve;
 use crate::{Int, Preferences, Uint, UnexpectedFactor, Verbosity};
@@ -1075,7 +1074,6 @@ pub struct SieveSIQS<'a> {
     pub use_double: bool,
     pub rels: RwLock<RelationSet>,
     pub offset_modp: Box<[u32]>,
-    pub pm1_base: Option<pollard_pm1::PM1Base>,
     // A signal for threads to stop sieving.
     pub done: AtomicBool,
     // Progress trackers
@@ -1110,11 +1108,6 @@ impl<'a> SieveSIQS<'a> {
             maxlarge,
             use_double,
             offset_modp: offsets,
-            pm1_base: if use_double {
-                Some(pollard_pm1::PM1Base::new())
-            } else {
-                None
-            },
             done: AtomicBool::new(false),
             polys_done: AtomicUsize::new(0),
             gap: AtomicUsize::new(fb_size),
@@ -1162,7 +1155,7 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
         // v is never divisible by A
         let Some(((p, q), mut factors)) = fbase::cofactor(
             s.fbase, &v, &facs,
-            maxlarge, max_cofactor, s.pm1_base.as_ref())
+            maxlarge, max_cofactor)
             else { continue };
         let pq = if q > 1 { Some((p, q)) } else { None };
         let cofactor = p * q;

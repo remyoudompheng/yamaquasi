@@ -342,7 +342,7 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
         let candidate: Int = x * x - Int::from_bits(*n);
         let Some(((p, q), factors)) = fbase::cofactor(
             s.fbase, &candidate, &facs,
-            maxlarge, max_cofactor, None)
+            maxlarge, max_cofactor)
             else { continue };
         let pq = if q > 1 { Some((p, q)) } else { None };
         let cofactor = p * q;

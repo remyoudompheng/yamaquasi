@@ -733,7 +733,7 @@ fn test_sieve_block() {
     for (i, facs) in idxs.into_iter().zip(facss) {
         let ii = Uint::from(i as u64);
         let x = Int::from_bits((nsqrt + ii) * (nsqrt + ii) - n);
-        let Some(((p, q), _)) = fbase::cofactor(&fb, &x, &facs[..], 1_000_000, 1_000_000, None)
+        let Some(((p, q), _)) = fbase::cofactor(&fb, &x, &facs[..], 1_000_000, 1_000_000)
             else { continue };
         if p == 1 && q == 1 {
             res.push(i);

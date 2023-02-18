@@ -547,7 +547,7 @@ fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) {
         let cabs = (candidate.abs().to_bits() * d2inv) % n;
         let Some(((p, q), mut factors)) = fbase::cofactor(
             s.fbase, &Int::from_bits(cabs), &facs,
-            maxlarge, max_cofactor, None)
+            maxlarge, max_cofactor)
             else { continue };
         let pq = if q > 1 { Some((p, q)) } else { None };
         let cofactor = p * q;

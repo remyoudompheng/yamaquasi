@@ -1,4 +1,4 @@
-// Copyright 2022 Rémy Oudompheng. All rights reserved.
+// Copyright 2022, 2023 Rémy Oudompheng. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -9,7 +9,6 @@ use std::cmp::max;
 
 use crate::arith;
 use crate::arith::Num;
-use crate::pollard_pm1;
 use crate::pollard_rho;
 use crate::{Int, Uint, UnexpectedFactor};
 
@@ -336,7 +335,7 @@ pub fn certainly_composite(n: u64) -> bool {
 // Try to factor a possible "double large prime".
 // A number of assumptions are made, in particular
 // than composites are necessary more than 24 bit wide.
-pub fn try_factor64(fb: Option<&pollard_pm1::PM1Base>, n: u64) -> Option<(u64, u64)> {
+pub fn try_factor64(n: u64) -> Option<(u64, u64)> {
     if n >> 24 == 0 || !certainly_composite(n) {
         return None;
     }
@@ -356,7 +355,6 @@ pub fn cofactor(
     facs: &[usize],
     maxlarge: u64,
     max_cofactor: u64,
-    pm1_base: Option<&pollard_pm1::PM1Base>,
 ) -> Option<((u64, u64), Vec<(i64, u64)>)> {
     let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
     if x.is_negative() {
@@ -389,7 +387,7 @@ pub fn cofactor(
     let maxprime = fbase.bound() as u64;
     let pq = if cofactor > maxprime * maxprime {
         // Possibly a double large prime
-        let pq = try_factor64(pm1_base, cofactor);
+        let pq = try_factor64(cofactor);
         match pq {
             Some((p, q)) if p > maxlarge || q > maxlarge => None,
             None if cofactor > maxlarge => None,
