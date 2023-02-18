@@ -201,11 +201,14 @@ impl PM1Base {
 // Similarly to ECM implementation, run Pollard P-1 with small parameters
 // to possibly detect a small factor. The cost is 2 multiplications per large
 // prime and it should use a CPU budget similar to 1 ECM run.
-pub fn pm1_quick(n: Uint, v: Verbosity) -> Option<(Vec<Uint>, Uint)> {
+pub fn pm1_quick(n: &Uint, v: Verbosity) -> Option<(Vec<Uint>, Uint)> {
     // Choose B1 so that stage 1 is a large part of CPU time.
     match n.bits() {
+        // Ignore single word integers: the multiprecision implementation
+        // is too costly.
+        0..=64 => None,
         // Extremely quick run
-        0..=128 => pm1_impl(n, 400, 15e3, v),
+        65..=128 => pm1_impl(n, 400, 15e3, v),
         // Catches many 24-bit factors in 1-5ms.
         129..=190 => pm1_impl(n, 600, 40e3, v),
         // Takes less than a few ms
@@ -231,7 +234,7 @@ pub fn pm1_quick(n: Uint, v: Verbosity) -> Option<(Vec<Uint>, Uint)> {
 /// Perform Pollard P-1 with a large CPU budget.
 /// This is however unlikely to produce interesting results
 /// but should be faster than ECM with similar B1/B2.
-pub fn pm1_only(n: Uint, v: Verbosity) -> Option<(Vec<Uint>, Uint)> {
+pub fn pm1_only(n: &Uint, v: Verbosity) -> Option<(Vec<Uint>, Uint)> {
     match n.bits() {
         0..=80 => pm1_impl(n, 16 << 10, 450e3, v),
         81..=120 => pm1_impl(n, 64 << 10, 8e6, v),
@@ -251,7 +254,7 @@ pub fn pm1_only(n: Uint, v: Verbosity) -> Option<(Vec<Uint>, Uint)> {
 const MULTIEVAL_THRESHOLD: f64 = 80e3;
 
 #[doc(hidden)]
-pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Vec<Uint>, Uint)> {
+pub fn pm1_impl(n: &Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Vec<Uint>, Uint)> {
     let mut factors = vec![];
     let start1 = std::time::Instant::now();
     let (b2real, _, _) = stage2_params(b2);
@@ -260,8 +263,8 @@ pub fn pm1_impl(n: Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Vec<
     }
     assert!(b1 > 3);
     // The modulus/ring can shrink as we find factors.
-    let mut nred = n;
-    let mut zn = ZmodN::new(n);
+    let mut nred = *n;
+    let mut zn = ZmodN::new(*n);
     let mut sieve = fbase::PrimeSieve::new();
     let mut block = sieve.next();
     let mut expblock = 1u64;
@@ -822,7 +825,7 @@ fn test_pm1_uint() {
     )
     .unwrap();
     let n = p128 * p256;
-    let Some((p, q)) = pm1_impl(n, 30000, 1e6, v)
+    let Some((p, q)) = pm1_impl(&n, 30000, 1e6, v)
         else { panic!("failed Pollard P-1") };
     assert_eq!(p, vec![p128]);
     assert_eq!(q, p256);
@@ -830,7 +833,7 @@ fn test_pm1_uint() {
     // p-1 = 2*59*35509
     // Checks that blocks of primes are properly iterated (35509 is in the first block).
     let n = Uint::from_digit(2 * 59 * 35509 + 1) * p256;
-    let Some((ps, q)) = pm1_impl(n, 200, 40e3, v)
+    let Some((ps, q)) = pm1_impl(&n, 200, 40e3, v)
         else { panic!("failed Pollard P-1") };
     assert_eq!(ps, vec![Uint::from_digit(2 * 59 * 35509 + 1)]);
     assert_eq!(q, p256);
@@ -838,7 +841,7 @@ fn test_pm1_uint() {
     // 2^3 * 3 * 7 * 11 * 31 * 131 * 1109 * 1699 * 8317 * 5984903
     let p = Uint::from_str("703855808397033138741049").unwrap();
     let n = p * p256;
-    let Some((ps, q)) = pm1_impl(n, 30000, 18e6, v)
+    let Some((ps, q)) = pm1_impl(&n, 30000, 18e6, v)
         else { panic!("failed Pollard P-1") };
     assert_eq!(ps, vec![p]);
     assert_eq!(q, p256);
@@ -847,7 +850,7 @@ fn test_pm1_uint() {
     // 13195979 % 9240 = 1259 is small, positive
     let p = Uint::from_str("3714337881767344119949").unwrap();
     let n = p * p256;
-    let Some((ps, q)) = pm1_impl(n, 2000, 19e6, v)
+    let Some((ps, q)) = pm1_impl(&n, 2000, 19e6, v)
         else { panic!("failed Pollard P-1") };
     assert_eq!(ps, vec![p]);
     assert_eq!(q, p256);
@@ -855,7 +858,7 @@ fn test_pm1_uint() {
     // All factors are smooth:
     // 271750259454572315341 = 91033 * 6472621 * 461201737
     let n = Uint::from_str("271750259454572315341").unwrap();
-    let Some((ps, q)) = pm1_impl(n, 16384, 40e3, v)
+    let Some((ps, q)) = pm1_impl(&n, 16384, 40e3, v)
         else { panic!("failed Pollard P-1") };
     assert!(q == Uint::ONE && ps.len() == 3);
     assert_eq!(ps[0] * ps[1] * ps[2], n);
@@ -864,7 +867,7 @@ fn test_pm1_uint() {
     // p-1 = 2*2*5*5*53*53*90289 where 53*53 > 1024
     // 90289 == 240 * 377 - 191
     let n = Uint::from_str("11006826704494670034453871933878113282264711716157472884058231906746817631612072806760744802006592942296873294117168841323692902345209717573").unwrap();
-    let Some((p, q)) = pm1_impl(n, 16384, 100e3, v)
+    let Some((p, q)) = pm1_impl(&n, 16384, 100e3, v)
         else { panic!("failed Pollard P-1") };
     assert_eq!(p, vec![Uint::from_digit(25_362_180_101)]);
     assert_eq!(p[0] * q, n);
@@ -872,7 +875,7 @@ fn test_pm1_uint() {
     // Has factor p=285355513 such that p-1 = 8*9*13*304867
     // 304867 % 6 = 1
     let n = Uint::from_str("71269410553363907234778342302207120711196110927").unwrap();
-    let Some((p, q)) = pm1_impl(n, 20, 450e3, v)
+    let Some((p, q)) = pm1_impl(&n, 20, 450e3, v)
         else { panic!("failed Pollard P-1") };
     assert_eq!(p, vec![Uint::from_digit(285_355_513)]);
     assert_eq!(p[0] * q, n);

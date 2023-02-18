@@ -9,8 +9,8 @@ use std::cmp::max;
 
 use crate::arith;
 use crate::arith::Num;
-use crate::pollard_rho;
 use crate::pollard_pm1;
+use crate::pollard_rho;
 use crate::{Int, Uint, UnexpectedFactor};
 
 /// A factor base consisting of 24-bit primes related to an input number N,

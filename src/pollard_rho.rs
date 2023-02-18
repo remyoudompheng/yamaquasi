@@ -106,7 +106,8 @@ pub fn rho(n: &Uint, verbosity: Verbosity) -> Option<(Vec<Uint>, Uint)> {
         0..=24 => 100,
         25..=32 => 500,
         33..=48 => 2000,
-        49..=64 => 20000,
+        49..=56 => 20000,
+        57..=64 => 60000,
         // Skip multiprecision inputs: factors will already be found
         // by P-1 and ECM. Even if Pollard rho is quick, it is redundant
         // with other fast methods.

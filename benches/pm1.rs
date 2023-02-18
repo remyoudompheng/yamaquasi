@@ -31,14 +31,14 @@ fn main() {
     for &b2 in &b2_values {
         let b1 = 200;
         let start = std::time::Instant::now();
-        let res = pm1_impl(p256, b1, b2, Verbosity::Silent);
+        let res = pm1_impl(&p256, b1, b2, Verbosity::Silent);
         assert!(res.is_none());
         let t = start.elapsed().as_secs_f64();
         eprintln!("p256 PM1(B1={b1},B2={b2:.2e}) in {t:.3}s");
         tt256.push(t);
 
         let start = std::time::Instant::now();
-        let res = pm1_impl(p480, b1, b2, Verbosity::Silent);
+        let res = pm1_impl(&p480, b1, b2, Verbosity::Silent);
         assert!(res.is_none());
         let t = start.elapsed().as_secs_f64();
         eprintln!("p480 PM1(B1={b1},B2={b2:.2e}) in {t:.3}s");
@@ -52,14 +52,14 @@ fn main() {
         let b2 = 8.3e6;
 
         let start = std::time::Instant::now();
-        let res = pm1_impl(p256, b1, b2, Verbosity::Silent);
+        let res = pm1_impl(&p256, b1, b2, Verbosity::Silent);
         assert!(res.is_none());
         let t = start.elapsed().as_secs_f64();
         eprintln!("p256 PM1(B1={b1},B2={b2:.2e}) in {t:.3}s");
         t256.push(t);
 
         let start = std::time::Instant::now();
-        let res = pm1_impl(p480, b1, b2, Verbosity::Silent);
+        let res = pm1_impl(&p480, b1, b2, Verbosity::Silent);
         assert!(res.is_none());
         let t = start.elapsed().as_secs_f64();
         eprintln!("p480 PM1(B1={b1},B2={b2:.2e}) in {t:.3}s");

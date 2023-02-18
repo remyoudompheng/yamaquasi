@@ -91,8 +91,8 @@ pub fn ecm_auto(
     // This means that the parameters should be tuned to find factors
     // smaller than about n^1/4.
     match n.bits() {
-        // Minimal parameters for 20-bit factors
-        0..=64 => ecm(n, 2, 100, 7.7e3, prefs, tpool),
+        // Skip: Pollard's rho algorithm is faster.
+        0..=64 => None,
         // Target 32-bit factors
         65..=160 => ecm(n, 8, 200, 7.7e3, prefs, tpool),
         // Target 40 bit factors (budget 10-20ms)

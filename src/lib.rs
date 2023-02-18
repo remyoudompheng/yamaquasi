@@ -231,9 +231,9 @@ fn factor_impl(
                 return;
             }
             // Only in automatic mode, for large inputs, Pollard P-1 and ECM can be useful.
-            if !prefs.pm1_done.load(Ordering::Relaxed) {
+            if n.bits() > 64 && !prefs.pm1_done.load(Ordering::Relaxed) {
                 let start_pm1 = std::time::Instant::now();
-                let pm1_res = pollard_pm1::pm1_quick(n, prefs.verbosity);
+                let pm1_res = pollard_pm1::pm1_quick(&n, prefs.verbosity);
                 // P-1 should be only run once.
                 prefs.pm1_done.store(true, Ordering::Relaxed);
                 if let Some((a_s, b)) = pm1_res {
@@ -270,7 +270,7 @@ fn factor_impl(
         Algo::Pm1 => {
             // Pure Pollard P-1
             let start_pm1 = std::time::Instant::now();
-            if let Some((a_s, b)) = pollard_pm1::pm1_only(n, prefs.verbosity) {
+            if let Some((a_s, b)) = pollard_pm1::pm1_only(&n, prefs.verbosity) {
                 if prefs.verbose(Verbosity::Info) {
                     eprintln!(
                         "Pollard P-1 success with factors p={a_s:?} in {:.3}s",
@@ -316,6 +316,7 @@ fn factor_impl(
     }
     // Select algorithm
     let alg_real = if let Algo::Auto = alg {
+        // FIXME: consider using Pollard's rho.
         if n.bits() <= 60 {
             Algo::Squfof
         } else {
