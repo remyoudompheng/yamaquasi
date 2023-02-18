@@ -9,6 +9,7 @@ use std::cmp::max;
 
 use crate::arith;
 use crate::arith::Num;
+use crate::pollard_rho;
 use crate::pollard_pm1;
 use crate::{Int, Uint, UnexpectedFactor};
 
@@ -339,13 +340,7 @@ pub fn try_factor64(fb: Option<&pollard_pm1::PM1Base>, n: u64) -> Option<(u64, u
     if n >> 24 == 0 || !certainly_composite(n) {
         return None;
     }
-    let pm1_budget = match n.bits() {
-        0..=42 => 5000,
-        43..=45 => 10000,
-        46..=48 => 20000,
-        49.. => 30000,
-    };
-    if let Some(pq) = fb.and_then(|fb| fb.factor(n, pm1_budget)) {
+    if let Some(pq) = pollard_rho::rho_semiprime(n) {
         return Some(pq);
     }
     crate::squfof::squfof(n)

@@ -29,6 +29,7 @@ pub mod relations;
 pub mod ecm;
 pub mod mpqs;
 pub mod pollard_pm1;
+pub mod pollard_rho;
 pub mod pp1;
 pub mod qsieve;
 pub mod qsieve64;
@@ -218,6 +219,17 @@ fn factor_impl(
     // Do we need to try an ECM step?
     match alg {
         Algo::Auto => {
+            // For small inputs, Pollard rho is a good complement to Pollard P-1.
+            if let Some((a_s, b)) = pollard_rho::rho(&n, prefs.verbosity) {
+                for a in a_s {
+                    factor_impl(a, alg, prefs, factors, tpool);
+                }
+                if prefs.verbose(Verbosity::Info) {
+                    eprintln!("Recursively factor {b}");
+                }
+                factor_impl(b, alg, prefs, factors, tpool);
+                return;
+            }
             // Only in automatic mode, for large inputs, Pollard P-1 and ECM can be useful.
             if !prefs.pm1_done.load(Ordering::Relaxed) {
                 let start_pm1 = std::time::Instant::now();
