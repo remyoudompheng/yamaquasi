@@ -301,7 +301,7 @@ impl Divider64 {
             if m == 0 {
                 return 0;
             }
-            self.p as u64 - m
+            self.p - m
         } else {
             self.divmod64(n as u64).1
         }
@@ -338,7 +338,7 @@ impl Divider64 {
                 continue;
             }
             let (mut q, r) = self.divmod64(d);
-            debug_assert!(q == d / self.p as u64);
+            debug_assert!(q == d / self.p);
             if carry != 0 {
                 q += carry * m64;
                 let (cq, cr) = self.divmod64(carry * self.r64 + r);
@@ -414,7 +414,7 @@ impl Divider31 {
     pub fn modu31(&self, n: u32) -> u32 {
         let nm = (n as u64) * (self.m31 as u64);
         let q = (nm >> self.s31) as u32;
-        n - q * self.p as u32
+        n - q * self.p
     }
 }
 

@@ -148,7 +148,7 @@ pub fn siqs(
 
 fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {
     let mm = s.interval_size;
-    let a = &prepare_a(&factors, a_int, s.fbase, -(mm as i64) / 2);
+    let a = &prepare_a(factors, a_int, s.fbase, -(mm as i64) / 2);
     if s.prefs.verbose(Verbosity::Debug) {
         eprintln!(
             "Sieving A={} (factors {})",
@@ -196,7 +196,7 @@ fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {
                     eprintln!("Need {} additional relations", rgap);
                 }
                 s.target.store(
-                    rlen + rgap + std::cmp::min(10, s.fbase.len() as usize / 4),
+                    rlen + rgap + std::cmp::min(10, s.fbase.len() / 4),
                     Ordering::SeqCst,
                 );
             }
@@ -540,7 +540,7 @@ pub fn select_siqs_factors<'a>(fb: &'a FBase, n: &'a Uint, nfacs: usize, mm: usi
             let pinvq = if p.p == q.p {
                 0
             } else {
-                arith::inv_mod64(p.p as u64, q.p as u64).unwrap()
+                arith::inv_mod64(p.p, q.p).unwrap()
             };
             row.push(pinvq as u32);
         }

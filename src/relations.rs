@@ -548,7 +548,7 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: Verbosity) -> Vec<Uint> 
         for i in eq.into_usizes().into_iter() {
             xs.push(filt_rels[i].x);
             for (f, k) in &filt_rels[i].factors {
-                let idx = idxs.get(&f).unwrap();
+                let idx = idxs.get(f).unwrap();
                 exps[*idx] += k;
             }
         }
@@ -677,7 +677,7 @@ impl PackedRelation {
                     assert!(p % 2 == 1);
                     if k > 1 {
                         ints.push(2 * p as u64);
-                        ints.push(k as u64);
+                        ints.push(k);
                     } else {
                         ints.push(p as u64);
                     }
@@ -733,7 +733,7 @@ impl PackedRelation {
                 idx += 1;
             } else {
                 let p = if n == 2 { 2 } else { n >> 1 };
-                let k = ints[idx + 1] as u64;
+                let k = ints[idx + 1];
                 factors.push((p as i64, k));
                 idx += 2;
             }

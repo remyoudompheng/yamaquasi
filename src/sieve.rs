@@ -164,7 +164,7 @@ impl<'a> Sieve<'a> {
         let mut offs = Vec::with_capacity(2 * n_small);
         let maxprime = fbase.bound();
         // Need tables for logp in 16..=log(maxprime)
-        let maxlog = 32 - u32::leading_zeros(maxprime as u32) as usize;
+        let maxlog = 32 - u32::leading_zeros(maxprime) as usize;
         let mut tables: Vec<_> = (LARGE_PRIME_LOG..=maxlog)
             .map(|_| SieveTable::new(nblocks))
             .collect();
@@ -330,7 +330,7 @@ impl<'a> Sieve<'a> {
                 // Interval of primes such that bit length == log.
                 let i_start = max(self.idxskip, 2 * self.fbase.idx_by_log[log] as usize);
                 let i_end = if log < 15 {
-                    2 * self.fbase.idx_by_log[log + 1] as usize
+                    2 * self.fbase.idx_by_log[log + 1]
                 } else {
                     lo.len()
                 };
@@ -376,7 +376,7 @@ impl<'a> Sieve<'a> {
             // Not so small primes, no need to process both roots at the same time.
             for log in 13..=15 {
                 // Interval of primes such that bit length == log.
-                let i_start = max(self.idxskip, 2 * self.fbase.idx_by_log[log] as usize);
+                let i_start = max(self.idxskip, 2 * self.fbase.idx_by_log[log]);
                 let i_end = if log < 15 {
                     2 * self.fbase.idx_by_log[log + 1] as usize
                 } else {

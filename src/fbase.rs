@@ -153,7 +153,7 @@ pub fn select_multiplier(n: Uint) -> (u32, f64) {
         let div = &SMALL_PRIMES_DIVIDERS[i];
         for x in 0..=p / 2 {
             let sq = div.modu16((x * x) as u16);
-            modsquares[i as usize][sq as usize] = true;
+            modsquares[i][sq as usize] = true;
         }
     }
     for k in 1..MAX_MULTIPLIER {

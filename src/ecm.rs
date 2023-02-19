@@ -824,6 +824,7 @@ impl Curve {
         )
     }
 
+    #[allow(dead_code)]
     fn sub(&self, p: &Point, q: &Point) -> Point {
         let q = Point(self.zn.sub(&self.zn.zero(), &q.0), q.1, q.2);
         self.add(p, &q)
@@ -923,9 +924,9 @@ impl Curve {
             } else {
                 let q2 = self.dblext(&q);
                 if op > 0 {
-                    q = self.addextproj(&q2, &gaps[op as usize / 2]);
+                    q = self.addextproj(&q2, gaps[op as usize / 2]);
                 } else {
-                    q = self.subextproj(&q2, &gaps[(-op) as usize / 2]);
+                    q = self.subextproj(&q2, gaps[(-op) as usize / 2]);
                 }
             }
         }
@@ -1217,7 +1218,7 @@ impl<'a> Suyama11<'a> {
             1 => zn.from_int(zn.n - n3),
             // n=3k+2
             2 => zn.from_int(n3 + Uint::ONE),
-            _ => return Err(UnexpectedFactor(3_u64.into())),
+            _ => return Err(UnexpectedFactor(3_u64)),
         };
         debug_assert!(zn.mul(zn.from_int(3_u64.into()), one_third) == zn.one());
         let a = zn.mul(

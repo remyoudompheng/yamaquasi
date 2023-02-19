@@ -310,7 +310,7 @@ pub fn pm1_impl(n: &Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Vec
         }
         // Check GCD after each prime block (several thousands primes)
         let logstage = Some(1).filter(|_| verbosity >= Verbosity::Verbose);
-        if check_gcd_factors(&n, &mut factors, &mut nred, &mut gpows, logstage) {
+        if check_gcd_factors(n, &mut factors, &mut nred, &mut gpows, logstage) {
             return if factors.is_empty() {
                 None
             } else {
@@ -395,7 +395,7 @@ pub fn pm1_impl(n: &Uint, b1: u64, b2: f64, verbosity: Verbosity) -> Option<(Vec
         }
         // Check GCD after each prime block (several thousands primes)
         let logstage = Some(2).filter(|_| verbosity >= Verbosity::Verbose);
-        if check_gcd_factors(&n, &mut factors, &mut nred, &mut products, logstage) {
+        if check_gcd_factors(n, &mut factors, &mut nred, &mut products, logstage) {
             return if factors.is_empty() {
                 None
             } else {
@@ -423,7 +423,7 @@ fn check_gcd_factors(
     stage: Option<usize>,
 ) -> bool {
     let (mut fs, nred_) = gcd_factors(nred, &values[..]);
-    if fs.contains(&n) {
+    if fs.contains(n) {
         return true;
     }
     if !fs.is_empty() {
@@ -597,7 +597,7 @@ fn exp_modn_large(zn: &ZmodN, g: &MInt, exp: &LargeExpType) -> MInt {
             rem_bits -= 6
         } else {
             gk = zn.mul(&gk, &gk);
-            gk = zn.mul(&gk, &g);
+            gk = zn.mul(&gk, g);
             rem_bits -= 1;
         }
     }

@@ -165,7 +165,7 @@ pub fn rho_impl(
         prod = zn.mul(&prod, &zn.sub(&x2, &x1));
         prods.push(prod);
     }
-    let (fs, nred) = gcd_factors(&n, &prods);
+    let (fs, nred) = gcd_factors(n, &prods);
     if nred == Uint::ONE || &nred == n {
         return None;
     }

@@ -190,7 +190,7 @@ fn dot_product<const N: usize>(
     b: i64,
     y: &BUint<N>,
 ) -> (BUint<N>, bool) {
-    let (au, bu) = (a.abs() as u64, b.abs() as u64);
+    let (au, bu) = (a.unsigned_abs(), b.unsigned_abs());
     if a.signum() * b.signum() < 0 {
         let ax = mulword(au, sz, x);
         let by = mulword(bu, sz, y);

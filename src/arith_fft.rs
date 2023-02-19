@@ -325,7 +325,7 @@ fn _sub_slices(z: &mut [u64], x: &[u64]) -> u64 {
             }
         }
     }
-    u64::from(carry)
+    carry
 }
 
 fn _mul_slice(z: &mut [u64], x: &[u64], w: u64) {
@@ -381,7 +381,6 @@ impl<const N: usize> FInt<N> {
             // common case
             z[0] -= self.1;
             self.1 = 0;
-            return;
         } else {
             // z[0] < self.1
             let mut carry = self.1;

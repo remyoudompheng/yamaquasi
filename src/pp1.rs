@@ -209,7 +209,7 @@ fn check_gcd_factors(
     stage: Option<usize>,
 ) -> bool {
     let (mut fs, nred_) = gcd_factors(nred, &values[..]);
-    if fs.contains(&n) {
+    if fs.contains(n) {
         return true;
     }
     if !fs.is_empty() {
@@ -254,12 +254,12 @@ fn chebyshev_modn(zn: &ZmodN, g: &MInt, exp: u64) -> MInt {
             // (k,k+1) => (2k,2k+1)
             (p_k, p_kp1) = (
                 zn.sub(&zn.mul(&p_k, &p_k), &two),
-                zn.sub(&zn.mul(&p_k, &p_kp1), &g),
+                zn.sub(&zn.mul(&p_k, &p_kp1), g),
             );
         } else {
             // (k,k+1) => (2k+1,2k+2)
             (p_k, p_kp1) = (
-                zn.sub(&zn.mul(&p_k, &p_kp1), &g),
+                zn.sub(&zn.mul(&p_k, &p_kp1), g),
                 zn.sub(&zn.mul(&p_kp1, &p_kp1), &two),
             );
         }
@@ -268,7 +268,7 @@ fn chebyshev_modn(zn: &ZmodN, g: &MInt, exp: u64) -> MInt {
     if exp % 2 == 0 {
         zn.sub(&zn.mul(&p_k, &p_k), &two)
     } else {
-        zn.sub(&zn.mul(&p_k, &p_kp1), &g)
+        zn.sub(&zn.mul(&p_k, &p_kp1), g)
     }
 }
 
