@@ -105,7 +105,7 @@ fn main() {
             Bench::new("prepare 1 SIQS polynomial (n = 256 bits)")
             .with_samples(20_000)
             .run_seeded((&n, &s, a_s.first().unwrap()), |(n, s, a)| {
-                siqs::make_polynomial(s, n, a, 123);
+                siqs::make_polynomial(s, a, 123);
             })
         },
         // Block sieve

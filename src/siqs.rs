@@ -168,7 +168,7 @@ fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {
             return;
         }
 
-        let pol = make_polynomial(s, s.n, a, idx);
+        let pol = make_polynomial(s, a, idx);
         siqs_sieve_poly(s, a, &pol);
         // Check status.
         let rlen = {
@@ -264,7 +264,7 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
             // sample polynomial
             let a = &prepare_a(&factors, &a0, &fbase0, -(mm as i64) / 2);
             let s = SieveSIQS::new(n, &fbase0, 0, use_double, mm, &prefs);
-            let pol = make_polynomial(&s, n, a, 0);
+            let pol = make_polynomial(&s, a, 0);
             eprintln!("min(P) ~ {}", pol.eval(0).0);
             eprintln!("max(P) ~ {}", pol.eval(mm as i64 / 2).0);
             mms.push(mm);
@@ -293,13 +293,13 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
                         let poly_idxs: Vec<usize> = (0..polys_per_a).collect();
                         pool.install(|| {
                             poly_idxs.par_iter().for_each(|&idx| {
-                                let pol = make_polynomial(&s, n, a, idx);
+                                let pol = make_polynomial(&s, a, idx);
                                 siqs_sieve_poly(&s, a, &pol);
                             });
                         })
                     } else {
                         for idx in 0..polys_per_a {
-                            let pol = make_polynomial(&s, n, a, idx);
+                            let pol = make_polynomial(&s, a, idx);
                             siqs_sieve_poly(&s, a, &pol);
                         }
                     }
@@ -486,13 +486,12 @@ pub struct Factors<'a> {
     pub inverses: Vec<Vec<u32>>,
 }
 
-impl<'a> Factors<'a> {
-    fn polytype(&self) -> PolyType {
-        if *self.n % 4u64 == 1 {
-            PolyType::Type2
-        } else {
-            PolyType::Type1
-        }
+fn polytype(n: &Uint) -> PolyType {
+    // Make sure to not use unoptimized BUint.mod
+    if n.low_u64() % 4 == 1 {
+        PolyType::Type2
+    } else {
+        PolyType::Type1
     }
 }
 
@@ -508,7 +507,7 @@ pub fn select_siqs_factors<'a>(fb: &'a FBase, n: &'a Uint, nfacs: usize, mm: usi
     // Don't go below 2000 for extremely small numbers.
     let target = max(
         Uint::from(2000u64),
-        if *n % 4u64 == 1 {
+        if polytype(n) == PolyType::Type2 {
             // Type 2
             arith::isqrt(n >> 1) / Uint::from(mm as u64 / 2)
         } else {
@@ -736,7 +735,7 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase, start_offset: i64
     for pidx in 0..fbase.len() {
         let p = fbase.p(pidx);
         let div = fbase.div(pidx);
-        let amod = if f.polytype() == PolyType::Type1 {
+        let amod = if polytype(f.n) == PolyType::Type1 {
             div.mod_uint(a)
         } else {
             div.mod_uint(&(a << 1))
@@ -862,12 +861,9 @@ impl Poly {
 
 /// Given coefficients A and B, compute all roots (Ax+B)^2=N
 /// modulo the factor base, computing (r - B)/A mod p
-pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
-    let polytype = if *s.n % 4_u64 == 1 {
-        PolyType::Type2
-    } else {
-        PolyType::Type1
-    };
+pub fn make_polynomial(s: &SieveSIQS, a: &A, pol_idx: usize) -> Poly {
+    let n = s.n;
+    let polytype = polytype(n);
     let pol_idx = pol_idx << 1;
     // Combine roots: don't reduce modulo n.
     // This allows combining the roots modulo the factor base,
@@ -878,7 +874,7 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
         b += a.roots[i][(pol_idx >> i) & 1];
     }
     if polytype == PolyType::Type2 {
-        assert!(b % 2_u64 == 1);
+        assert!(b.low_u64() % 2 == 1);
     }
     // Also combine roots mod p
     let mut bmodp = vec![0u32; a.roots_mod_p[0].len()].into_boxed_slice();
@@ -998,9 +994,9 @@ pub fn make_polynomial(s: &SieveSIQS, n: &Uint, a: &A, pol_idx: usize) -> Poly {
     // by 2 * #factors(A)
     // This is because we don't reduce B modulo A.
     let root = if polytype == PolyType::Type1 {
-        (arith::isqrt(*n) / a.a).low_u64()
+        (s.nsqrt / a.a).low_u64()
     } else {
-        (arith::isqrt(*n) / (a.a << 1) as Uint).low_u64()
+        (s.nsqrt / (a.a << 1) as Uint).low_u64()
     };
     if n.bits() > 80 {
         // For small n, A factors are below 200 and can have huge gaps.
@@ -1068,6 +1064,7 @@ fn siqs_sieve_poly(s: &SieveSIQS, a: &A, pol: &Poly) {
 
 pub struct SieveSIQS<'a> {
     pub n: &'a Uint,
+    nsqrt: Uint,
     pub interval_size: usize,
     pub fbase: &'a FBase,
     pub maxlarge: u64,
@@ -1102,6 +1099,7 @@ impl<'a> SieveSIQS<'a> {
         let fb_size = fb.len();
         SieveSIQS {
             n,
+            nsqrt: arith::isqrt(*n),
             interval_size,
             fbase: fb,
             rels: RwLock::new(RelationSet::new(*n, maxlarge)),
@@ -1297,7 +1295,7 @@ fn test_poly_prepare() {
         for idx in 0..35 {
             let idx = 7 * idx;
             // Generate and check each polynomial.
-            let pol = make_polynomial(&s, &n, &a, idx);
+            let pol = make_polynomial(&s, &a, idx);
             let (pa, pb) = (pol.a, pol.b);
             // B is a square root of N modulo A.
             assert_eq!((pb * pb) % pa, n % pa);
