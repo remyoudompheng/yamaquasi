@@ -5,6 +5,8 @@ use std::time::Duration;
 
 use yamaquasi::arith::{self, isqrt, sqrt_mod, U1024, U256, U512};
 use yamaquasi::arith_gcd::inv_mod;
+use yamaquasi::arith_montgomery::ZmodN;
+use yamaquasi::{fbase, relations};
 use yamaquasi::{pseudoprime, Uint};
 
 const N256: &str = "23374454829417248628572084580131596971714744792262629806178559231363799527559";
@@ -132,4 +134,40 @@ brunch::benches! {
             .with_timeout(Duration::from_secs(1))
             .run_seeded(p160, |p| assert!(pseudoprime(p)))
     },
+    // Relation combine
+    // It involves many wide modular products.
+    {
+        let n = Uint::from_str(PQ256).unwrap();
+        let seed = Uint::from_str(P160).unwrap();
+        // Generate many x.
+        let xs: Vec<Uint> = (0..3000_u64)
+            .map(|i| ((Uint::from(i) * seed + Uint::from(i * i)) * seed ) % n).collect();
+        // Generate many factors
+        let fb = fbase::FBase::new(n, 3000);
+        let mut facs = vec![];
+        for (idx, &f) in fb.primes.iter().enumerate() {
+            let exp = 2 * ((13 * idx) % 16);
+            facs.push((f as i64, exp as u64));
+        }
+        let zn = ZmodN::new(n);
+        Bench::new("relation combine(3000, exp=2..32)")
+        .run_seeded((xs, facs), |(xs, facs)| relations::combine(&zn, &xs, &facs))
+    },
+    {
+        let n = Uint::from_str(PQ256).unwrap();
+        let seed = Uint::from_str(P160).unwrap();
+        // Generate many x.
+        let xs: Vec<Uint> = (0..10000_u64)
+            .map(|i| ((Uint::from(i) * seed + Uint::from(i * i)) * seed ) % n).collect();
+        // Generate many factors
+        let fb = fbase::FBase::new(n, 10000);
+        let mut facs = vec![];
+        for (idx, &f) in fb.primes.iter().enumerate() {
+            let exp = 2 * ((13 * idx) % 24);
+            facs.push((f as i64, exp as u64));
+        }
+        let zn = ZmodN::new(n);
+        Bench::new("relation combine(10000, exp=2..48)")
+        .run_seeded((xs, facs), |(xs, facs)| relations::combine(&zn, &xs, &facs))
+    }
 }

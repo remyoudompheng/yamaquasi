@@ -16,7 +16,8 @@ use bnum::cast::CastFrom;
 use num_integer::Integer;
 use num_traits::One;
 
-use crate::arith::{pow_mod, U512};
+use crate::arith::{pow_mod, Num, U512};
+use crate::arith_montgomery::ZmodN;
 use crate::matrix;
 use crate::{Int, Uint, Verbosity};
 
@@ -166,6 +167,7 @@ impl RelationSet {
     }
 
     pub fn add(&mut self, r: Relation, pq: Option<(u64, u64)>) {
+        debug_assert!(&r.x < &self.n);
         if r.cofactor == 1 {
             self.add_cycle(r);
         } else if r.cofactor < self.maxlarge {
@@ -431,6 +433,9 @@ pub fn relation_gap(rels: &[Relation]) -> usize {
 
 /// Finds non trivial square roots of 1 modulo n and returns
 /// a list of non-trivial divisors of n.
+///
+/// Note that n may be different from the original sieve modulus
+/// which includes the multiplier.
 pub fn final_step(n: &Uint, rels: &[Relation], verbose: Verbosity) -> Vec<Uint> {
     for r in rels {
         debug_assert!(r.verify(n));
@@ -467,7 +472,7 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: Verbosity) -> Vec<Uint> 
     }
     // Build vectors
     // ridx[i] = j if rels[j] is the i-th vector in the matrix
-    let mut filt_rels: Vec<&Relation> = vec![];
+    let mut filt_rels: Vec<Relation> = vec![];
     let mut matrix = vec![];
     let size = nfactors;
     let mut coeffs = 0;
@@ -484,6 +489,11 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: Verbosity) -> Vec<Uint> 
             } else {
                 continue 'skiprel;
             }
+        }
+        // Make sure relation element is smaller than N.
+        let mut r = r.clone();
+        if &r.x > n {
+            r.x %= n;
         }
         filt_rels.push(r);
         matrix.push(v);
@@ -530,6 +540,7 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: Verbosity) -> Vec<Uint> 
     }
     let mut divisors = vec![];
     let mut nontrivial = 0;
+    let zn = ZmodN::new(*n);
     for eq in k {
         // Collect relations for this vector.
         let mut xs = vec![];
@@ -550,7 +561,8 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: Verbosity) -> Vec<Uint> 
         if verbose >= Verbosity::Debug {
             eprintln!("Combine {} relations...", xs.len());
         }
-        let (a, b) = combine(n, &xs, &factors);
+        let (a, b) = combine(&zn, &xs, &factors);
+        assert_eq!((a * a) % n, (b * b) % n);
         if verbose >= Verbosity::Debug {
             eprintln!("Same square mod N: {} {}", a, b);
         }
@@ -575,47 +587,41 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: Verbosity) -> Vec<Uint> 
 /// Instead of handling an array of relations,
 /// we provide xs such that a = product(xs)
 /// and [(p, k)] such that b^2 = product(p^k)
-pub fn combine(n: &Uint, xs: &[Uint], factors: &[(i64, u64)]) -> (Uint, Uint) {
+pub fn combine(zn: &ZmodN, xs: &[Uint], factors: &[(i64, u64)]) -> (Uint, Uint) {
     // Avoid too many (x % n) operations especially when factors are small.
     // All factors are less than 32 bits.
 
     // Product of x (they are less than 512 bits wide).
-    let mut a = Uint::one();
-    for x in xs {
-        a *= x;
-        if a.bits() > Uint::BITS / 2 {
-            a = a % n;
-        }
-    }
-    if a > *n {
-        a = a % n;
+    let mut a = zn.one();
+    for &x in xs {
+        a = zn.mul(&a, &zn.from_int(x));
     }
     // Product of factors: they are smaller than 32 bits.
     // Accumulate product in a u64 before performing long multiplications.
-    let mut b = Uint::one();
+    let mut b = zn.one();
     let mut chunk = 1_u64;
+    let maxchunk = if zn.n.bits() <= 64 {
+        min(1 << 32, zn.n.low_u64())
+    } else {
+        1 << 32
+    };
     for &(p, k) in factors {
         if p == -1 {
             continue;
         }
         assert_eq!(k % 2, 0);
         for _ in 0..k / 2 {
-            chunk *= p as u64;
-            if chunk >> 32 != 0 {
-                b *= Uint::from(chunk);
-                chunk = 1;
-                if b.bits() > Uint::BITS / 2 {
-                    b = b % n;
-                }
+            let c = chunk * p as u64;
+            if c >= maxchunk {
+                b = zn.mul(&b, &zn.from_int(chunk.into()));
+                chunk = p as u64;
+            } else {
+                chunk = c;
             }
         }
     }
-    b *= Uint::from(chunk);
-    if b > *n {
-        b = b % n;
-    }
-    assert_eq!((a * a) % n, (b * b) % n);
-    (a, b)
+    b = zn.mul(&b, &zn.from_int(chunk.into()));
+    (zn.to_int(a), zn.to_int(b))
 }
 
 /// Using a^2 = b^2 mod n, try to factor n
