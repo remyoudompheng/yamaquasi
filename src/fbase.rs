@@ -309,9 +309,10 @@ fn prepare_factor_base(nk: &Uint, primes: &[u32]) -> Vec<(u64, u64, arith::Divid
             if p >= 1 << 24 {
                 return None;
             }
-            let nk: u64 = *nk % (p as u64);
+            let div = arith::Dividers::new(p);
+            let nk: u64 = div.mod_uint(nk);
             let r = arith::sqrt_mod(nk, p as u64)?;
-            Some((p as u64, r, arith::Dividers::new(p)))
+            Some((p as u64, r, div))
         })
         .collect()
 }
