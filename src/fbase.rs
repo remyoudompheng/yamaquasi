@@ -7,8 +7,8 @@
 
 use std::cmp::max;
 
-use crate::arith;
-use crate::arith::Num;
+use crate::arith::{self, Num};
+use crate::arith_montgomery;
 use crate::pollard_rho;
 use crate::{Int, Uint, UnexpectedFactor};
 
@@ -316,25 +316,39 @@ fn prepare_factor_base(nk: &Uint, primes: &[u32]) -> Vec<(u64, u64, arith::Divid
         .collect()
 }
 
-// Returns whether n is composite through an Euler witness.
-// The use case is a product of 2 odd primes (these are never
-// Carmichael numbers).
-//
-// Random testing on 48-bit semiprimes show that 2 is almost
-// never an Euler liar (probability < 1e-6), but for example
-// 2^(n-1) = 1 mod n for n = 173142166387457
+/// Returns whether n is composite through an Euler witness.
+/// The use case is a product of 2 odd primes (these are never
+/// Carmichael numbers).
+///
+/// Random testing on 48-bit semiprimes show that 2 is almost
+/// never an Euler liar (probability < 1e-6), but for example
+/// 2^(n-1) = 1 mod n for n = 173142166387457
 pub fn certainly_composite(n: u64) -> bool {
-    if n > 2 && n % 2 == 0 {
-        return true;
+    if n % 2 == 0 {
+        return n > 2;
     }
-    let n128 = n as u128;
-    let x = arith::pow_mod(2u128, n128 >> 1, n128) as u64;
-    x != 1 && x != n - 1
+    // Compute R^n in Montgomery arithmetic.
+    let ninv = arith_montgomery::mg_2adic_inv(n);
+    let mut x = 2;
+    let mut sq = arith_montgomery::mg_mul(n, ninv, x, x);
+    let mut exp = n / 2;
+    while exp > 0 {
+        if exp & 1 == 1 {
+            x = arith_montgomery::mg_mul(n, ninv, x, sq);
+        }
+        sq = arith_montgomery::mg_mul(n, ninv, sq, sq);
+        exp /= 2;
+    }
+    // If n is prime, x^n==x
+    x != 2
 }
 
-// Try to factor a possible "double large prime".
-// A number of assumptions are made, in particular
-// than composites are necessary more than 24 bit wide.
+/// Try to factor a possible "double large prime".
+/// A number of assumptions are made, in particular
+/// than composites are necessary more than 24 bit wide.
+///
+/// This function is not required to be accurate, but to avoid performance
+/// degradation it is expected to find factors with at least 99% probability.
 pub fn try_factor64(n: u64) -> Option<(u64, u64)> {
     if n >> 24 == 0 || !certainly_composite(n) {
         return None;
@@ -427,4 +441,15 @@ fn test_primesieve() {
             break;
         }
     }
+}
+
+#[test]
+fn test_pseudoprime() {
+    let ps = primes(50000);
+    for p in ps {
+        assert!(!certainly_composite(p as u64));
+    }
+
+    // 173142166387457 is a false negative.
+    assert!(!certainly_composite(173142166387457));
 }

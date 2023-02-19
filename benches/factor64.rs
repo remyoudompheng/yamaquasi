@@ -113,7 +113,10 @@ brunch::benches! {
         Bench::new("5x Rho n=42 bits")
             .with_timeout(Duration::from_secs(3))
             .run_seeded(n42, |ns| for &n in ns {
-                pollard_rho::rho64(n, 3, 5000).unwrap();
+                pollard_rho::rho64(n, 1, 2000)
+                    .or_else(||  pollard_rho::rho64(n, 2, 2000))
+                    .or_else(||  pollard_rho::rho64(n, 3, 2000))
+                    .unwrap();
             })
     },
     {
@@ -141,7 +144,7 @@ brunch::benches! {
         Bench::new("5x Rho n=56 bits")
             .with_timeout(Duration::from_secs(3))
             .run_seeded(n56, |ns| for &n in ns {
-                pollard_rho::rho64(n, 2, 30000).or_else(|| pollard_rho::rho64(n, 3, 30000)).unwrap();
+                pollard_rho::rho_semiprime(n).unwrap();
             })
     },
     {
@@ -206,6 +209,22 @@ brunch::benches! {
         Bench::new("5x pseudoprime n=48 bits")
             .run_seeded(n48, |ns| for &n in ns {
                 assert!(fbase::certainly_composite(n));
+            })
+    },
+    {
+        let mut primes = vec![];
+        let mut q = 0xabcdef;
+        while primes.len() < 200 {
+            q += 31;
+            if !fbase::certainly_composite(q) {
+                primes.push(q)
+            }
+        }
+        Bench::new("100x try_factor composite n=48 bits")
+            .with_samples(1000)
+            .run_seeded((), |_| for i in 0..100 {
+                let n = primes[2*i] * primes[2*i+1];
+                fbase::try_factor64(n).unwrap();
             })
     },
 }

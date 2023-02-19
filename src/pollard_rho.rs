@@ -13,17 +13,14 @@
 //! whereas Pollard rho runs in heuristic complexity O(sqrt(p))
 //! requiring less operations.
 //!
-//! This implementation runs Pollard Rho with respectively
-//! 1000 or 5000 iterations using available threads.
-//! Each iteration requires 4 modular multiplications.
-//!
-//! Find a 20 bit factor, about 1000 iterations are necessary.
-//! Find a 24 bit factor, about 4000 iterations are necessary.
-//! Find a 28 bit factor, about 20000 iterations are necessary.
+//! Find a 20 bit factor, about 4000 iterations are necessary.
+//! Find a 24 bit factor, about 16000 iterations are necessary.
+//! Find a 28 bit factor, about 65000 iterations are necessary.
 //!
 //! In practice, it seems that running Pollard's Rho algorithm is only useful
 //! when it is expected to completely factor the input number (which must be small)
 //! otherwise it will be redundant with P-1 and ECM computations.
+//! Therefore it is not used in the general factoring logic for large integers.
 //!
 //! References:
 //! J.M. Pollard, A Monte Carlo method for factorization, 1975
@@ -37,37 +34,50 @@ use crate::arith_montgomery::{gcd_factors, mg_2adic_inv, mg_mul, MInt, ZmodN};
 use crate::{Uint, Verbosity};
 
 /// Attempt to factor a 64-bit integer into 2 primes.
-/// The argument is expected to have 2 prime factors of similar size.
+/// The argument is expected to have 2 large prime factors.
 ///
 /// The expected use case is to factor cofactors of the quadratic sieve.
-/// Since the fallback is SQUFOF
+/// In particular we don't expect the smaller prime factor to exceed 2^28.
 pub fn rho_semiprime(n: u64) -> Option<(u64, u64)> {
+    // Unlucky primes may have a huge cycle attracting all seeds.
+    // Switching polynomial will usually break the pattern.
     let sz = u64::BITS - u64::leading_zeros(n);
     match sz {
-        0..=36 => rho64(n, 2, 500).or_else(|| rho64(n, 3, 500)),
-        37..=42 => rho64(n, 2, 2500).or_else(|| rho64(n, 3, 2500)),
-        43..=45 => rho64(n, 2, 5000).or_else(|| rho64(n, 3, 5000)),
-        46..=49 => rho64(n, 2, 10000),
-        50..=54 => rho64(n, 2, 20000),
-        55.. => rho64(n, 2, 60000),
+        0..=34 => rho64(n, 1, 500)
+            .or_else(|| rho64(n, 2, 500))
+            .or_else(|| rho64(n, 3, 500)),
+        35..=40 => rho64(n, 1, 2048)
+            .or_else(|| rho64(n, 2, 2048))
+            .or_else(|| rho64(n, 3, 2048)),
+        41..=45 => rho64(n, 1, 4096).or_else(|| rho64(n, 2, 4096)),
+        46..=49 => rho64(n, 1, 8192).or_else(|| rho64(n, 2, 8192)),
+        50..=54 => rho64(n, 1, 16384).or_else(|| rho64(n, 2, 16384)),
+        55.. => rho64(n, 1, 32768).or_else(|| rho64(n, 2, 32768)),
     }
 }
 
-pub fn rho64(n: u64, seed: u64, iters: u64) -> Option<(u64, u64)> {
+// Run Pollard's rho algorithm.
+//
+// Due to the structure of Brent's cycle finding algorithm,
+// iters should be slightly less than a power of 2 (interval [1.5*2^k, 2^k])
+#[doc(hidden)]
+pub fn rho64(n: u64, c: u64, iters: u64) -> Option<(u64, u64)> {
     let ninv = mg_2adic_inv(n);
-    // Perform x => x^2 + 1 on the Montgomery representation
-    // So this is actually: xR => x^2 R + 1 where R=2^64.
+    // Perform x => x^2 + c on the Montgomery representation
+    // So this is actually: xR => x^2 R + c where R=2^64.
+    //
+    // The seed is always 2.
     //
     // Invariants:
     // x1 = f^e1(seed) and x2=f^e2(seed)
     // 3/2 e1 <= e2 <= 2 e1 - 1
-    let (mut x1, mut x2) = (seed, seed);
+    let (mut x1, mut x2) = (2_u64, 2_u64);
     let mut prod = 1;
     let mut next_interval_start = 0;
     let mut next_interval_end = 1;
     for e2 in 1..iters {
         x2 = mg_mul(n, ninv, x2, x2);
-        x2 += 1; // we tolerate x2==n
+        x2 += c; // we tolerate x2==n (it will be absorbed by next mg_mul)
         if e2 < next_interval_start {
             continue;
         }
@@ -103,22 +113,23 @@ pub fn rho(n: &Uint, verbosity: Verbosity) -> Option<(Vec<Uint>, Uint)> {
     let size = n.bits();
     let n0 = n.digits()[0];
     let iters = match size {
-        0..=24 => 100,
-        25..=32 => 500,
-        33..=48 => 2000,
-        49..=56 => 20000,
-        57..=64 => 60000,
+        0..=24 => 128,
+        25..=32 => 512,
+        33..=40 => 2048,
+        41..=48 => 8192,
+        49..=56 => 16384,
+        57..=60 => 32768,
+        61..=64 => 65536,
         // Skip multiprecision inputs: factors will already be found
         // by P-1 and ECM. Even if Pollard rho is quick, it is redundant
         // with other fast methods.
         _ => return None,
     };
-    // Use a varying seed to avoid redundancy.
-    let seed = (n0 & 31) + 1;
-    let (p, q) = rho64(n0, seed, iters)?;
+    // Use 2 functions to avoid large cycles.
+    let (p, q) = rho64(n0, 1, iters).or_else(|| rho64(n0, 2, iters))?;
     if verbosity >= Verbosity::Info {
         let ms = start.elapsed().as_secs_f64() * 1000.0;
-        eprintln!("Found factor {p} with Pollard rho (seed={seed} iters={iters}) in {ms:.1}ms");
+        eprintln!("Found factor {p} with Pollard rho (iters=2x{iters}) in {ms:.1}ms");
     }
     Some((vec![p.into()], q.into()))
 }
@@ -179,7 +190,7 @@ fn test_rho_basic() {
     ];
     'nextn: for &n in ns {
         for budget in [500, 1000, 1500, 2000, 4000, 7000, 10000, 20000] {
-            if let Some((p, q)) = rho64(n, 2, budget) {
+            if let Some((p, q)) = rho64(n, 1, budget) {
                 eprintln!("factored {n} with budget {budget} => {p}*{q}");
                 assert_eq!(p * q, n);
                 continue 'nextn;
@@ -187,6 +198,17 @@ fn test_rho_basic() {
         }
         panic!("failed to factor {n}");
     }
+
+    // p=409891 has an usually long cycle (it requires 54724 iterations).
+    let n = 409891 * 69890423;
+    for budget in [500, 1000, 1500, 2000, 4000, 7000, 10000, 20000, 50000] {
+        assert!(rho64(n, 1, budget).is_none());
+    }
+    let (p, q) = rho64(n, 1, 54725).unwrap();
+    assert_eq!(p * q, n);
+    // But another function will work.
+    let (p, q) = rho64(n, 2, 1000).unwrap();
+    assert_eq!(p * q, n);
 }
 
 #[test]
@@ -213,11 +235,11 @@ fn test_rho_random() {
 
         let size = 2 * bits;
         let total = samples.len();
-        for budget in [500, 1000, 2000, 5000, 10000, 20000, 40000, 60000] {
+        for budget in [512, 1024, 2000, 4000, 8000, 16000, 32000, 65000] {
             let mut ok = 0;
             let start = std::time::Instant::now();
             for &n in &samples {
-                if let Some((x, y)) = rho64(n, 2, budget) {
+                if let Some((x, y)) = rho64(n, 1, budget) {
                     assert_eq!(x * y, n);
                     ok += 1;
                 }
@@ -230,15 +252,156 @@ fn test_rho_random() {
             ok = 0;
             let start = std::time::Instant::now();
             for &n in &samples {
-                if let Some((x, y)) = rho64(n, 2, budget / 2).or_else(|| rho64(n, 3, budget / 2)) {
+                if let Some((x, y)) = rho64(n, 1, budget / 2).or_else(|| rho64(n, 2, budget / 2)) {
                     assert_eq!(x * y, n);
                     ok += 1;
                 }
             }
             let elapsed = start.elapsed().as_secs_f64() * 1000.;
             eprintln!(
-                "{size} bits, budget={budget}(2 half) factored {ok}/{total} semiprimes in {elapsed:.2}ms"
+                "{size} bits, budget={budget} (2 polys) factored {ok}/{total} semiprimes in {elapsed:.2}ms"
             );
+
+            ok = 0;
+            let start = std::time::Instant::now();
+            for &n in &samples {
+                if let Some((x, y)) = rho64(n, 1, budget / 3)
+                    .or_else(|| rho64(n, 2, budget / 3))
+                    .or_else(|| rho64(n, 3, budget / 3))
+                {
+                    assert_eq!(x * y, n);
+                    ok += 1;
+                }
+            }
+            let elapsed = start.elapsed().as_secs_f64() * 1000.;
+            eprintln!(
+                "{size} bits, budget={budget} (3 polys) factored {ok}/{total} semiprimes in {elapsed:.2}ms"
+            );
+        }
+    }
+}
+
+#[test]
+#[cfg(testlong)]
+fn test_rho_allprimes() {
+    // Test Brent cycle finding convergence speed
+    // for all primes below 2^29. This takes about 1 hour.
+
+    // A tiny 32-bit implementation of rho algorithm.
+    // For a prime modulus, the GCD step is not necessary.
+    fn inv32(n: u32) -> u32 {
+        let mut x = 1u32;
+        loop {
+            let rem = n.wrapping_mul(x) - 1;
+            if rem == 0 {
+                break;
+            }
+            x += 1 << rem.trailing_zeros();
+        }
+        assert!(n.wrapping_mul(x) == 1);
+        1 + !x
+    }
+    // Function x^2 + c using Montgomery modular multiplication.
+    fn f(p: u32, pinv: u32, x: u32, c: u32) -> u32 {
+        let xx = x as u64 * x as u64;
+        let xred = if xx as u32 == 0 {
+            (xx >> 32) as u32
+        } else {
+            let m = (xx as u32).wrapping_mul(pinv);
+            let mn = m as u64 * p as u64;
+            (xx >> 32) as u32 + (mn >> 32) as u32 + 1
+        };
+        let mut res = xred + c;
+        while res >= p {
+            res -= p;
+        }
+        res
+    }
+    fn rho(p: u32, c: u32) -> u32 {
+        // The seed is always 2 but we vary c=1,2,3
+        let pinv = inv32(p);
+        // p * pinv = 2^32 rinv - 1
+        let rinv = ((p as u64 * pinv as u64 + 1) >> 32) as u32;
+        // Replicate the 64-bit variant using 32-bit arithmetic (R=2^32)
+        // x0=seed, x R^2 => x^2 R^2 + c
+        // becomes:
+        // y0=seed/R, y R => y^2 R + c/R
+        let seed = ((2 * rinv as u64) % p as u64) as u32;
+        let c = ((c as u64 * rinv as u64) % p as u64) as u32;
+        let (mut x1, mut x2) = (seed, seed);
+        let mut next_interval_start = 0;
+        let mut next_interval_end = 1;
+        let mut e2 = 0;
+        loop {
+            e2 += 1;
+            x2 = f(p, pinv, x2, c);
+            if e2 < next_interval_start {
+                continue;
+            }
+            if x2 == x1 {
+                return e2;
+            }
+            if e2 == next_interval_end {
+                x1 = x2;
+                let pow2k = e2 + 1;
+                next_interval_start = pow2k + pow2k / 2;
+                next_interval_end = 2 * pow2k - 1;
+            }
+        }
+    }
+    // This is also the result of 64-bit rho with seed 2
+    // and x => mg_mul(x,x)+1
+    assert_eq!(rho(2043251411, 1), 129832);
+
+    use crate::fbase;
+    let mut s = fbase::PrimeSieve::new();
+    let mut done = 0;
+    let start = std::time::Instant::now();
+    loop {
+        let b = s.next();
+        if b.is_empty() || b[0] >= 1 << 29 {
+            break;
+        }
+        let mut avgrho = 0;
+        let mut bdone = 0;
+        for &p in b.iter() {
+            if p < 1000 {
+                continue;
+            }
+            let r = rho(p, 1) as u64;
+            bdone += 1;
+            avgrho += r;
+            // Display remarkable primes: x²+1 and x²+2 and x²+3 have large cycles.
+            // In this case they cannot simultaneously be very large (more than sqrt(40p))
+            // These primes are exceptionally unlucky (they need about 2^k + 2^(k-1) iterations
+            // for each polynomial)
+            // p=3575609 rho(c=1)=12377 rho(c=2)=12807 rho(c=3)=12764
+            // p=40726549 rho(c=1)=50577 rho(c=2)=49608 rho(c=3)=49417
+            // p=43789153 rho(c=1)=49207 rho(c=2)=53740 rho(c=3)=49207
+            // p=173743873 rho(c=1)=100320 rho(c=2)=100786 rho(c=3)=100504
+            // p=187522513 rho(c=1)=106808 rho(c=2)=103979 rho(c=3)=106669
+            if r * r > 30 * p as u64 {
+                let r2 = rho(p, 2) as u64;
+                let r3 = rho(p, 3) as u64;
+                let p = p as u64;
+                if r2 * r2 > 30 * p && r3 * r3 > 30 * p {
+                    eprintln!("Large cycles p={p} rho(c=1)={r} rho(c=2)={r2} rho(c=3)={r3}");
+                    if p < 25_000_000 {
+                        assert!(r * r < 45 * p || r2 * r2 < 45 * p || r3 * r3 < 45 * p);
+                    } else {
+                        assert!(r * r < 60 * p || r2 * r2 < 60 * p || r3 * r3 < 60 * p);
+                    }
+                }
+            }
+        }
+        done += b.len();
+        // Average cycle size should be bounded by theoretical limits.
+        let avg = avgrho / bdone;
+        let maxp = b[b.len() - 1];
+        assert!(avg * avg <= 7 * maxp as u64);
+        if done % 100 == 0 {
+            let elapsed = start.elapsed().as_secs_f64();
+            eprintln!("processed {done} primes until {maxp} in {elapsed:.3}s (avg {avg})");
         }
     }
 }
