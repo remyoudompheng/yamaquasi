@@ -55,11 +55,8 @@ fn main() {
         assert!(&pq == &[p, q] || &pq == &[q, p]);
         i += 1;
         let elapsed = t0.elapsed().as_secs_f64();
-        eprintln!(
-            "Processed {i} numbers in {:.3}s (average {:.3}s)",
-            elapsed,
-            elapsed / (i as f64)
-        );
+        let avg = elapsed / (i as f64) * 1000.;
+        eprintln!("Processed {i} numbers in {elapsed:.3}s (average {avg:.3}ms)");
     }
 }
 

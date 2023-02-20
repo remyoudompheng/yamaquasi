@@ -11,7 +11,9 @@
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::RwLock;
 
-use crate::arith::{isqrt, Num};
+use bnum::cast::CastFrom;
+
+use crate::arith::{isqrt, Num, I256};
 use crate::fbase::{self, FBase, Prime};
 use crate::params::{self, large_prime_factor, BLOCK_SIZE};
 use crate::relations::{self, Relation, RelationSet};
@@ -341,7 +343,7 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
         };
         let candidate: Int = x * x - Int::from_bits(*n);
         let Some(((p, q), factors)) = fbase::cofactor(
-            s.fbase, &candidate, &facs,
+            s.fbase, &I256::cast_from(candidate), &facs,
             maxlarge, max_cofactor)
             else { continue };
         let pq = if q > 1 { Some((p, q)) } else { None };

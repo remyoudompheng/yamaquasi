@@ -713,9 +713,11 @@ fn test_sieve_block() {
     // [314, 957, 1779, 2587, 5882, 7121, 13468, 16323, 22144, 23176, 32407]
     // sage: [((r+i)**2-n).bit_length() for i, x in enumerate(cofs) if x == 1]
     // [73, 75, 76, 76, 78, 78, 79, 79, 79, 80, 80]
+    use crate::arith::I256;
     use crate::fbase;
     use crate::qsieve;
     use crate::{Int, Uint};
+    use bnum::cast::CastFrom;
     use std::str::FromStr;
 
     let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
@@ -733,7 +735,8 @@ fn test_sieve_block() {
     for (i, facs) in idxs.into_iter().zip(facss) {
         let ii = Uint::from(i as u64);
         let x = Int::from_bits((nsqrt + ii) * (nsqrt + ii) - n);
-        let Some(((p, q), _)) = fbase::cofactor(&fb, &x, &facs[..], 1_000_000, 1_000_000)
+        assert!(x.abs().bits() < 255);
+        let Some(((p, q), _)) = fbase::cofactor(&fb, &I256::cast_from(x), &facs[..], 1_000_000, 1_000_000)
             else { continue };
         if p == 1 && q == 1 {
             res.push(i);

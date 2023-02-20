@@ -7,7 +7,7 @@
 //!
 //! where pi = -1 or a prime in the factor base
 
-use std::cmp::min;
+use std::cmp::{max, min};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::default::Default;
 
@@ -572,6 +572,14 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: Verbosity) -> Vec<Uint> 
         divisors.push(p);
         divisors.push(q);
         nontrivial += 1;
+        // Stop combining relations in the common case where there
+        // are only 2 prime factors. If there are more factors, it means they
+        // were not found before, meaning that the number is quite large
+        // so this additional cost is acceptable, because we will avoid redundant
+        // computations.
+        if crate::pseudoprime(p) && crate::pseudoprime(q) {
+            break;
+        }
     }
     divisors.sort_unstable();
     divisors.dedup();
@@ -664,8 +672,13 @@ struct PackedRelation {
 
 impl PackedRelation {
     fn pack(r: Relation) -> PackedRelation {
-        let &[x0, x1, x2, x3, x4, x5, x6, x7] = U512::cast_from(r.x).digits();
-        let mut ints = vec![x0, x1, x2, x3, x4, x5, x6, x7, r.cofactor, r.cyclelen];
+        // Capacity assumes that no more than 4 factors have exponent > 1.
+        let mut ints = Vec::with_capacity(8 + 2 + r.factors.len() + 4);
+        // Append 8 words from r.x (assumed to be less than 512 bits)
+        // and cofactor, cyclelen.
+        ints.extend_from_slice(&r.x.digits()[..8]);
+        ints.push(r.cofactor);
+        ints.push(r.cyclelen);
         for &(p, k) in &r.factors {
             // encode each factor as a sequence of integers
             // -1 encodes to 0
@@ -688,10 +701,10 @@ impl PackedRelation {
                 }
             }
         }
-        let mut blob = vec![];
+        let mut blob = Vec::with_capacity(max(64, ints.len() * 2));
         for n in ints {
             // encode as leb128
-            let length = std::cmp::max(1, (64 - u64::leading_zeros(n) + 6) / 7);
+            let length = max(1, (64 - u64::leading_zeros(n) + 6) / 7);
             for j in 0..length {
                 let mut byte = (n >> (7 * (length - 1 - j))) & 0x7f;
                 if j > 0 {

@@ -14,7 +14,7 @@ use bnum::cast::CastFrom;
 use num_traits::One;
 use rayon::prelude::*;
 
-use crate::arith::{self, isqrt, pow_mod, Num, U256};
+use crate::arith::{self, isqrt, pow_mod, Num, I256, U256};
 use crate::arith_gcd::inv_mod;
 use crate::fbase::{self, FBase};
 use crate::params::{self, BLOCK_SIZE};
@@ -546,7 +546,7 @@ fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) {
         let candidate: Int = x * x - Int::from_bits(*n);
         let cabs = (candidate.abs().to_bits() * d2inv) % n;
         let Some(((p, q), mut factors)) = fbase::cofactor(
-            s.fbase, &Int::from_bits(cabs), &facs,
+            s.fbase, &I256::cast_from(cabs), &facs,
             maxlarge, max_cofactor)
             else { continue };
         let pq = if q > 1 { Some((p, q)) } else { None };

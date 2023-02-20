@@ -12,7 +12,7 @@ pub use num_integer::sqrt as isqrt;
 use num_integer::{Integer, Roots};
 use num_traits::{One, Pow, ToPrimitive};
 
-pub use bnum::types::{I1024, U1024, U256, U512};
+pub use bnum::types::{I1024, I256, U1024, U256, U512};
 use bnum::{BInt, BUint};
 
 /// Trait for types that can be used for integer-like arithmetic.

@@ -7,10 +7,10 @@
 
 use std::cmp::max;
 
-use crate::arith::{self, Num};
+use crate::arith::{self, Num, I256};
 use crate::arith_montgomery;
 use crate::pollard_rho;
-use crate::{Int, Uint, UnexpectedFactor};
+use crate::{Uint, UnexpectedFactor};
 
 /// A factor base consisting of 24-bit primes related to an input number N,
 /// along with useful precomputed data.
@@ -360,13 +360,15 @@ pub fn try_factor64(n: u64) -> Option<(u64, u64)> {
     crate::squfof::squfof(n)
 }
 
-// Performs trial division of x by fbase[idx] for prime indices in facs.
-// Returns the remaining cofactor as a product pq and a list of factors with exponents.
-// If the cofactor is too large, return None.
+/// Performs trial division of x by fbase[idx] for prime indices in facs.
+/// Returns the remaining cofactor as a product pq and a list of factors with exponents.
+/// If the cofactor is too large, return None.
+///
+/// Smooth candidates during quadratic sieve never exceed 256 bits.
 #[inline]
 pub fn cofactor(
     fbase: &FBase,
-    x: &Int,
+    x: &I256,
     facs: &[usize],
     maxlarge: u64,
     max_cofactor: u64,

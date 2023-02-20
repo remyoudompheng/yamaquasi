@@ -35,7 +35,7 @@ use bnum::cast::CastFrom;
 use num_traits::One;
 use rayon::prelude::*;
 
-use crate::arith::{self, Num, U256};
+use crate::arith::{self, Num, I256, U256};
 use crate::fbase::{self, FBase, Prime};
 use crate::params::{self, BLOCK_SIZE};
 use crate::relations::{self, Relation, RelationSet};
@@ -836,9 +836,9 @@ enum PolyType {
 #[derive(Debug)]
 pub struct Poly {
     kind: PolyType,
-    a: Uint,
-    b: Uint,
-    c: Int,
+    a: I256,
+    b: I256,
+    c: I256,
     // Rounded root of the polynomial
     root: u32,
     // Precomputed roots
@@ -853,20 +853,23 @@ impl Poly {
     // y^2 = A P(x) mod n
     // For type 1, y = Ax + B
     // For type 2, y = (Ax + B/2)
-    fn eval(&self, x: i64) -> (Int, Int) {
-        let x = Int::from(x);
+    //
+    // v is always small (candidate to be smooth)
+    // y can be large (due to halving modulo n)
+    fn eval(&self, x: i64) -> (I256, Int) {
+        let x = I256::from(x);
         if self.kind == PolyType::Type1 {
             // Evaluate polynomial Ax^2 + 2Bx+ C
-            let ax_b = Int::from_bits(self.a) * x + Int::from_bits(self.b);
-            let v = (ax_b + Int::from_bits(self.b)) * x + self.c;
-            (v, ax_b)
+            let ax_b = self.a * x + self.b;
+            let v = (ax_b + self.b) * x + self.c;
+            (v, Int::cast_from(ax_b))
         } else {
             // Evaluate polynomial Ax^2 + Bx+ C
-            let ax = Int::from_bits(self.a) * x;
-            let v = (ax + Int::from_bits(self.b)) * x + self.c;
-            // Build ax + (n-b)//2
-            let b_half = (self.b + self.n) >> 1;
-            let y = ax + Int::from_bits(b_half);
+            let ax = self.a * x;
+            let v = (ax + self.b) * x + self.c;
+            // Build ax + (n+b)//2 (b is odd)
+            let b_half = (Int::cast_from(self.b) + Int::cast_from(self.n)) >> 1;
+            let y = Int::cast_from(ax) + b_half;
             (v, y)
         }
     }
@@ -1022,13 +1025,19 @@ pub fn make_polynomial(s: &SieveSIQS, a: &A, pol_idx: usize) -> Poly {
         );
     }
 
-    // n has at most 512 bits, and b < sqrt(n)
-    assert!(b.bits() < 256);
+    // All polynomial values are assumed to fit in 256 bits:
+    // A has the size of sqrt(n)/M
+    // B has the size of A and is always positive
+    // C has the size of sqrt(n)M
+    let mlog = usize::BITS - usize::leading_zeros(s.interval_size);
+    assert!(a.a.bits() + 2 * mlog < 255);
+    assert!(b.bits() + mlog < 255);
+    assert!(c.abs().bits() < 255);
     Poly {
         kind: polytype,
-        a: a.a,
-        b,
-        c,
+        a: I256::cast_from(a.a),
+        b: I256::cast_from(b),
+        c: I256::cast_from(c),
         root: root as u32,
         r1p,
         r2p,
@@ -1178,7 +1187,10 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
                 factors.push((f.p as i64, 1));
             }
         }
-        let x = y.abs().to_bits() % n;
+        let mut x = y.abs().to_bits();
+        if &x > n {
+            x %= n; // should not happen?
+        }
         if s.prefs.verbose(Verbosity::Debug) {
             eprintln!("x={x} smooth {v} cofactor {cofactor}");
         }
@@ -1310,19 +1322,22 @@ fn test_poly_prepare() {
             // Generate and check each polynomial.
             let pol = make_polynomial(&s, &a, idx);
             let (pa, pb) = (pol.a, pol.b);
+            let pa = Int::cast_from(pa);
+            let pb = Int::cast_from(pb);
             // B is a square root of N modulo A.
-            assert_eq!((pb * pb) % pa, n % pa);
+            assert_eq!((pb * pb) % pa, Int::from_bits(n) % pa);
             // Check that (Ax+B)^2 - n = A(Ax^2+2Bx+C)
             for x in [1u64, 100, 50000] {
                 let (v, y) = pol.eval(x as i64);
-                let u = y * y;
+                let u = Int::cast_from(y) * Int::cast_from(y);
+                let v = Int::cast_from(v);
                 if pol.kind == PolyType::Type1 {
-                    assert_eq!(u, Int::from_bits(pa) * v);
+                    assert_eq!(u, pa * v);
                 } else {
                     // Type2: (Ax+B/2)^2 - n = A(Ax^2 + Bx + (B^2-4n)/4A)
                     assert_eq!(
-                        u % Int::cast_from(n),
-                        (Int::from_bits(pa) * v).rem_euclid(Int::cast_from(n))
+                        u % Int::from_bits(n),
+                        (pa * v).rem_euclid(Int::from_bits(n))
                     );
                 }
             }
