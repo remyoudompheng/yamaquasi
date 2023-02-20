@@ -569,13 +569,17 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     // SIQS with a small number: A needs 3 factors.
     // Used to fail due to selecting 2 factors or too many As.
     eprintln!("=> SIQS 60-75 bits");
-    let n = Uint::from_str("1231055495188530589")?;
+    let n = Uint::from_digit(1231055495188530589);
     factor(n, Algo::Siqs, &Preferences::default());
-    let n = Uint::from_str("1939847356913363213")?;
+    let n = Uint::from_digit(1939847356913363213);
     factor(n, Algo::Siqs, &Preferences::default());
-    let n = Uint::from_str("9173516735614600627")?;
+    let n = Uint::from_digit(9173516735614600627);
     factor(n, Algo::Siqs, &Preferences::default());
     let n = Uint::from_str("10847815350861015899809")?;
+    factor(n, Algo::Siqs, &Preferences::default());
+
+    // SIQS does not generate many relations (not #fbase + 64) but still enough.
+    let n = Uint::from_digit(4954670127929);
     factor(n, Algo::Siqs, &Preferences::default());
 
     // This number tends to generate a very sparse factor base:
