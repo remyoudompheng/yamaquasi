@@ -539,6 +539,12 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     let n = Uint::from_str("3584265404832042753919690039")?;
     factor(n, Algo::Siqs, &Preferences::default());
 
+    // When n has a small factor, it can appear in relations, creating pairs
+    // (x,y) such that x=±y but the factorization (x-y)(x+y) is still interesting.
+    eprintln!("=> small factor 5047");
+    let n = Uint::from_str("9416412050459436444341141867167")?;
+    factor(n, Algo::Siqs, &Preferences::default());
+
     // perfect square (17819845476047^2)
     eprintln!("=> test square");
     let n = Uint::from_str("317546892790192732050746209")?;

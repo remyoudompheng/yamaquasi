@@ -334,7 +334,9 @@ impl RelationSet {
             let rr = self.combine(r, &r0);
             if rr.factors.iter().all(|(_, exp)| exp % 2 == 0) {
                 // FIXME: Poor choice of A's can lead to duplicate relations.
-                eprintln!("FIXME: ignoring trivial relation");
+                if crate::DEBUG {
+                    eprintln!("FIXME: ignoring trivial relation");
+                }
                 return false;
             }
             debug_assert!(
@@ -564,7 +566,7 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: Verbosity) -> Vec<Uint> 
         let (a, b) = combine(&zn, &xs, &factors);
         assert_eq!((a * a) % n, (b * b) % n);
         if verbose >= Verbosity::Debug {
-            eprintln!("Same square mod N: {} {}", a, b);
+            eprintln!("Same square mod N: {} {}", a, b);
         }
         let Some((p, q)) = try_factor(n, a, b) else { continue };
         divisors.push(p);
@@ -626,25 +628,27 @@ pub fn combine(zn: &ZmodN, xs: &[Uint], factors: &[(i64, u64)]) -> (Uint, Uint) 
 
 /// Using a^2 = b^2 mod n, try to factor n
 pub fn try_factor(n: &Uint, a: Uint, b: Uint) -> Option<(Uint, Uint)> {
-    if a == b || a + b == *n {
-        // Trivial square relation
-        return None;
+    // Note that when a = ±b we can still obtain a factor
+    // if a and b actually share a factor with n.
+    if a + b != *n {
+        let gcd = Integer::gcd(&Int::from_bits(*n), &Int::from_bits(a + b));
+        if gcd > Int::one() {
+            let p = gcd.to_bits();
+            let q = n / p;
+            assert!(p * q == *n);
+            assert!(p.bits() > 1 && q.bits() > 1);
+            return Some((p, q));
+        }
     }
-    let gcd = Integer::gcd(&Int::from_bits(*n), &Int::from_bits(a + b));
-    if gcd > Int::one() {
-        let p = gcd.to_bits();
-        let q = n / p;
-        assert!(p * q == *n);
-        assert!(p.bits() > 1 && q.bits() > 1);
-        return Some((p, q));
-    }
-    let gcd = Integer::gcd(&Int::from_bits(*n), &Int::from_bits(n + a - b));
-    if gcd > Int::one() {
-        let p = gcd.to_bits();
-        let q = n / p;
-        assert!(p * q == *n);
-        assert!(p.bits() > 1 && q.bits() > 1);
-        return Some((p, q));
+    if a != b {
+        let gcd = Integer::gcd(&Int::from_bits(*n), &Int::from_bits(n + a - b));
+        if gcd > Int::one() {
+            let p = gcd.to_bits();
+            let q = n / p;
+            assert!(p * q == *n);
+            assert!(p.bits() > 1 && q.bits() > 1);
+            return Some((p, q));
+        }
     }
     None
 }
