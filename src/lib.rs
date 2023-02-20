@@ -589,6 +589,10 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     // Factor base gap between 47 and 97:
     let n = Uint::from_str("232159658536337208497609")?;
     factor(n, Algo::Siqs, &Preferences::default());
+    // Large gap between 127 and 211: selection of A was stuck
+    // because only 1 candidate is found.
+    let n = Uint::from_str("774227958313673793204983642345821")?;
+    factor(n, Algo::Siqs, &Preferences::default());
 
     // SIQS with 90-100 bit numbers: A needs 4 factors (5 is too many)
     let n = Uint::from_str("13819541643362998561057402169")?;

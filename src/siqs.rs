@@ -27,6 +27,7 @@
 //! If N=1 mod 8 all polynomial values will be even.
 
 use std::cmp::max;
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::RwLock;
 
@@ -620,6 +621,7 @@ pub fn select_a(f: &Factors, want: usize, v: Verbosity) -> Vec<Uint> {
     // We are going to select ~2^W best products of W primes among 2W
 
     let mut div = a_tolerance_divisor(f.n);
+    assert!(div >= 3);
     let mut amin = f.target - f.target / div as u64;
     let mut amax = f.target + f.target / div as u64;
 
@@ -665,7 +667,7 @@ pub fn select_a(f: &Factors, want: usize, v: Verbosity) -> Vec<Uint> {
         rng ^= rng << 5;
         rng % fb as u64
     };
-    let mut candidates = vec![];
+    let mut candidates = BTreeSet::new();
     let mut iters = 0;
     while iters < 1000 * want || candidates.len() < want {
         iters += 1;
@@ -699,17 +701,18 @@ pub fn select_a(f: &Factors, want: usize, v: Verbosity) -> Vec<Uint> {
             .unwrap();
         product *= U256::from(f.factors[idx].p);
         if amin < product && product < amax {
-            candidates.push(Uint::cast_from(product));
+            candidates.insert(Uint::cast_from(product));
         }
         if candidates.len() > 2 * want && iters % 10 == 0 {
+            let mut candidates = Vec::from_iter(candidates.into_iter());
             candidates.sort_by_key(|&c| U256::cast_from(c).abs_diff(f.target));
-            candidates.dedup();
             candidates.truncate(want);
             candidates.sort();
             return candidates;
         }
     }
-    // Should not happen? return what we found so far
+    // Should not happen? return what we found so far including farther values.
+    let mut candidates = Vec::from_iter(candidates.into_iter());
     candidates.sort_by_key(|&c| U256::cast_from(c).abs_diff(f.target));
     candidates.dedup();
     if candidates.len() > want {
