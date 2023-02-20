@@ -66,8 +66,8 @@ pub fn siqs(
 
     // Generate all values of A now.
     let nfacs = nfactors(n) as usize;
-    let factors = select_siqs_factors(&fbase, n, nfacs, mm as usize);
-    let a_ints = select_a(&factors, a_value_count(n));
+    let factors = select_siqs_factors(&fbase, n, nfacs, mm as usize, prefs.verbosity);
+    let a_ints = select_a(&factors, a_value_count(n), prefs.verbosity);
     let polys_per_a = 1 << (nfacs - 1);
     if prefs.verbose(Verbosity::Verbose) {
         eprintln!(
@@ -256,8 +256,8 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
         if blks > 0 {
             // FIXME: functions have their own parameters.
             let mm = BLOCK_SIZE * (blks as usize);
-            let factors = select_siqs_factors(&fbase0, n, nfacs, mm);
-            let a_ints = select_a(&factors, a_value_count(n));
+            let factors = select_siqs_factors(&fbase0, n, nfacs, mm, prefs.verbosity);
+            let a_ints = select_a(&factors, a_value_count(n), prefs.verbosity);
             let a0 = a_ints[0];
             let polys_per_a = 1 << (nfacs - 1);
             eprintln!("Test set M={}k A={} npolys={}", mm / 2048, a0, polys_per_a);
@@ -500,7 +500,13 @@ fn polytype(n: &Uint) -> PolyType {
 /// It is enough to select about twice the number of expected factors in
 /// A, because the number of combinations is large enough to generate
 /// values close to the target.
-pub fn select_siqs_factors<'a>(fb: &'a FBase, n: &'a Uint, nfacs: usize, mm: usize) -> Factors<'a> {
+pub fn select_siqs_factors<'a>(
+    fb: &'a FBase,
+    n: &'a Uint,
+    nfacs: usize,
+    mm: usize,
+    v: Verbosity,
+) -> Factors<'a> {
     // For interval [-M,M] the target is sqrt(2N) / M, see [Pomerance].
     // Note that if N=1 mod 4, the target can be sqrt(N/2)/M
     // giving smaller numbers.
@@ -519,7 +525,9 @@ pub fn select_siqs_factors<'a>(fb: &'a FBase, n: &'a Uint, nfacs: usize, mm: usi
         .primes
         .partition_point(|&p| Uint::from(p as u64).pow(nfacs as u32) < target);
     let selected_idx = if idx + nfacs >= fb.len() {
-        eprintln!("WARNING: suboptimal choice of A factors");
+        if v >= Verbosity::Info {
+            eprintln!("WARNING: suboptimal choice of A factors");
+        }
         fb.len() - 2 * nfacs..fb.len()
     } else if idx > 4 * nfacs && idx + 4 * nfacs < fb.len() {
         idx - 2 * nfacs..idx + 2 * nfacs
@@ -604,7 +612,7 @@ fn a_quality(a_s: &[Uint]) -> f64 {
 /// distinct elements of the factor base.
 /// The factor base is assumed to be an array of primes with similar
 /// sizes.
-pub fn select_a(f: &Factors, want: usize) -> Vec<Uint> {
+pub fn select_a(f: &Factors, want: usize, v: Verbosity) -> Vec<Uint> {
     // Sample deterministically products of W primes
     // closest to target and select best candidates.
     // We usually don't need more than 1000 values.
@@ -662,7 +670,9 @@ pub fn select_a(f: &Factors, want: usize) -> Vec<Uint> {
     while iters < 1000 * want || candidates.len() < want {
         iters += 1;
         if iters % (100 * want) == 0 && candidates.len() < want {
-            eprintln!("WARNING: unable to find suitable A, increasing tolerance");
+            if v >= Verbosity::Info {
+                eprintln!("WARNING: unable to find suitable A, increasing tolerance");
+            }
             div = max(div, 1) - 1;
             if div == 0 {
                 amin = f.target >> 2;
@@ -1213,10 +1223,10 @@ fn test_poly_a() {
         let fb_size = params::factor_base_size(n);
         let fb = fbase::FBase::new(*n, fb_size);
 
-        let facs = select_siqs_factors(&fb, n, nfacs as usize, 256 << 10);
+        let facs = select_siqs_factors(&fb, n, nfacs as usize, 256 << 10, Verbosity::Info);
         let target = Uint::cast_from(facs.target);
 
-        let a_vals = select_a(&facs, want);
+        let a_vals = select_a(&facs, want, Verbosity::Info);
         let _10000 = Uint::from(10000u64);
         let a_first = a_vals.first().unwrap();
         let a_last = a_vals.last().unwrap();
@@ -1273,9 +1283,9 @@ fn test_poly_prepare() {
     let s = SieveSIQS::new(&n, &fb, fb.bound() as u64, false, mm, &prefs);
     // Prepare A values
     // Only test 10 A values and 35 polynomials per A.
-    let f = select_siqs_factors(&fb, &n, 9, mm);
+    let f = select_siqs_factors(&fb, &n, 9, mm, prefs.verbosity);
     let start_offset = -(mm as i64) / 2;
-    let a_ints = select_a(&f, 10);
+    let a_ints = select_a(&f, 10, prefs.verbosity);
     for a_int in &a_ints {
         let a = prepare_a(&f, a_int, &fb, start_offset);
         // Check CRT coefficients.
