@@ -135,16 +135,16 @@ impl RelationSet {
     /// Combine 2 relations sharing a cofactor.
     pub fn combine(&self, r1: &Relation, r2: &Relation) -> Relation {
         // Combine factors
-        let mut exps = HashMap::<i64, u64>::new();
-        for (p, k) in &r1.factors {
-            let e = exps.get(p).unwrap_or(&0);
-            exps.insert(*p, e + k);
+        let mut factors = r1.factors.clone();
+        'iter2: for f2 @ &(p, k) in &r2.factors {
+            for f in factors.iter_mut() {
+                if f.0 == p {
+                    f.1 += k;
+                    continue 'iter2;
+                }
+            }
+            factors.push(f2.clone());
         }
-        for (p, k) in &r2.factors {
-            let e = exps.get(p).unwrap_or(&0);
-            exps.insert(*p, e + k);
-        }
-        let mut factors: Vec<_> = exps.into_iter().collect();
         // Combine cofactors
         if r1.cofactor % r2.cofactor == 0 {
             factors.push((r2.cofactor as i64, 2));
@@ -720,7 +720,7 @@ impl PackedRelation {
 
     fn unpack(&self) -> Relation {
         // Decode ULEB128
-        let mut ints = vec![];
+        let mut ints = Vec::with_capacity(max(32, self.blob.len() / 2));
         let mut n = 0;
         for (i, &byte) in self.blob.iter().enumerate() {
             if byte < 0x80 {

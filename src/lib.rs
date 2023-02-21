@@ -565,6 +565,24 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     eprintln!("=> test not squarefree");
     let n = Uint::from_str("496701596915056959994534861")?;
     factor(n, Algo::Auto, &Preferences::default());
+
+    // Basic classical QS sanity check.
+    let n = Uint::from_str("144145963608905891153").unwrap();
+    let fs = factor(n, Algo::Qs, &Preferences::default());
+    assert_eq!(fs[0] * fs[1], n);
+
+    Ok(())
+}
+
+#[test]
+fn test_factor_qs_edgecases() -> Result<(), bnum::errors::ParseIntError> {
+    // Multiplier 1, factor base 2, 3, 7, 11, 13, 23, 43, 71, 97, 139...
+    // has only 16 out of the 48 smallest primes, so the smooth bound
+    // must be high enough to collect more primes.
+    let n = Uint::from_digit(325434172177);
+    let fs = factor(n, Algo::Qs, &Preferences::default());
+    assert_eq!(fs[0] * fs[1], n);
+
     Ok(())
 }
 

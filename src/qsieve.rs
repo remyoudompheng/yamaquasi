@@ -1,8 +1,13 @@
-// Copyright 2022 Rémy Oudompheng. All rights reserved.
+// Copyright 2022, 2023 Rémy Oudompheng. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 //! The classical quadratic sieve (using polynomial (x + Nsqrt)^2 - N).
+//!
+//! Due to its simplicity it can compete with MPQS/SIQS (even faster
+//! than ECM actually) to factor integers between 64 and 100 bits.
+//! However, since it uses a single interval, it cannot find a very
+//! large ratio of smooth numbers.
 //!
 //! Bibliography:
 //! J. Gerver, Factoring Large Numbers with a Quadratic Sieve
@@ -15,12 +20,21 @@ use bnum::cast::CastFrom;
 
 use crate::arith::{isqrt, Num, I256};
 use crate::fbase::{self, FBase, Prime};
-use crate::params::{self, large_prime_factor, BLOCK_SIZE};
+use crate::params::{self, BLOCK_SIZE};
 use crate::relations::{self, Relation, RelationSet};
 use crate::sieve::{Sieve, SievePrime};
 use crate::{Int, Preferences, Uint, Verbosity};
 
 pub fn qsieve(n: Uint, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -> Vec<Relation> {
+    // We cannot use quadratic sieve for numbers above 400 bits
+    // (or at least it is extremely unreasonable and cost days of CPU).
+    // This is so that sqrt(n) * interval size always fits in 256 bits.
+    if n.bits() > 400 {
+        if prefs.verbose(Verbosity::Info) {
+            eprintln!("Number {n} too large for classical quadratic sieve!");
+        }
+        return vec![];
+    }
     let use_double = prefs.use_double.unwrap_or(n.bits() > 200);
 
     // Choose factor base among twice the number of needed primes
@@ -29,14 +43,11 @@ pub fn qsieve(n: Uint, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -
     // Compared to MPQS, classical quadratic sieve uses a single huge interval
     // so resulting numbers (2M sqrt(n)) can be larger by 10-20 bits.
     // Choose factor base size as if n was larger (by a factor O(M^2)).
-    let shift = if n.bits() > 100 {
-        // 160-bit input => 20 bit penalty (interval size 300M-500M)
-        // 180-bit input => 22 bit penalty (interval size 1G-3G)
-        // 200-bit input => 25 bit penalty (interval size 3G-10G)
-        n.bits() / 8
-    } else {
-        0
-    };
+    //
+    // 160-bit input => 20 bit penalty (interval size 300M-500M)
+    // 180-bit input => 22 bit penalty (interval size 1G-3G)
+    // 200-bit input => 25 bit penalty (interval size 3G-10G)
+    let shift = n.bits() / 8;
     let fb = prefs
         .fb_size
         .unwrap_or(params::factor_base_size(&(n << shift)));
@@ -111,13 +122,14 @@ pub fn qsieve(n: Uint, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -
         }
 
         let sieved = s_fwd.offset + s_bck.offset;
-        let do_print = if sieved > (5 << 30) {
-            sieved % (500 << 20) == 0
-        } else if sieved > (500 << 20) {
-            sieved % (50 << 20) == 0
-        } else {
-            sieved % (10 << 20) == 0
-        };
+        let do_print = prefs.verbose(Verbosity::Info)
+            && if sieved > (5 << 30) {
+                sieved % (500 << 20) == 0
+            } else if sieved > (500 << 20) {
+                sieved % (50 << 20) == 0
+            } else {
+                sieved % (10 << 20) == 0
+            };
         let rels = qs.rels.read().unwrap();
         if do_print {
             rels.log_progress(format!("Sieved {}M", sieved >> 20,));
@@ -154,9 +166,31 @@ pub fn qsieve(n: Uint, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -
     rels.into_inner()
 }
 
+/// Large factor multiplier for classical QS.
+pub fn large_prime_factor(n: &Uint) -> u64 {
+    // Allow large cofactors up to FACTOR * largest prime
+    let sz = n.bits() as u64;
+    match sz {
+        // Small inputs have very high smoothness already.
+        // Unlike its multiple polynomial variants, there is no shortage
+        // of numbers to sieve even for very small inputs. So it is best
+        // to avoid the large prime variation completely (to reduce sieve cost).
+        0..=72 => 1,
+        // However, in the case of classical QS, the interval grows very quickly
+        // and if we don't enable the large prime variation, the algorithm
+        // takes longer.
+        // The factor should grow gently to avoid creating a huge amount
+        // of cofactors when input is 72-96 bit large.
+        // (most of the density is below 10B anyway).
+        73.. => sz - 70,
+    }
+}
+
 pub struct SieveQS<'a> {
     n: Uint,
-    nsqrt: Uint,
+    // The polynomial is (nsqrt + x)^2 - n = x^2 + 2 nsqrt x + (nsqrt^2 - n)
+    nsqrt: I256,
+    nsqrt2_minus_n: I256,
     // Precomputed nsqrt_mods modulo the factor base.
     nsqrt_mods: Vec<u32>,
     fbase: &'a FBase,
@@ -180,6 +214,9 @@ impl<'a> SieveQS<'a> {
         } else {
             false
         };
+        let nsqrt2_minus_n = Int::cast_from(nsqrt * nsqrt) - Int::cast_from(n);
+        assert!(nsqrt.bits() < 255);
+        assert!(nsqrt2_minus_n.abs().bits() < 255);
         let nsqrt_mods: Vec<u32> = fbase
             .divs
             .iter()
@@ -188,7 +225,8 @@ impl<'a> SieveQS<'a> {
         // Prepare sieve
         SieveQS {
             n,
-            nsqrt,
+            nsqrt: I256::cast_from(nsqrt),
+            nsqrt2_minus_n: I256::cast_from(nsqrt2_minus_n),
             nsqrt_mods,
             fbase,
             only_odds,
@@ -330,33 +368,40 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
         // We don't want double large prime to reach maxlarge^2
         // See siqs.rs
         maxlarge * maxprime * 2
-    } else {
+    } else if maxlarge > maxprime {
+        // Use the single large prime variation
         maxlarge
+    } else {
+        // Use the plain quadratic sieve (truly smooth values)
+        1
     };
     let magnitude = u64::BITS
         - u64::leading_zeros(std::cmp::max(st.offset.abs() as u64, len as u64))
         + (if s.only_odds { 1 } else { 0 });
     let target = s.n.bits() / 2 + magnitude - max_cofactor.bits();
     assert!(target < 256);
-    let n = &s.n;
     let (idxs, facss) = st.smooths(target as u8, None);
     let maybe_two: i64 = if s.only_odds { 2 } else { 1 };
     for (i, facs) in idxs.into_iter().zip(facss) {
+        // In classical quadratic sieve, the interval size can exceed 2^32.
         let x = if !backward {
-            Int::from_bits(s.nsqrt) + Int::from(maybe_two * (offset + i as i64))
+            maybe_two * (offset + i as i64)
         } else {
-            Int::from_bits(s.nsqrt) - Int::from(maybe_two * (offset + i as i64 + 1))
+            -(maybe_two * (offset + i as i64 + 1))
         };
-        let candidate: Int = x * x - Int::from_bits(*n);
+        let xplus = s.nsqrt + I256::from(x);
+        // Evaluate polynomial (x + nsqrt)^2 - n
+        let candidate =
+            I256::from(x as i128 * x as i128) + I256::from(2 * x) * s.nsqrt + s.nsqrt2_minus_n;
         let Some(((p, q), factors)) = fbase::cofactor(
-            s.fbase, &I256::cast_from(candidate), &facs,
+            s.fbase, &candidate, &facs,
             maxlarge, max_cofactor)
             else { continue };
         let pq = if q > 1 { Some((p, q)) } else { None };
         let cofactor = p * q;
         //println!("i={} smooth {} cofactor {}", i, cabs, cofactor);
         let rel = Relation {
-            x: x.abs().to_bits(),
+            x: Uint::cast_from(xplus.abs()),
             cofactor,
             cyclelen: 1,
             factors,

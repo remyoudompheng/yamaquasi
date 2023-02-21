@@ -5,7 +5,7 @@
 //! Routines related to the quadratic sieve factor base.
 //! This file is common to all variants (QS, MPQS, SIQS).
 
-use std::cmp::max;
+use std::cmp::{max, min};
 
 use crate::arith::{self, Num, I256};
 use crate::arith_montgomery;
@@ -29,7 +29,9 @@ pub struct FBase {
 
 impl FBase {
     pub fn new(n: Uint, size: u32) -> Self {
-        let ps = primes(2 * size);
+        // We may be very unlucky and not get enough primes, because we keep
+        // only those having n as a quadratic residue. So take a few extra primes.
+        let ps = primes(2 * size + 32);
         let mut primes = vec![];
         let mut sqrts = vec![];
         let mut divs = vec![];
@@ -38,7 +40,7 @@ impl FBase {
         let mut prepared = prepare_factor_base(&n, &ps);
         // Align to a multiple of 8.
         // This is required for SIMD code.
-        prepared.truncate(8 * (prepared.len() / 8));
+        prepared.truncate(8 * min(size as usize / 8 + 1, prepared.len() / 8));
         for (p, r, div) in prepared {
             let p = p as u32;
             let l = 32 - u32::leading_zeros(p) as usize;
@@ -146,7 +148,12 @@ const MAX_MULTIPLIER: u32 = 200;
 pub fn select_multiplier(n: Uint) -> (u32, f64) {
     let mut best: u32 = 1;
     let mut best_score = 0.0;
+    // Tabulated Legendre symbol modulo each small primes
     let mut modsquares = [[false; 256]; SMALL_PRIMES.len()];
+    // Precomputed n % p for all small primes p
+    let mut nmodp = [0; SMALL_PRIMES.len()];
+    // Precomputed log(p) / (p-1) (average log of factor p^k)
+    let mut avg_logp = [0.0; SMALL_PRIMES.len()];
     assert!(MAX_MULTIPLIER * MAX_MULTIPLIER < 1 << 16);
     for i in 0..SMALL_PRIMES.len() {
         let p = SMALL_PRIMES[i];
@@ -155,9 +162,16 @@ pub fn select_multiplier(n: Uint) -> (u32, f64) {
             let sq = div.modu16((x * x) as u16);
             modsquares[i][sq as usize] = true;
         }
+        if p == 2 {
+            nmodp[i] = n.low_u64() % 8;
+        } else {
+            nmodp[i] = div.mod_uint(&n);
+        }
+        avg_logp[i] = (p as f64).ln() / (p - 1) as f64;
     }
+    // Using precomputed tables, look for best multiplier.
     for k in 1..MAX_MULTIPLIER {
-        let mag = expected_smooth_magnitude(&(n * Uint::from(k)), &modsquares);
+        let mag = expected_smooth_magnitude(k, &nmodp, &avg_logp, &modsquares);
         // A multiplier k increases the size of P(x) by sqrt(k)
         let mag = (mag - 0.5 * (k as f64).ln()) / std::f64::consts::LN_2;
         if mag > best_score {
@@ -176,12 +190,20 @@ pub fn select_multiplier(n: Uint) -> (u32, f64) {
 /// Formula is corrected for the weight of 2 (1 instead of 2)
 /// and denominator p-1 instead of p to account for prime
 /// powers.
-fn expected_smooth_magnitude(n: &Uint, modsquares: &[[bool; 256]]) -> f64 {
+fn expected_smooth_magnitude(
+    k: u32,
+    nmodp: &[u64],
+    avg_logp: &[f64],
+    modsquares: &[[bool; 256]],
+) -> f64 {
     let mut res: f64 = 0.0;
     for ((pidx, &p), div) in SMALL_PRIMES.iter().enumerate().zip(&SMALL_PRIMES_DIVIDERS) {
-        let np: u64 = div.mod_uint(n);
-        let exp = if p == 2 {
-            match *n % 8u64 {
+        // Compute kn mod p.
+        let np = div.div31.modu31(k * nmodp[pidx] as u32);
+        // Compute the average valuation of p (usually proportional to number of roots)
+        let valp = if p == 2 {
+            // The average valuation of 2 in x^2-n follows special rules:
+            match (k as u64 * nmodp[pidx]) % 8 {
                 // Modulo 8:
                 // n has 4 square roots modulo 8 but also modulo 16, 32 etc.
                 // 3/2 + 1/4 + 1/8 + ... = 2
@@ -202,13 +224,13 @@ fn expected_smooth_magnitude(n: &Uint, modsquares: &[[bool; 256]]) -> f64 {
                 _ => 0.0,
             }
         } else if np == 0 {
-            1.0 / (p - 1) as f64
+            1.0
         } else if modsquares[pidx][np as usize] {
-            2.0 / (p - 1) as f64
+            2.0
         } else {
             0.0
         };
-        res += exp * (p as f64).ln();
+        res += valp * avg_logp[pidx];
     }
     res
 }
@@ -455,4 +477,22 @@ fn test_pseudoprime() {
 
     // 173142166387457 is a false negative.
     assert!(!certainly_composite(173142166387457));
+}
+
+#[test]
+fn test_multiplier() {
+    use std::str::FromStr;
+
+    let n = Uint::from_str("12345671234567123456789").unwrap();
+    // Want multiplier 5.
+    // Primes with 2 roots of n are:
+    // 5, 7, 11, 17, 19, 29, 47, 61, 67, 89, 97, 101, 107, 109, 113, 137, 149, 151, 163, 167, 173, 181, 193, 197
+    // score is log2(2) + sum 2 log2(p)/p-1 = 7.3385
+    // Primes with 2 roots of 5n are:
+    // 3, 11, 13, 19, 23, 29, 37, 43, 53, 61, 73, 83, 89, 101, 103, 109, 127, 149, 151, 157, 181
+    // score is 3 log2(2) + log2(5)/4 + sum 2 log2(p)/p-1 - 1/2 log2(5) = 8.8552
+    let (k, score) = select_multiplier(n);
+    eprintln!("n={n} k={k} score={score}");
+    assert_eq!(k, 5);
+    assert!((score - 8.8552).abs() < 0.0001);
 }
