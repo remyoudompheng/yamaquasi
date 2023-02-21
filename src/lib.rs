@@ -565,7 +565,11 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     eprintln!("=> test not squarefree");
     let n = Uint::from_str("496701596915056959994534861")?;
     factor(n, Algo::Auto, &Preferences::default());
+    Ok(())
+}
 
+#[test]
+fn test_factor_siqs_edgecases() -> Result<(), bnum::errors::ParseIntError> {
     // SIQS with a small number: A needs 3 factors.
     // Used to fail due to selecting 2 factors or too many As.
     eprintln!("=> SIQS 60-75 bits");
@@ -580,6 +584,9 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
 
     // SIQS does not generate many relations (not #fbase + 64) but still enough.
     let n = Uint::from_digit(4954670127929);
+    factor(n, Algo::Siqs, &Preferences::default());
+    // SIQS generates enough relations but they are fewer than the factor base (ok).
+    let n = Uint::from_str("495751324548272090616278443938858471242622233")?;
     factor(n, Algo::Siqs, &Preferences::default());
 
     // This number tends to generate a very sparse factor base:
@@ -599,7 +606,11 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     factor(n, Algo::Siqs, &Preferences::default());
     let n = Uint::from_str("34084481733943226418420736441")?;
     factor(n, Algo::Siqs, &Preferences::default());
+    Ok(())
+}
 
+#[test]
+fn test_factor_ecm_edgecases() -> Result<(), bnum::errors::ParseIntError> {
     // ECM with very small factors.
     // A number with 2 very close small factors can be difficult to fully factor with ECM.
     // This could cause an infinite loop or a crash.

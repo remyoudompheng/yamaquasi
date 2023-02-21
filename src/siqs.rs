@@ -141,7 +141,7 @@ pub fn siqs(
     if rels.len() > fbase.len() + relations::MIN_KERNEL_SIZE {
         rels.truncate(fbase.len() + relations::MIN_KERNEL_SIZE)
     }
-    if rels.len() <= fbase.len() {
+    if s.gap.load(Ordering::Relaxed) != 0 && rels.len() <= fbase.len() {
         panic!("Internal error: not enough smooth numbers with selected parameters");
     }
     Ok(rels.into_inner())
