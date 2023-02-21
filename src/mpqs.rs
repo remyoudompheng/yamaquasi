@@ -20,7 +20,7 @@ use crate::fbase::{self, FBase};
 use crate::params::{self, BLOCK_SIZE};
 use crate::relations::{self, Relation, RelationSet};
 use crate::sieve;
-use crate::{Int, Uint, DEBUG};
+use crate::{Int, Uint, Verbosity, DEBUG};
 
 /// Run MPQS to factor `n`
 pub fn mpqs(
@@ -80,16 +80,18 @@ pub fn mpqs(
     let mut polyidx = 0;
     let mut polys_done = 0;
     let use_double = n.bits() > 256;
-    if crate::DEBUG {
+    if prefs.verbose(Verbosity::Verbose) {
         eprintln!("Generated {} polynomials", polys.len());
     }
     let maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(&n));
-    eprintln!("Max large prime {}", maxlarge);
-    if use_double {
-        eprintln!(
-            "Max double large prime {}",
-            maxlarge * fbase.bound() as u64 * 2
-        );
+    if prefs.verbose(Verbosity::Info) {
+        eprintln!("Max large prime {}", maxlarge);
+        if use_double {
+            eprintln!(
+                "Max double large prime {}",
+                maxlarge * fbase.bound() as u64 * 2
+            );
+        }
     }
     let rels = RwLock::new(RelationSet::new(n, maxlarge));
 
@@ -99,18 +101,24 @@ pub fn mpqs(
             let rels = rels.read().unwrap();
             let gap = rels.gap();
             if gap == 0 {
-                eprintln!("Found enough relations");
+                if prefs.verbose(Verbosity::Info) {
+                    eprintln!("Found enough relations");
+                }
                 break;
             }
-            rels.log_progress(format!(
-                "Sieved {}M {} polys",
-                ((polys_done) << (mlog + 1 - 10)) >> 10,
-                polys_done,
-            ));
+            if prefs.verbose(Verbosity::Verbose) {
+                rels.log_progress(format!(
+                    "Sieved {}M {} polys",
+                    ((polys_done) << (mlog + 1 - 10)) >> 10,
+                    polys_done,
+                ));
+            }
             polybase += Uint::from(polystride);
             polys = select_polys(&fbase, &n, polybase, polystride as usize);
             polyidx = 0;
-            eprintln!("Generated {} polynomials", polys.len());
+            if prefs.verbose(Verbosity::Info) {
+                eprintln!("Generated {} polynomials", polys.len());
+            }
         }
         if let Some(pool) = tpool {
             // Parallel sieving: do all polynomials at once.
@@ -134,15 +142,19 @@ pub fn mpqs(
         if rels.len() >= target {
             let gap = rels.gap();
             if gap == 0 {
-                eprintln!("Found enough relations");
+                if prefs.verbose(Verbosity::Info) {
+                    eprintln!("Found enough relations");
+                }
                 break;
             } else {
-                eprintln!("Need {} additional relations", gap);
+                if prefs.verbose(Verbosity::Info) {
+                    eprintln!("Need {} additional relations", gap);
+                }
                 target += gap + std::cmp::min(10, fb / 4);
             }
         }
     }
-    {
+    if prefs.verbose(Verbosity::Info) {
         let r = rels.read().unwrap();
         r.log_progress(format!(
             "Sieved {}M {} polys",

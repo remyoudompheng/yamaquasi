@@ -128,20 +128,26 @@ pub fn qsieve(n: Uint, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -
             let rels = qs.rels.read().unwrap();
             let gap = rels.gap();
             if gap == 0 {
-                eprintln!("Found enough relations");
+                if prefs.verbose(Verbosity::Info) {
+                    eprintln!("Found enough relations");
+                }
                 break;
             } else {
-                eprintln!("Need {} additional relations", gap);
+                if prefs.verbose(Verbosity::Info) {
+                    eprintln!("Need {} additional relations", gap);
+                }
                 target = rels.len() + gap;
             }
         }
     }
     let sieved = s_fwd.offset + s_bck.offset;
     let mut rels = qs.rels.into_inner().unwrap();
-    rels.log_progress(format!(
-        "Sieved {:.1}M",
-        (sieved as f64) / ((1 << 20) as f64)
-    ));
+    if prefs.verbose(Verbosity::Verbose) {
+        rels.log_progress(format!(
+            "Sieved {:.1}M",
+            (sieved as f64) / ((1 << 20) as f64)
+        ));
+    }
     if rels.len() > fbase.len() + relations::MIN_KERNEL_SIZE {
         rels.truncate(fbase.len() + relations::MIN_KERNEL_SIZE)
     }
