@@ -20,9 +20,9 @@ use bnum::cast::CastFrom;
 
 use crate::arith::{isqrt, Num, I256};
 use crate::fbase::{self, FBase, Prime};
-use crate::params::{self, BLOCK_SIZE};
+use crate::params;
 use crate::relations::{self, Relation, RelationSet};
-use crate::sieve::{Sieve, SievePrime};
+use crate::sieve::{Sieve, SievePrime, BLOCK_SIZE};
 use crate::{Int, Preferences, Uint, Verbosity};
 
 pub fn qsieve(n: Uint, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -> Vec<Relation> {

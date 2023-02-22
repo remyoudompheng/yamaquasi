@@ -1,6 +1,7 @@
+use bnum::cast::CastFrom;
 use brunch::Bench;
 use std::str::FromStr;
-use yamaquasi::arith::{self, isqrt};
+use yamaquasi::arith::{self, isqrt, Num};
 use yamaquasi::{fbase, mpqs, qsieve, siqs};
 use yamaquasi::{Uint, Verbosity};
 
@@ -28,11 +29,11 @@ fn main() {
         {
             let n = Uint::from_str(PQ256).unwrap();
             let fb = fbase::FBase::new(n, 5000);
-            let mut polybase: Uint = isqrt(n >> 1) >> 24;
-            polybase = isqrt(polybase);
+            let polybase: Uint = isqrt(n >> 1) >> 24;
+            let polybase = u128::cast_from(isqrt(polybase));
             let width = 20 / 7 * polybase.bits() as usize;
-            Bench::new("select_polys(256-bit n) = Some(...)")
-            .run_seeded(n, |n| { _ = mpqs::select_polys(&fb, &n, polybase, width).first().unwrap() })
+            Bench::new("sieve_for_polys(256-bit n) = Some(...)")
+            .run_seeded(n, |n| { _ = mpqs::sieve_for_polys(&fb, &n, polybase, width).first().unwrap() })
         },
         // Mass polynomial selection
         // Generate 1000 polys, density is 1 / 2(log polybase)
@@ -40,24 +41,24 @@ fn main() {
         {
             let n = Uint::from_str(PQ128).unwrap();
             let fb = fbase::FBase::new(n, 5000);
-            let mut polybase: Uint = isqrt(n >> 1) >> 24;
-            polybase = isqrt(polybase);
+            let polybase: Uint = isqrt(n >> 1) >> 24;
+            let polybase = u128::cast_from(isqrt(polybase));
             let width = 100 * 20 / 7 * polybase.bits() as usize;
             Bench::new("select 100 polys 128-bit n")
             .run_seeded(n, |n| {
-                let v = mpqs::select_polys(&fb, &n, polybase, width);
+                let v = mpqs::sieve_for_polys(&fb, &n, polybase, width);
                 assert!(90 < v.len() && v.len() < 110);
             })
         },
         {
             let n = Uint::from_str(PQ256).unwrap();
             let fb = fbase::FBase::new(n, 5000);
-            let mut polybase: Uint = isqrt(n >> 1) >> 24;
-            polybase = isqrt(polybase);
+            let polybase: Uint = isqrt(n >> 1) >> 24;
+            let polybase = u128::cast_from(isqrt(polybase));
             let width = 100 * 20 / 7 * polybase.bits() as usize;
             Bench::new("select 100 polys 256-bit n")
             .run_seeded(n, |n| {
-                let v = mpqs::select_polys(&fb, &n, polybase, width);
+                let v = mpqs::sieve_for_polys(&fb, &n, polybase, width);
                 assert!(90 < v.len() && v.len() < 110);
             })
         },
@@ -69,9 +70,11 @@ fn main() {
                 .map(|idx| arith::Inverter::new(fb.p(idx)))
                 .collect();
             let polybase: Uint = isqrt(isqrt(n));
-            let pol = &mpqs::select_polys(&fb, &n, polybase, 1000)[0];
+            let polybase = u128::cast_from(isqrt(polybase));
+            let (d, r) = &mpqs::sieve_for_polys(&fb, &n, polybase, 1000)[0];
+            let pol = mpqs::make_poly(&n, &d, &r);
             Bench::new("prepare 5000 primes for MPQS poly (n: 256 bit)")
-            .run_seeded((pol, &fb), |(pol, fb)| {
+            .run_seeded((&pol, &fb), |(pol, fb)| {
                 (0..fb.len()).map(|pidx| {
                     let fbase::Prime { p, r, div } = fb.prime(pidx);
                     pol.prepare_prime(p as u32, r as u32, div, &inverters[pidx], 12345)

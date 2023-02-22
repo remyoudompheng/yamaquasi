@@ -8,55 +8,65 @@
 //! Robert D. Silverman, The multiple polynomial quadratic sieve
 //! Math. Comp. 48, 1987, <https://doi.org/10.1090/S0025-5718-1987-0866119-8>
 
+use std::cmp::{max, min};
 use std::sync::RwLock;
 
 use bnum::cast::CastFrom;
-use num_traits::One;
 use rayon::prelude::*;
 
 use crate::arith::{self, isqrt, pow_mod, Num, I256, U256};
 use crate::arith_gcd::inv_mod;
 use crate::fbase::{self, FBase};
-use crate::params::{self, BLOCK_SIZE};
+use crate::params;
 use crate::relations::{self, Relation, RelationSet};
-use crate::sieve;
-use crate::{Int, Uint, Verbosity, DEBUG};
+use crate::sieve::{self, BLOCK_SIZE};
+use crate::{Int, Preferences, Uint, Verbosity};
 
 /// Run MPQS to factor `n`
-pub fn mpqs(
-    n: Uint,
-    prefs: &crate::Preferences,
-    tpool: Option<&rayon::ThreadPool>,
-) -> Vec<Relation> {
+pub fn mpqs(n: Uint, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -> Vec<Relation> {
+    // We cannot use MPQS for numbers above 448 bits
+    // (or at least it is extremely unreasonable and cost days of CPU).
+    // This is so that sqrt(n) * interval size always fits in 256 bits.
+    // In particular the D values chosen for polynomials cannot exceed 128 bits.
+    if n.bits() > 448 {
+        if prefs.verbose(Verbosity::Info) {
+            eprintln!("Number {n} too large for classical quadratic sieve!");
+        }
+        return vec![];
+    }
+
+    let use_double = prefs.use_double.unwrap_or(n.bits() > 256);
     // Choose factor base. Sieve twice the number of primes
     // (n will be a quadratic residue for only half of them)
-    let fb = prefs.fb_size.unwrap_or(params::factor_base_size(&n));
+    let fb = prefs.fb_size.unwrap_or(fb_size(&n, use_double));
     let fbase = FBase::new(n, fb);
-    eprintln!("Smoothness bound {}", fbase.bound());
-    eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls());
-
+    if prefs.verbose(Verbosity::Info) {
+        eprintln!("Smoothness bound {}", fbase.bound());
+        eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls());
+    }
     let mut target = fbase.len() * 8 / 10;
     let fb = fbase.len();
-    let mlog = mpqs_interval_logsize(&n);
-    if mlog >= 20 {
-        eprintln!("Sieving interval size {}M", 2 << (mlog - 20));
-    } else {
-        eprintln!("Sieving interval size {}k", 2 << (mlog - 10));
+    let mm = mpqs_interval_size(&n);
+    if prefs.verbose(Verbosity::Info) {
+        if mm > 2 << 20 {
+            eprintln!("Sieving interval size {}M", mm >> 20);
+        } else {
+            eprintln!("Sieving interval size {}k", mm >> 10);
+        }
     }
+
     // Precompute starting point for polynomials
     // See [Silverman, Section 3]
     // Look for A=D^2 such that (2A M/2)^2 ~= N/2
     // D is less than 64-bit for a 256-bit n
-    let mut polybase: Uint = if n % 4 == 1 {
-        isqrt(n >> 1) >> mlog
+    let a_target: Uint = if n % 4 == 1 {
+        isqrt(n >> 1) / Uint::from(mm as u64 / 2)
     } else {
-        isqrt(n << 1) >> mlog
+        isqrt(n << 1) / Uint::from(mm as u64 / 2)
     };
-    polybase = isqrt(polybase);
+    let d_target = max(Uint::from_digit(3), isqrt(a_target));
+    assert!(d_target.bits() < 127);
     let maxprime = fbase.bound() as u64;
-    if polybase < Uint::from(maxprime) {
-        polybase = Uint::from(maxprime);
-    }
 
     // Precompute inverters: preparation of polynomials is almost entirely spent
     // in modular inversion.
@@ -69,23 +79,36 @@ pub fn mpqs(
     // a hundred polynomials will provide enough relations.
     // We multiply by 1.4 log2(n) which is the expected gap between
     // 2 solutions.
-    let polystride = if n.bits() < 120 {
-        20 * 20 / 7 * polybase.bits()
-    } else if n.bits() < 130 && tpool.is_some() {
-        20 * 20 / 7 * polybase.bits()
-    } else {
-        100 * 20 / 7 * polybase.bits()
+    let polystride = match n.bits() {
+        // Interval size is larger than sqrt(n)
+        0..=32 => 200,
+        // Small integer, process enough number at a time.
+        33..=64 => 50 * 20 / 7 * d_target.bits(),
+        65..=130 => 20 * 20 / 7 * d_target.bits(),
+        // Enough for efficient parallelism
+        131.. => 100 * 20 / 7 * d_target.bits(),
     };
-    let mut polys = select_polys(&fbase, &n, polybase, polystride as usize);
+
+    // Start slightly before the ideal values to get a few nice polynomials.
+    let mut polybase = u128::cast_from(d_target);
+    if polybase >= 20 {
+        polybase -= min(polybase / 10, polystride.into());
+    }
+
+    let mut d_r_values = sieve_for_polys(&fbase, &n, polybase, polystride as usize);
     let mut polyidx = 0;
-    let mut polys_done = 0;
-    let use_double = n.bits() > 256;
+    let mut polys_done: u64 = 0;
     if prefs.verbose(Verbosity::Verbose) {
-        eprintln!("Generated {} polynomials", polys.len());
+        eprintln!(
+            "Generated {} polynomials D={}..{} optimal={d_target}",
+            d_r_values.len(),
+            d_r_values[0].0,
+            d_r_values.last().unwrap().0
+        );
     }
     let maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(&n));
     if prefs.verbose(Verbosity::Info) {
-        eprintln!("Max large prime {}", maxlarge);
+        eprintln!("Max large prime {maxlarge}");
         if use_double {
             eprintln!(
                 "Max double large prime {}",
@@ -95,9 +118,21 @@ pub fn mpqs(
     }
     let rels = RwLock::new(RelationSet::new(n, maxlarge));
 
+    // Prepare shared context.
+    let s = SieveMPQS {
+        n,
+        fbase: &fbase,
+        inverters: &inverters,
+        maxlarge,
+        use_double,
+        interval_size: mm,
+        rels: &rels,
+        prefs,
+    };
+
     loop {
         // Pop next polynomial.
-        if polyidx == polys.len() {
+        if polyidx == d_r_values.len() {
             let rels = rels.read().unwrap();
             let gap = rels.gap();
             if gap == 0 {
@@ -108,35 +143,39 @@ pub fn mpqs(
             }
             if prefs.verbose(Verbosity::Verbose) {
                 rels.log_progress(format!(
-                    "Sieved {}M {} polys",
-                    ((polys_done) << (mlog + 1 - 10)) >> 10,
-                    polys_done,
+                    "Sieved {}M {polys_done} polys",
+                    (polys_done * s.interval_size as u64) >> 20,
                 ));
             }
-            polybase += Uint::from(polystride);
-            polys = select_polys(&fbase, &n, polybase, polystride as usize);
+            polybase += polystride as u128;
+            d_r_values = sieve_for_polys(&fbase, &n, polybase, polystride as usize);
             polyidx = 0;
             if prefs.verbose(Verbosity::Info) {
-                eprintln!("Generated {} polynomials", polys.len());
+                eprintln!(
+                    "Generated {} polynomials D={}..{} optimal={d_target}",
+                    d_r_values.len(),
+                    d_r_values[0].0,
+                    d_r_values.last().unwrap().0
+                );
             }
         }
         if let Some(pool) = tpool {
             // Parallel sieving: do all polynomials at once.
             let v = pool.install(|| {
-                polys[polyidx..]
+                d_r_values[polyidx..]
                     .par_iter()
-                    .map(|p| mpqs_poly(p, n, &fbase, &inverters, maxlarge, use_double, &rels))
+                    .map(|(a, r)| mpqs_poly(&s, a, r))
                     .collect()
             });
-            polys_done += polys.len() - polyidx;
-            polyidx = polys.len();
+            polys_done += (d_r_values.len() - polyidx) as u64;
+            polyidx = d_r_values.len();
             v
         } else {
             // Sequential sieving
-            let pol = &polys[polyidx];
+            let (a, r) = &d_r_values[polyidx];
             polyidx += 1;
             polys_done += 1;
-            mpqs_poly(pol, n, &fbase, &inverters, maxlarge, use_double, &rels);
+            mpqs_poly(&s, a, r);
         }
         let rels = rels.read().unwrap();
         if rels.len() >= target {
@@ -157,9 +196,8 @@ pub fn mpqs(
     if prefs.verbose(Verbosity::Info) {
         let r = rels.read().unwrap();
         r.log_progress(format!(
-            "Sieved {}M {} polys",
-            ((polys_done) << (mlog + 1 - 10)) >> 10,
-            polys_done,
+            "Sieved {}M {polys_done} polys",
+            (polys_done * s.interval_size as u64) >> 20
         ));
     }
     let mut rels = rels.into_inner().unwrap();
@@ -169,20 +207,37 @@ pub fn mpqs(
     rels.into_inner()
 }
 
-/// A polynomial is an omitted quadratic Ax^2 + Bx + C
-/// such that (ax+b)^2-n = d^2(Ax^2 + Bx + C) and A=d^2
+/// A polynomial is a quadratic Ax^2 + Bx + C
+/// such that (Ax+BB)^2-n = D^2 (Ax^2 + Bx + C) and A=D^2
 /// and the polynomial values are small.
 ///
 /// The polynomial values are divisible by p iff
 /// ax+b is a square root of n modulo p
 #[derive(Debug)]
 pub struct Poly {
+    // The polynomial is ax^2+bx+c
     pub a: U256,
     pub b: U256,
+    c: I256,
+    // (ax+bb)/d is the modular square root of ax^2+bx+c
+    bb: Uint,
     pub d: U256,
+    dinv: Uint,
 }
 
 impl Poly {
+    /// Evaluate polynomial at the specified point. The absolute value
+    /// of x must not exceed 2^32.
+    ///
+    /// The polynomial value P(x) in D^2 P(x)=y^2 is always small,
+    /// and we return (P(x), y/D mod n)
+    pub fn eval(&self, x: i64) -> (I256, Uint) {
+        let ax = I256::cast_from(self.a) * I256::cast_from(x);
+        let v = (ax + I256::cast_from(self.b)) * I256::cast_from(x) + self.c;
+        let y = Uint::cast_from((Int::cast_from(ax) + Int::cast_from(self.bb)).abs()) * self.dinv;
+        (v, y)
+    }
+
     pub fn prepare_prime(
         &self,
         p: u32,
@@ -205,67 +260,52 @@ impl Poly {
             // We don't really know what will happen.
             [Some(0), Some(1)]
         } else {
-            // Transform roots as: r -> (r - B) / A
-            let a = div.divmod_uint(&self.a).1;
-            let b = div.divmod_uint(&self.b).1;
-            if a == 0 {
-                unreachable!("MPQS D={} is not a large prime???", isqrt(self.a));
+            // Transform roots as:
+            // if n % 4 == 1 (b is odd), r -> (r - B) / 2A
+            // if n % 4 != 1 (b is even), r -> (r - B/2) / A
+            let (a, b) = if self.b.bit(0) {
+                (2 * div.divmod_uint(&self.a).1, div.divmod_uint(&self.b).1)
+            } else {
+                (div.divmod_uint(&self.a).1, div.divmod_uint(&self.bb).1)
             };
-            let ainv = inv.invert(a as u32) as u64;
-            [
-                Some(shift(
-                    div.divmod64((p as u64 + r as u64 - b) * ainv).1 as u32,
-                )),
-                if r == 0 {
-                    None
-                } else {
-                    Some(shift(
-                        div.divmod64((2 * p as u64 - r as u64 - b) * ainv).1 as u32,
-                    ))
-                },
-            ]
+            if a == 0 {
+                // For very small integers, we may select D inside the factor base.
+                // In this case the roots are the roots of Bx-abs(C) (C < 0)
+                let b = div.divmod_uint(&self.b).1;
+                let binv = inv.invert(b as u32) as u64;
+                debug_assert!(self.c.is_negative());
+                let c = div.divmod_uint(&self.c.abs().to_bits()).1;
+                let r = shift(div.divmod64(c * binv).1 as u32);
+                [Some(r), None]
+            } else {
+                let ainv = inv.invert(a as u32) as u64;
+                let r1 = shift(div.divmod64((p as u64 + r as u64 - b) * ainv).1 as u32);
+                [
+                    Some(r1),
+                    if r == 0 {
+                        None
+                    } else {
+                        Some(shift(
+                            div.divmod64((2 * p as u64 - r as u64 - b) * ainv).1 as u32,
+                        ))
+                    },
+                ]
+            }
         };
         sieve::SievePrime { p, offsets }
     }
 }
 
-#[test]
-fn test_poly_prime() {
-    use crate::arith;
-    use std::str::FromStr;
-
-    let p = 10223;
-    let r = 4526;
-    let div = arith::Dividers::new(10223);
-    let inv = arith::Inverter::new(10223);
-    let poly = Poly {
-        a: U256::from_str("13628964805482736048449433716121").unwrap(),
-        b: U256::from_str("2255304218805619815720698662795").unwrap(),
-        d: U256::from(3691742787015739u64),
-    };
-    for rt in poly.prepare_prime(p, r, &div, &inv, 0).offsets {
-        let Some(rt) = rt else { continue };
-        let x1: Uint = Uint::cast_from(poly.a) * Uint::from(rt) + Uint::cast_from(poly.b);
-        let x1p: u64 = (x1 % Uint::from(p)).to_u64().unwrap();
-        assert_eq!(pow_mod(x1p, 2, p as u64), pow_mod(r as u64, 2, p as u64));
-    }
-}
-
-/// Returns a set of polynomials suitable for sieving across ±2^sievebits
-/// The base offset is a seed for prime generation.
-pub fn select_polys(fb: &FBase, n: &Uint, base: Uint, width: usize) -> Vec<Poly> {
-    sieve_for_polys(fb, n, base, width)
-        .into_iter()
-        .map(|(d, r)| make_poly(d, r, n))
-        .collect()
-}
-
 #[doc(hidden)]
-pub fn sieve_for_polys(fb: &FBase, n: &Uint, bmin: Uint, width: usize) -> Vec<(Uint, Uint)> {
+pub fn sieve_for_polys(fb: &FBase, n: &Uint, bmin: u128, width: usize) -> Vec<(Uint, Uint)> {
     let mut composites = vec![false; width];
     for &p in &fbase::SMALL_PRIMES {
-        let off = bmin % p;
-        let mut idx = -(off as isize);
+        let off = bmin % p as u128;
+        let mut idx = if bmin > p as u128 {
+            -(off as isize)
+        } else {
+            2 * p as isize - bmin as isize // offset of 2p
+        };
         while idx < composites.len() as isize {
             if idx >= 0 {
                 composites[idx as usize] = true
@@ -273,72 +313,99 @@ pub fn sieve_for_polys(fb: &FBase, n: &Uint, bmin: Uint, width: usize) -> Vec<(U
             idx += p as isize
         }
     }
-    let base4 = bmin.low_u64() % 4;
+    let base4 = bmin % 4;
     let mut result = vec![];
     'nextsieve: for i in 0..width {
-        if !composites[i] && (base4 + i as u64) % 4 == 3 {
+        if !composites[i] && (base4 + i as u128) % 4 == 3 {
             // No small factor, 3 mod 4
-            let p = bmin + Uint::from(i);
-            let r = pow_mod(*n, (p >> 2) + Uint::one(), p);
-            if (r * r) % p == n % p {
+            let p = bmin + i as u128;
+            let p256 = U256::cast_from(p);
+            let nmodp = U256::cast_from(n % Uint::from(p));
+            let r = pow_mod(nmodp, U256::from((p + 1) / 4), p256);
+            if (r * r) % p256 == nmodp {
                 // Beware, D may (exceptionally) not be prime.
                 // Perform trial division by the factor base.
-                let d = U256::cast_from(p);
                 for idx in 0..fb.len() {
-                    if fb.div(idx).mod_uint(&d) == 0 {
+                    // If it is a member of the factor base, it is prime.
+                    if p == fb.p(idx) as u128 {
+                        break;
+                    }
+                    if fb.div(idx).mod_uint(&p256) == 0 {
                         continue 'nextsieve;
                     }
                 }
                 if r.is_zero() {
                     // FIXME: use this factor to answer.
                     eprintln!("WARNING: unexpectedly found a factor of N!");
-                    eprintln!("{}", p);
+                    eprintln!("D={}", p);
                     continue 'nextsieve;
                 }
-                result.push((p, r));
+                result.push((p.into(), Uint::cast_from(r)));
             }
         }
     }
     result
 }
 
-fn make_poly(d: Uint, r: Uint, n: &Uint) -> Poly {
+/// Construct a MPQS polynomial from modulus N, a prime D and a modular square root D.
+#[doc(hidden)]
+pub fn make_poly(n: &Uint, d: &Uint, r: &Uint) -> Poly {
+    debug_assert!((r * r) % d == n % d);
     // Lift square root mod D^2
     // Since D*D < N, computations can be done using the same integer width.
     let h1 = r;
     let c = ((n - h1 * h1) / d) % d;
     let h2 = (c * inv_mod(&(h1 << 1), &d).unwrap()) % d;
     // (h1 + h2*D)**2 = n mod D^2
-    let mut b = (h1 + h2 * d) % (d * d);
+    let mut b = h1 + h2 * d;
 
-    // If kn = 1 mod 4:
-    // A = D^2, B = sqrt(n) mod D^2, C = (B^2 - kn) / 4A
-    // (2Ax + B)^2 - kn = 4A (Ax^2 + B x + C)
-    // Ax^2 + Bx + C = ((2Ax + B)/2D)^2 mod n
+    // Precompute inverse of D
+    let dinv = inv_mod(&d, &n).unwrap();
+    assert!(d.bits() < 128);
+    assert!(b.bits() < 256);
+    debug_assert!((b * b) % (d * d) == n % (d * d));
+
+    // If n = 1 mod 4:
+    // A = D^2, B = sqrt(n) mod D^2, C = (B^2 - n) / 4A
+    // (2Ax + B)^2 - n = 4A (Ax^2 + B x + C)
+    // D^2 (Ax^2 + Bx + C) = (Ax + B/2)^2 mod n
     //
     // otherwise:
-    // A = D^2, B = sqrt(n) mod D^2, C = (4B^2 - kn) / A
-    // (Ax+2B)^2 - kn = A (Ax^2 + 4Bx + C)
-    // Ax^2 + 2Bx + C = ((Ax+2B)/D)^2 mod n
+    // A = D^2, B = sqrt(n) mod D^2, C = (B^2 - n) / A
+    // (Ax+B)^2 - n = A (Ax^2 + 2Bx + C)
+    // D^2 (Ax^2 + 2Bx + C) = (Ax + B)^2 mod n
     if n.low_u64() % 4 == 1 {
         // want an odd b
-        if b.low_u64() % 2 == 0 {
+        if !b.bit(0) {
             b = d * d - b;
         }
-        Poly {
-            a: U256::cast_from(d * d << 1),
-            b: U256::cast_from(b),
-            d: U256::cast_from(d << 1),
-        }
-    } else {
-        // want even b
-        if b.low_u64() % 2 == 1 {
-            b = d * d - b;
-        }
+        debug_assert!((b * b) % (d * d << 2) == n % (d * d << 2));
+        let c = (Int::cast_from(b * b) - Int::cast_from(*n)) / Int::cast_from(d * d << 2);
+        assert!(c.abs().bits() < 256);
         Poly {
             a: U256::cast_from(d * d),
             b: U256::cast_from(b),
-            d: U256::cast_from(d),
+            c: I256::cast_from(c),
+            bb: (n + b) >> 1,
+            d: U256::cast_from(*d),
+
+            dinv,
+        }
+    } else {
+        // want even b
+        if b.bit(0) {
+            b = d * d - b;
+        }
+        let c = (Int::cast_from(b * b) - Int::cast_from(*n)) / Int::cast_from(d * d);
+        assert!(c.abs().bits() < 256);
+        Poly {
+            a: U256::cast_from(d * d),
+            b: U256::cast_from(b << 1),
+            c: I256::cast_from(c),
+            bb: b,
+            d: U256::cast_from(*d),
+
+            dinv,
         }
     }
 }
@@ -355,16 +422,18 @@ fn test_select_poly() {
     .unwrap();
     let fb = fbase::FBase::new(n, 1000);
     let mlog: u32 = 24;
-    let mut polybase: Uint = isqrt(n >> 1) >> mlog;
-    polybase = isqrt(polybase);
-    let Poly { a, b, d } = select_polys(&fb, &n, polybase, 512)[0];
+    let polybase: Uint = isqrt(n >> 1) >> mlog;
+    let polybase = u128::cast_from(isqrt(polybase));
+    let (d, r) = sieve_for_polys(&fb, &n, polybase, 512)[0];
+    let pol = make_poly(&n, &d, &r);
+    let &Poly { a, b, d, .. } = &pol;
     let (a, b, d) = (Uint::cast_from(a), Uint::cast_from(b), Uint::cast_from(d));
-    // D = 3 mod 4, 2D = 6 mod 8
-    assert_eq!(d.low_u64() % 8, 6);
+    // D = 3 mod 4
+    assert_eq!(d.low_u64() % 4, 3);
     // N is a square modulo D
-    assert!(sqrt_mod(n, d >> 1).is_some());
-    // A = D^2, 2A = (2D)^2
-    assert_eq!(a << 1, d * d);
+    assert!(sqrt_mod(n, d).is_some());
+    // A = D^2
+    assert_eq!(a, d * d);
     // B^2 = N mod 4D^2
     assert_eq!(pow_mod(b, Uint::from(2u64), d * d), n % (d * d));
     eprintln!("D={d} A={a} B={b}");
@@ -376,23 +445,22 @@ fn test_select_poly() {
     // Check that:
     // Ax²+Bx+C is small and balanced
     // min,max = ±sqrt(2N)*M
-    let target: Uint = isqrt(n >> 1) << (mlog - 1);
+    let pmin = pol.eval(0).0;
+    let pmax = pol.eval(1 << mlog).0;
+    let target = U256::cast_from(isqrt(n >> 1) << (mlog - 1));
     let sz = target.bits();
-    let xmax = (a << mlog) + b;
-    // ((2A M + B)^2 - n) / 4D^2
-    let pmax: Uint = ((xmax * xmax) - n) / (a << 1);
-    //assert!(pmax.bits() == target.bits());
-    eprintln!("min(P) = -{c}");
+    eprintln!("min(P) = {pmin}");
     eprintln!("max(P) = {pmax}");
-    assert_eq!(c >> (sz - 12), target >> (sz - 12));
-    assert_eq!(pmax >> (sz - 12), target >> (sz - 12));
+    assert!(pmin.is_negative() && pmin.abs().to_bits() >> (sz - 12) == target >> (sz - 12));
+    assert!(pmax.is_positive() && pmax.to_bits() >> (sz - 12) == target >> (sz - 12));
 
     // n = 3 mod 4
     let n = Uint::from_str("1290017141416619832024483521723784417815009599").unwrap();
     let mlog: u32 = 16;
-    let mut polybase: Uint = isqrt(n << 1) >> mlog;
-    polybase = isqrt(polybase);
-    let Poly { a, b, d } = select_polys(&fb, &n, polybase, 512)[0];
+    let polybase: Uint = isqrt(n << 1) >> mlog;
+    let polybase = u128::cast_from(isqrt(polybase));
+    let (d, r) = sieve_for_polys(&fb, &n, polybase, 512)[0];
+    let Poly { a, b, d, .. } = make_poly(&n, &d, &r);
     let (a, b, _) = (Uint::cast_from(a), Uint::cast_from(b), Uint::cast_from(d));
 
     let target: Uint = isqrt(n << 1) << (mlog - 1);
@@ -418,106 +486,95 @@ fn test_select_poly() {
     // D=1302451 base 2 pseudoprime
 }
 
-// One MPQS unit of work, identified by an integer 'idx'.
-fn mpqs_poly(
-    pol: &Poly,
-    n: Uint,
-    fbase: &FBase,
-    inverters: &[arith::Inverter],
-    maxlarge: u64,
-    use_double: bool,
-    rels: &RwLock<RelationSet>,
-) {
-    let mlog = mpqs_interval_logsize(&n);
-    let nblocks = (2 << mlog) / BLOCK_SIZE;
-    if DEBUG {
-        let pa = Int::cast_from(pol.a);
-        let pb = Int::cast_from(pol.b);
-        let (pmin, pmax) = if (pol.a % 2_u64) == 1 {
-            let pmin = (pb * pb - Int::cast_from(n)) / pa;
-            let x = (pa << mlog) + pb;
-            let pmax = (x * x - Int::cast_from(n)) / pa;
-            (pmin, pmax)
-        } else {
-            let pmin = (pb * pb - Int::cast_from(n)) / (pa << 1);
-            let x = (pa << mlog) + pb;
-            let pmax = (x * x - Int::cast_from(n)) / (pa << 1);
-            (pmin, pmax)
-        };
+/// Process a single MPQS unit of work, corresponding to a polynomial.
+fn mpqs_poly(s: &SieveMPQS, a: &Uint, r: &Uint) {
+    let n = &s.n;
+    let pol = make_poly(n, a, r);
+    let nblocks = s.interval_size as usize / BLOCK_SIZE;
+    if s.prefs.verbose(Verbosity::Debug) {
+        let pmin = pol.eval(0).0;
+        let pmax = max(
+            pol.eval(-s.interval_size / 2).0,
+            pol.eval(s.interval_size / 2).0,
+        );
         eprintln!(
-            "Sieving polynomial A={} B={} M=2^{} blocks={} min={} max={}",
-            pol.a, pol.b, mlog, nblocks, pmin, pmax
+            "Sieving polynomial A={} B={} M={} blocks={nblocks} min={pmin} max={pmax}",
+            pol.a,
+            pol.b,
+            s.interval_size / 2
         );
     }
-    // Precompute inverse of D^2
-    let d = Uint::cast_from(pol.d);
-    let d2inv = inv_mod(&(d * d), &n).unwrap();
-    // Precompute inverse of D
-    let dinv = inv_mod(&d, &n).unwrap();
 
-    // Sieve from -M to M
-    let sieve = SieveMPQS {
-        n,
-        fbase,
-        pol,
-        dinv,
-        d2inv,
-        maxlarge,
-        use_double,
-        rels: rels,
-    };
-
-    let start_offset = -(1 << mlog);
-    let end_offset = 1 << mlog;
-    let pfunc = |pidx| {
-        let p = fbase.p(pidx);
-        let r = fbase.r(pidx);
-        let div = fbase.div(pidx);
-        let inv = &inverters[pidx];
-        pol.prepare_prime(p, r, div, inv, start_offset as i32)
-    };
+    let start_offset = -s.interval_size / 2;
+    let end_offset = s.interval_size / 2;
+    let fbase = s.fbase;
+    let mut roots: Vec<crate::sieve::SievePrime> = Vec::with_capacity(fbase.len());
+    for i in 0..fbase.len() {
+        let p = fbase.p(i);
+        let r = fbase.r(i);
+        let div = fbase.div(i);
+        let inv = &s.inverters[i];
+        let rs = pol.prepare_prime(p, r, div, inv, start_offset as i32);
+        roots.push(rs);
+    }
+    let pfunc = move |pidx: usize| roots[pidx].clone();
     let mut state = sieve::Sieve::new(start_offset, nblocks, fbase, &pfunc);
     if nblocks == 0 {
-        sieve_block_poly(&sieve, &mut state);
+        sieve_block_poly(s, &pol, &mut state);
     }
     while state.offset < end_offset {
-        sieve_block_poly(&sieve, &mut state);
+        sieve_block_poly(s, &pol, &mut state);
         state.next_block();
     }
 }
 
-fn mpqs_interval_logsize(n: &Uint) -> u32 {
-    let sz = n.bits();
-    match sz {
-        // Small numbers don't have enough polynomials,
-        // but we compensate already with large cofactors.
-        0..=119 => 15,
-        // MPQS has a high polynomial switch cost, the interval
-        // must be large enough for very large n.
-        120..=279 => 13 + sz / 40, // 16..20
-        280..=295 => 21,
-        _ => 22,
+// MPQS can use the same factor bases as SIQS but since the polynomial
+// initalization cost is higher, we can include a penalty for the larger
+// intervals.
+fn fb_size(n: &Uint, use_double: bool) -> u32 {
+    // When using type 2 polynomials, values will be twice smaller
+    // as if the size of n was down by 2 bits.
+    let nshift = if n.low_u64() % 8 == 1 { n >> 2 } else { *n };
+    let penalty = n.bits() / 32;
+    let mut sz = params::factor_base_size(&(nshift << penalty));
+    // Reduce factor base size when using large double primes
+    // since they will cover the large prime space.
+    if use_double {
+        sz /= 2;
     }
+    sz
+}
+
+fn mpqs_interval_size(n: &Uint) -> i64 {
+    let sz = n.bits();
+    let nblocks = match sz {
+        0..=100 => 1,
+        // The cost of switching polynomials grows very fast, and it needs to be a small ratio
+        // of CPU cost for optimal efficiency.
+        // So the interval size needs to grow along with factor base size.
+        //
+        // For 200 bits n, we need at least 30 blocks.
+        // For 240 bits n, we need at least 50 blocks
+        // For 320 bits n, we need at least 300 blocks
+        101..=128 => sz / 30,           // 3..4
+        129..=256 => (sz * sz) / 1000,  // 16..64
+        257.. => (sz * sz) / 100 - 550, // 75..500
+    };
+    nblocks as i64 * sieve::BLOCK_SIZE as i64
 }
 
 fn large_prime_factor(n: &Uint) -> u64 {
     // Allow large cofactors up to FACTOR * largest prime
+    // Because MPQS needs larger intervals and polynomials are costly,
+    // large primes are useful even for 96-bit integers.
     let sz = n.bits();
     match sz {
-        0..=49 => {
-            // Large cofactors for extremely small numbers
-            // to compensate small intervals
-            100 + 2 * n.bits() as u64
-        }
-        50..=100 =>
-        // Polynomials are scarce, we need many relations:
-        {
-            300 - 2 * n.bits() as u64 // 200..100
-        }
-        101..=250 => n.bits() as u64,
+        0..=92 => 1,
+        93..=128 => n.bits() as u64 / 32, // 2..4
+        129..=250 => n.bits() as u64 - 100,
         251.. => {
             // Bound large primes to avoid exceeding 32 bits.
-            128 + n.bits() as u64 / 2
+            50 + n.bits() as u64 / 2
         }
     }
 }
@@ -525,19 +582,18 @@ fn large_prime_factor(n: &Uint) -> u64 {
 struct SieveMPQS<'a> {
     n: Uint,
     fbase: &'a FBase,
-    pol: &'a Poly,
-    dinv: Uint,
-    d2inv: Uint,
+    inverters: &'a [arith::Inverter],
     maxlarge: u64,
     use_double: bool,
+    interval_size: i64,
     rels: &'a RwLock<RelationSet>,
+    prefs: &'a Preferences,
 }
 
 // Sieve using a selected polynomial
-fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) {
+fn sieve_block_poly(s: &SieveMPQS, pol: &Poly, st: &mut sieve::Sieve) {
     st.sieve_block();
 
-    let offset = st.offset;
     let maxprime = s.fbase.bound() as u64;
     let maxlarge = s.maxlarge;
     assert!(maxlarge == (maxlarge as u32) as u64);
@@ -545,34 +601,41 @@ fn sieve_block_poly(s: &SieveMPQS, st: &mut sieve::Sieve) {
         // We don't want double large prime to reach maxlarge^2
         // See siqs.rs
         maxlarge * maxprime * 2
-    } else {
+    } else if maxlarge > maxprime {
+        // Use the large prime variation
         maxlarge
+    } else {
+        // No large prime at all (actually 1 but increase to have some tolerance)
+        1
     };
-    let target = s.n.bits() / 2 + mpqs_interval_logsize(&s.n) - max_cofactor.bits();
-    let (pol, n, dinv, d2inv) = (s.pol, &s.n, &s.dinv, &s.d2inv);
-    let (idxs, facss) = st.smooths(target as u8, None);
+    let target = s.n.bits() / 2 + (s.interval_size as u64 / 2).bits() - max_cofactor.bits();
+    let n = &s.n;
+    let root = s.interval_size * 7 / 20; // sqrt(2)/4
+    let (idxs, facss) = st.smooths(target as u8, Some(root as u32));
     for (i, facs) in idxs.into_iter().zip(facss) {
         // Evaluate polynomial
-        let x: Int = Int::cast_from(pol.a) * Int::from(offset + (i as i64));
-        let x = x + Int::cast_from(pol.b);
-        let candidate: Int = x * x - Int::from_bits(*n);
-        let cabs = (candidate.abs().to_bits() * d2inv) % n;
-        let Some(((p, q), mut factors)) = fbase::cofactor(
-            s.fbase, &I256::cast_from(cabs), &facs,
+        let (v, mut x) = pol.eval(st.offset + i as i64);
+        debug_assert!((x * x) % n == Uint::cast_from(Int::cast_from(*n) + Int::cast_from(v)) % n);
+        let Some(((p, q), factors)) = fbase::cofactor(
+            s.fbase, &v, &facs,
             maxlarge, max_cofactor)
             else { continue };
         let pq = if q > 1 { Some((p, q)) } else { None };
         let cofactor = p * q;
-        // Add missing sign
-        if candidate.is_negative() {
-            factors.push((-1, 1));
+        if p > 1 {
+            debug_assert!(!fbase::certainly_composite(p), "p={p} {pol:?}");
         }
-        let xrel = (x.abs().to_bits() * dinv) % n;
-        if DEBUG {
-            eprintln!("i={} smooth {} cofactor {}", i, cabs, cofactor);
+        if &x > n {
+            x %= n; // should not happen?
+        }
+        if s.prefs.verbose(Verbosity::Debug) {
+            eprintln!(
+                "x={} sqrt={x} smooth {v} cofactor {cofactor}",
+                st.offset + i as i64
+            );
         }
         let rel = Relation {
-            x: xrel,
+            x,
             cofactor,
             factors,
             cyclelen: 1,

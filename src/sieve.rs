@@ -135,6 +135,7 @@ pub struct Sieve<'a> {
     pub tables: Vec<SieveTable>,
 }
 
+#[derive(Clone)]
 pub struct SievePrime {
     pub p: u32,
     pub offsets: [Option<u32>; 2],
@@ -621,7 +622,7 @@ const BUCKET_WIDTH: usize = 256;
 const BUCKET_SIZE: usize = 32;
 // Overflows happen in less than 1/10000th of buckets
 // but MPQS params use huge intervals.
-const MAX_OVERFLOWS: usize = 32;
+const MAX_OVERFLOWS: usize = 64;
 
 // A SieveTable holds sieve offsets for a size class of primes
 // from the factor base.
@@ -630,7 +631,7 @@ const MAX_OVERFLOWS: usize = 32;
 pub struct SieveTable {
     entries: Vec<(u8, u8)>,
     blens: Vec<u8>,
-    overflows: [(u16, u8); 16],
+    overflows: [(u16, u8); 32],
     n_overflows: usize,
 }
 
@@ -642,7 +643,7 @@ impl SieveTable {
         SieveTable {
             entries: vec![(0u8, 0u8); Self::N_ENTRIES * nblocks],
             blens: vec![0u8; Self::N_BUCKETS * nblocks],
-            overflows: [(0u16, 0u8); 16],
+            overflows: [(0u16, 0u8); 32],
             n_overflows: 0,
         }
     }

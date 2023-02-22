@@ -586,6 +586,14 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     let fs = factor(n, Algo::Qs, &Preferences::default());
     assert_eq!(fs[0] * fs[1], n);
 
+    // MPQS sanity check
+    // n = 1 mod 4 for optimal multiplier
+    let n = Uint::from_digit(2028822982549217551);
+    factor(n, Algo::Mpqs, &Preferences::default());
+    // n = 3 mod 4 for optimal multiplier
+    let n = Uint::from_digit(966218335873381319);
+    factor(n, Algo::Mpqs, &Preferences::default());
+
     Ok(())
 }
 
@@ -596,6 +604,24 @@ fn test_factor_qs_edgecases() -> Result<(), bnum::errors::ParseIntError> {
     // must be high enough to collect more primes.
     let n = Uint::from_digit(325434172177);
     let fs = factor(n, Algo::Qs, &Preferences::default());
+    assert_eq!(fs[0] * fs[1], n);
+
+    Ok(())
+}
+
+#[test]
+fn test_factor_mpqs_edgecases() -> Result<(), bnum::errors::ParseIntError> {
+    // Very small integers with 2 factors.
+    let smalls: &[u64] = &[654949849, 2468912671, 20152052489];
+    for &n in smalls {
+        let n = Uint::from_digit(n);
+        let fs = factor(n, Algo::Mpqs, &Preferences::default());
+        assert_eq!(fs[0] * fs[1], n);
+    }
+
+    // Multiplier=1, n mod 4 = 3
+    let n = Uint::from_str("188568530916066130831")?;
+    let fs = factor(n, Algo::Mpqs, &Preferences::default());
     assert_eq!(fs[0] * fs[1], n);
 
     Ok(())

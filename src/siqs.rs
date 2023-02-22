@@ -37,9 +37,9 @@ use rayon::prelude::*;
 
 use crate::arith::{self, Num, I256, U256};
 use crate::fbase::{self, FBase, Prime};
-use crate::params::{self, BLOCK_SIZE};
+use crate::params;
 use crate::relations::{self, Relation, RelationSet};
-use crate::sieve;
+use crate::sieve::{self, BLOCK_SIZE};
 use crate::{Int, Preferences, Uint, UnexpectedFactor, Verbosity};
 
 pub fn siqs(

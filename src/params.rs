@@ -1,8 +1,5 @@
 use crate::Uint;
 
-// Fits L1 cache size per core on most reasonable CPUs.
-pub const BLOCK_SIZE: usize = 32 * 1024;
-
 pub fn factor_base_size(n: &Uint) -> u32 {
     let sz = n.bits();
     if sz < 160 {
