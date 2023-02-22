@@ -108,6 +108,10 @@ pub fn rho64(n: u64, c: u64, iters: u64) -> Option<(u64, u64)> {
     None
 }
 
+/// Run Pollard's rho as part of general factorization.
+///
+/// It is both suitable for small prime factors and small semiprimes,
+/// so it will attempt to retry several times to find a factor.
 pub fn rho(n: &Uint, verbosity: Verbosity) -> Option<(Vec<Uint>, Uint)> {
     let start = std::time::Instant::now();
     let size = n.bits();
@@ -125,13 +129,18 @@ pub fn rho(n: &Uint, verbosity: Verbosity) -> Option<(Vec<Uint>, Uint)> {
         // with other fast methods.
         _ => return None,
     };
-    // Use 2 functions to avoid large cycles.
-    let (p, q) = rho64(n0, 1, iters).or_else(|| rho64(n0, 2, iters))?;
-    if verbosity >= Verbosity::Info {
-        let ms = start.elapsed().as_secs_f64() * 1000.0;
-        eprintln!("Found factor {p} with Pollard rho (iters=2x{iters}) in {ms:.1}ms");
+    // Use several functions to avoid large cycles.
+    // We don't want to fallback to a slower algorithm.
+    for c in 1..5 {
+        if let Some((p, q)) = rho64(n0, c, iters) {
+            if verbosity >= Verbosity::Info {
+                let ms = start.elapsed().as_secs_f64() * 1000.0;
+                eprintln!("Found factor {p} with Pollard rho (iters={c}x{iters}) in {ms:.1}ms");
+            }
+            return Some((vec![p.into()], q.into()));
+        }
     }
-    Some((vec![p.into()], q.into()))
+    None
 }
 
 #[doc(hidden)]
@@ -208,6 +217,10 @@ fn test_rho_basic() {
     assert_eq!(p * q, n);
     // But another function will work.
     let (p, q) = rho64(n, 2, 1000).unwrap();
+    assert_eq!(p * q, n);
+    // 64-bit integers must work.
+    let n = 0xeb67d1ff62bd9f49;
+    let (p, q) = rho_semiprime(n).unwrap();
     assert_eq!(p * q, n);
 }
 

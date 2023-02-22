@@ -48,11 +48,14 @@ pub fn mg_redc(n: u64, ninv: u64, x: u128) -> u64 {
     let m = mul as u128 * n as u128;
     debug_assert!((x as u64).wrapping_add(m as u64) == 0);
     // The low words always produce a carry.
-    let res = (x >> 64) as u64 + (m >> 64) as u64 + 1;
-    if res >= n {
-        res - n
+    // The high words are guaranteed to be < n.
+    // We want xhi+mhi+1 mod n.
+    let (xhi, mhi) = ((x >> 64) as u64, (m >> 64) as u64);
+    let d = n - mhi - 1;
+    if xhi >= d {
+        xhi - d
     } else {
-        res
+        xhi + mhi + 1
     }
 }
 
@@ -454,6 +457,19 @@ pub fn gcd_factors(n: &Uint, vals: &[MInt]) -> (Vec<Uint>, Uint) {
         n /= f;
     }
     (facs, n)
+}
+
+#[test]
+fn test_montgomery64() {
+    // Check that 64-bit moduli do not trigger overflow.
+    let n = 0xeb67d1ff62bd9f49;
+    let ninv = mg_2adic_inv(n);
+    let r = ((1_u128 << 64) % (n as u128)) as u64;
+    let r2 = ((r as u128 * r as u128) % (n as u128)) as u64;
+    let x = mg_mul(n, ninv, 12345, r2);
+    let y = mg_mul(n, ninv, 56789, r2);
+    let xy = mg_mul(n, ninv, 12345 * 56789, r2);
+    assert_eq!(mg_mul(n, ninv, x, y), xy);
 }
 
 #[test]

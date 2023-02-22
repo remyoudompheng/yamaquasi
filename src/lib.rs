@@ -566,7 +566,14 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     let n = Uint::from_str("496701596915056959994534861")?;
     factor(n, Algo::Auto, &Preferences::default());
 
+    // Observed failure: n=981572983530105943
+    // is 60-bit and unlucky for SQUFOF.
+    eprintln!("=> unlucky SQUFOF");
+    let n = Uint::from_digit(981572983530105943);
+    factor(n, Algo::Auto, &Preferences::default());
+
     // Basic classical QS sanity check.
+    eprintln!("=> simple classical QS");
     let n = Uint::from_str("144145963608905891153").unwrap();
     let fs = factor(n, Algo::Qs, &Preferences::default());
     assert_eq!(fs[0] * fs[1], n);
