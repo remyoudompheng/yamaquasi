@@ -142,7 +142,7 @@ pub fn siqs(
         rels.truncate(fbase.len() + relations::MIN_KERNEL_SIZE)
     }
     if s.gap.load(Ordering::Relaxed) != 0 && rels.len() <= fbase.len() {
-        panic!("Internal error: not enough smooth numbers with selected parameters");
+        panic!("Internal error: not enough smooth numbers with selected parameters (n={n})");
     }
     Ok(rels.into_inner())
 }
@@ -350,14 +350,14 @@ fn fb_size(n: &Uint, use_double: bool) -> u32 {
 // 64..80 bits need 3 factors (A is 16-24 bits, maxprime < 1000)
 //
 // For inputs over 80 bits, max prime is above 1000
-// k factors are fine for input size (15..20)*k + 30
+// k factors are fine for input size (15..20)*k + 30 or better (18..22)k + 30
 // for factors between 200..1000 (A = sqrt(N) / M)
 fn nfactors(n: &Uint) -> u32 {
     match n.bits() {
         0..=64 => 2,
         65..=89 => 3,
-        90..=109 => 4,
-        110..=149 => 5,
+        90..=119 => 4,
+        120..=149 => 5,
         150..=169 => 6,
         170..=189 => 7,
         190..=209 => 8,
@@ -376,9 +376,10 @@ fn a_value_count(n: &Uint) -> usize {
     let sz = n.bits() as usize;
     match sz {
         // Even one A value (2-4 polynomials) will give enough smooth values.
-        0..=71 => 4,
-        72..=129 => (sz - 32) / 5,     // 8..19
-        130..=169 => sz - 60,          // 20..100
+        0..=48 => 8,
+        49..=71 => 12,
+        72..=129 => sz / 5,            // 14..25
+        130..=169 => sz - 60,          // 70..100
         170..=199 => 50 * (sz - 168),  // 100..1000
         200..=249 => 100 * (sz - 190), // 1000..5000
         _ => 20 * sz,                  // 5000..
@@ -431,7 +432,8 @@ fn interval_size(n: &Uint) -> u32 {
     // ~32 blocks for 300 bits
     let sz = n.bits();
     let nblocks = match sz {
-        0..=100 => 1,
+        0..=48 => 3,
+        49..=100 => 2,
         101..=130 => 2,
         131..=160 => 3,
         161..=190 => 5,
@@ -446,20 +448,11 @@ fn interval_size(n: &Uint) -> u32 {
 fn large_prime_factor(n: &Uint) -> u64 {
     let sz = n.bits() as u64;
     match sz {
-        0..=49 => {
-            // Large cofactors for extremely small numbers
-            // to compensate small intervals
-            100 + 2 * sz
-        }
-        50..=100 =>
-        // Polynomials are scarce, we need many relations:
-        {
-            300 - 2 * sz // 200..100
-        }
-        101..=250 => {
-            // More large primes to compensate fewer relations
-            sz
-        }
+        // Smoothness density is very high for small sizes, do not use large primes.
+        0..=96 => 1,
+        97..=128 => 2,
+        // More large primes to compensate fewer relations
+        129..=250 => sz,
         251.. => {
             // For these input sizes, smooth numbers are so sparse
             // that we need very large cofactors, so any value of B1 is fine.
@@ -1014,9 +1007,11 @@ pub fn make_polynomial(s: &SieveSIQS, a: &A, pol_idx: usize) -> Poly {
     } else {
         (s.nsqrt / (a.a << 1) as Uint).low_u64()
     };
-    if n.bits() > 80 {
+    if a.factors.len() >= 5 {
         // For small n, A factors are below 200 and can have huge gaps.
         // Optimal A's break down for very small n.
+        // We assume than 5 factors correspond to nice factor ranges
+        // where we can never be far away from the optimal value.
         assert!(
             (root as usize) < s.interval_size / 2,
             "A={} root={}",
@@ -1153,8 +1148,10 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
         // midpoint.
         // See [Lentra-Manasse]
         maxlarge * maxprime * DOUBLE_LARGE_PRIME_FACTOR
-    } else {
+    } else if maxlarge > maxprime {
         maxlarge
+    } else {
+        1 // Do not use the large prime variation.
     };
     // Polynomial values range from [-m sqrt(2n), m sqrt(2n)] so they have variable size.
     // The smallest values are about A which is sqrt(2n) / m

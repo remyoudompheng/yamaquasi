@@ -648,12 +648,28 @@ fn test_factor_siqs_edgecases() -> Result<(), bnum::errors::ParseIntError> {
     let n = Uint::from_str("495751324548272090616278443938858471242622233")?;
     factor(n, Algo::Siqs, &Preferences::default());
 
-    // This number tends to generate a very sparse factor base:
-    // [2, 3, 7, 13, 19, 79, 89, 107, 131, ...]
+    // Numbers with small/sparse factor bases: they make it difficult to generate
+    // optimal A values. Most examples are failures during random testing.
+    // To succeed they need a large enough factor base or interval.
+
+    // Multiplier 1, factor base [2, 3, 7, 11, 19, 31, 59, 67]
+    let n = Uint::from_digit(314534861617);
+    factor(n, Algo::Siqs, &Preferences::default());
+    // Another small number.
+    let n = Uint::from_digit(157261665529);
+    factor(n, Algo::Siqs, &Preferences::default());
+    // Factor base [2, 3, 7, 13, 19, 79, 89, 107, 131, ...]
     let n = Uint::from_str("72231484786704818233")?;
+    factor(n, Algo::Siqs, &Preferences::default());
+    // 72 bit example, multiplier 1: factor base gap 47, 61, 103, 131, 137, 163, 223
+    let n = Uint::from_str("212433504133480536121")?;
     factor(n, Algo::Siqs, &Preferences::default());
     // Factor base gap between 47 and 97:
     let n = Uint::from_str("232159658536337208497609")?;
+    factor(n, Algo::Siqs, &Preferences::default());
+    // 87-bit number, multiplier 43, factor base gap 79, 173, 223
+    // Can create very suboptimal values of A.
+    let n = Uint::from_str("145632526168873091762826187")?;
     factor(n, Algo::Siqs, &Preferences::default());
     // Large gap between 127 and 211: selection of A was stuck
     // because only 1 candidate is found.

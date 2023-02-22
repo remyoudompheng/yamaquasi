@@ -170,7 +170,9 @@ pub fn select_multiplier(n: Uint) -> (u32, f64) {
         avg_logp[i] = (p as f64).ln() / (p - 1) as f64;
     }
     // Using precomputed tables, look for best multiplier.
-    for k in 1..MAX_MULTIPLIER {
+    // If n is very small, this is very costly so we don't need
+    // to overoptimize it.
+    for k in 1..min(2 * n.bits(), MAX_MULTIPLIER) {
         let mag = expected_smooth_magnitude(k, &nmodp, &avg_logp, &modsquares);
         // A multiplier k increases the size of P(x) by sqrt(k)
         let mag = (mag - 0.5 * (k as f64).ln()) / std::f64::consts::LN_2;
