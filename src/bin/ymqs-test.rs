@@ -13,7 +13,7 @@ use rand::{self, Rng};
 use yamaquasi::arith::{Num, U256};
 use yamaquasi::fbase;
 use yamaquasi::Uint;
-use yamaquasi::{factor, pseudoprime, Algo, Preferences, Verbosity};
+use yamaquasi::{factor, isprime64, pseudoprime, Algo, Preferences, Verbosity};
 
 fn main() {
     let arg = arguments::parse(std::env::args()).unwrap();
@@ -29,7 +29,7 @@ fn main() {
     let mode = arg.get::<String>("mode").unwrap_or("auto".into());
     let bits = arg.get::<u32>("bits").unwrap_or(64);
     // Prepare a factor base for trial division
-    let fbase = fbase::FBase::new(Uint::from(0u64), 1000);
+    let fbase = fbase::FBase::new(Uint::from(0u64), 2 * bits);
     let mut rng = rand::thread_rng();
     let mut i = 0;
     let t0 = Instant::now();
@@ -41,7 +41,7 @@ fn main() {
         let q0 = U256::from_digits(words);
         let p = Uint::cast_from(nextprime(&fbase, p0 >> (256 - bits / 2)));
         let q = Uint::cast_from(nextprime(&fbase, q0 >> (256 - bits / 2)));
-        eprintln!("p={p} q={q} => n={}", p * q);
+        eprint!("{}", format!("p={p} q={q} => n={}\n", p * q));
         // Factor
         let n = p * q;
         let mut prefs = Preferences::default();
@@ -56,26 +56,48 @@ fn main() {
         i += 1;
         let elapsed = t0.elapsed().as_secs_f64();
         let avg = elapsed / (i as f64) * 1000.;
-        eprintln!("Processed {i} numbers in {elapsed:.3}s (average {avg:.3}ms)");
+        if bits > 64 || i % 10 == 0 {
+            eprintln!("Processed {i} numbers in {elapsed:.3}s (average {avg:.3}ms)");
+        }
     }
 }
 
-fn nextprime(fb: &fbase::FBase, base: U256) -> U256 {
+fn nextprime64(fb: &fbase::FBase, base: u64) -> u64 {
     'nextcandidate: for i in 0..8000 {
-        let p = base + U256::from(i as u64);
+        let p = base + i;
         for pidx in 0..fb.len() {
-            if Some(fb.p(pidx) as u64) == p.to_u64() {
-                return p;
-            }
-            if fb.div(pidx).mod_uint(&p) == 0 {
+            if fb.div(pidx).divmod64(p).1 == 0 {
+                if p == fb.p(pidx) as u64 {
+                    return p;
+                }
                 continue 'nextcandidate;
             }
         }
         // Naive Miller test
-        if !pseudoprime(Uint::cast_from(p)) {
-            continue 'nextcandidate;
+        if isprime64(p) {
+            return p;
         }
-        return p;
+    }
+    unreachable!("impossible");
+}
+
+fn nextprime(fb: &fbase::FBase, base: U256) -> U256 {
+    if base.bits() < 64 {
+        return nextprime64(fb, base.digits()[0]).into();
+    }
+    'nextcandidate: for i in 0..8000 {
+        let p = base + U256::from(i as u64);
+        for pidx in 0..fb.len() {
+            if fb.div(pidx).mod_uint(&p) == 0 {
+                if Some(fb.p(pidx) as u64) == p.to_u64() {
+                    return p;
+                }
+                continue 'nextcandidate;
+            }
+        }
+        if pseudoprime(Uint::cast_from(p)) {
+            return p;
+        }
     }
     unreachable!("impossible");
 }

@@ -458,16 +458,79 @@ fn check_factors(n: &Uint, factors: &[Uint]) {
     assert_eq!(*n, factors.iter().product::<Uint>());
 }
 
+/// Primality test of u64 using a Miller test for small bases.
+///
+/// It is known that bases until 11 are enough for a 40-bit integer.
+/// It is known that testing bases until 37 is enough for a 64-bit integer.
+pub fn isprime64(p: u64) -> bool {
+    if p < *fbase::SMALL_PRIMES.last().unwrap() {
+        return fbase::SMALL_PRIMES[..].contains(&p);
+    }
+    // Compute auxiliary numbers for modular arithmetic.
+    let pinv = arith_montgomery::mg_2adic_inv(p);
+    let r1 = 0_u64.wrapping_sub(p) % p; // 2^64 % p == (2^64-p) % p
+    let r2 = ((r1 as u128 * r1 as u128) % (p as u128)) as u64;
+
+    let tz = (p - 1).trailing_zeros();
+    let podd = p >> tz;
+
+    let one = r1;
+    let pm1 = p - r1;
+    let mul = |x, y| arith_montgomery::mg_mul(p, pinv, x, y);
+    // Performs the Miller test for base b.
+    let miller = |b: u64| {
+        let b = mul(b, r2);
+        // Compute b^podd
+        let mut pow = {
+            let mut x = one;
+            let mut sq = b;
+            let mut exp = podd;
+            while exp > 0 {
+                if exp & 1 == 1 {
+                    x = mul(x, sq);
+                }
+                sq = mul(sq, sq);
+                exp /= 2;
+            }
+            x
+        };
+        let mut ok = pow == one || pow == pm1;
+        for _ in 0..tz {
+            pow = mul(pow, pow);
+            if pow == pm1 {
+                ok = true;
+                break;
+            } else if pow == one {
+                break;
+            }
+        }
+        ok
+    };
+    // Bases for 40-bit integers.
+    for b in [2, 3, 5, 7, 11] {
+        if !miller(b) {
+            return false;
+        }
+    }
+    if p >> 40 != 0 {
+        // Bases for 64-bit integers.
+        for b in [13, 17, 19, 23, 29, 31, 37] {
+            if !miller(b) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// Probabilistic primality test using a Miller test for small bases.
 pub fn pseudoprime(p: Uint) -> bool {
     // Montgomery arithmetic is only for odd numbers.
     if !p.bit(0) {
         return p.to_u64() == Some(2);
     }
-    if let Some(p64) = p.to_u64() {
-        if p64 < *fbase::SMALL_PRIMES.last().unwrap() {
-            return fbase::SMALL_PRIMES[..].contains(&p64);
-        }
+    if p.bits() <= 64 {
+        return isprime64(p.low_u64());
     }
     pub fn pow_mod(zp: &ZmodN, x: MInt, exp: &Uint) -> MInt {
         let mut res = zp.one();
@@ -485,13 +548,6 @@ pub fn pseudoprime(p: Uint) -> bool {
     let s = (p.low_u64() - 1).trailing_zeros();
     let p_odd = p >> s;
     for &b in &fbase::SMALL_PRIMES {
-        if p.to_u64() == Some(b) {
-            return true;
-        }
-        if p.bits() <= 64 && b > 37 {
-            // Bases up to 37 are enough for 64-bit integers.
-            break;
-        }
         let mut pow = pow_mod(&zp, zp.from_int(b.into()), &p_odd);
         let pm1 = zp.sub(&zp.zero(), &zp.one());
         let mut ok = pow == zp.one() || pow == pm1;
@@ -742,4 +798,13 @@ fn test_pseudoprime() {
     ));
     // Carmichael number.
     assert!(!pseudoprime(9746347772161_u64.into()));
+
+    assert!(!isprime64(1));
+    assert!(isprime64(2));
+    assert!(isprime64(17));
+    assert!(!isprime64(9746347772161));
+    // Some prime number
+    assert!(isprime64(9938261980284378737));
+    // Some composite number
+    assert!(!isprime64(11775166524998067797));
 }
