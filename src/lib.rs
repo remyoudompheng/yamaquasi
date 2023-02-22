@@ -205,7 +205,16 @@ fn factor_impl(
     // So prime powers need to be explicitly tested.
     if n.is_one() {
         return;
-    } else if let Some((p, k)) = arith::perfect_power(n) {
+    }
+    let is_perfect_power = {
+        if n.bits() <= 64 {
+            // Use native arithmetic is possible.
+            arith::perfect_power(n.low_u64()).map(|_pk @ (p, k)| (p.into(), k))
+        } else {
+            arith::perfect_power(n)
+        }
+    };
+    if let Some((p, k)) = is_perfect_power {
         let mut facs = vec![];
         factor_impl(p, alg, prefs, &mut facs, tpool);
         for _ in 0..k {
@@ -460,22 +469,21 @@ pub fn pseudoprime(p: Uint) -> bool {
             return fbase::SMALL_PRIMES[..].contains(&p64);
         }
     }
-    pub fn pow_mod(zp: &ZmodN, x: MInt, exp: Uint) -> MInt {
+    pub fn pow_mod(zp: &ZmodN, x: MInt, exp: &Uint) -> MInt {
         let mut res = zp.one();
         let mut x = x;
-        let mut exp = exp;
-        while !exp.is_zero() {
-            if exp.bit(0) {
+        for b in 0..exp.bits() {
+            if exp.bit(b) {
                 res = zp.mul(&res, &x);
             }
             x = zp.mul(&x, &x);
-            exp = exp >> 1;
         }
         res
     }
 
     let zp = ZmodN::new(p);
     let s = (p.low_u64() - 1).trailing_zeros();
+    let p_odd = p >> s;
     for &b in &fbase::SMALL_PRIMES {
         if p.to_u64() == Some(b) {
             return true;
@@ -484,7 +492,7 @@ pub fn pseudoprime(p: Uint) -> bool {
             // Bases up to 37 are enough for 64-bit integers.
             break;
         }
-        let mut pow = pow_mod(&zp, zp.from_int(b.into()), p >> s);
+        let mut pow = pow_mod(&zp, zp.from_int(b.into()), &p_odd);
         let pm1 = zp.sub(&zp.zero(), &zp.one());
         let mut ok = pow == zp.one() || pow == pm1;
         for _ in 0..s {
