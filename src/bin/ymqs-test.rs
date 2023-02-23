@@ -36,9 +36,9 @@ fn main() {
     loop {
         let mut words = [0u64; 4];
         rng.try_fill(&mut words).unwrap();
-        let p0 = U256::from_digits(words);
+        let p0 = U256::from_digits(words) | U256::power_of_two(255);
         rng.try_fill(&mut words).unwrap();
-        let q0 = U256::from_digits(words);
+        let q0 = U256::from_digits(words) | U256::power_of_two(255);
         let p = Uint::cast_from(nextprime(&fbase, p0 >> (256 - bits / 2)));
         let q = Uint::cast_from(nextprime(&fbase, q0 >> (256 - bits / 2)));
         eprint!("{}", format!("p={p} q={q} => n={}\n", p * q));

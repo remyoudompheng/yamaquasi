@@ -170,7 +170,7 @@ pub fn ecm(
     }
     let start = std::time::Instant::now();
     let zn = ZmodN::new(n);
-    let sb = SmoothBase::new(b1);
+    let sb = SmoothBase::new(b1, true);
     // Keep track of how many curves were examined.
     let iters = AtomicUsize::new(0);
     let done = AtomicBool::new(false);
@@ -497,13 +497,13 @@ fn check_gcd_factor(n: &Uint, values: &[MInt]) -> Option<Uint> {
 /// An exponent base for ECM.
 pub struct SmoothBase {
     /// Chunks of primes multiplied into u64 integers.
-    factors: Box<[u64]>,
+    pub(crate) factors: Box<[u64]>,
     /// Large chunks of primes (1024 bits)
     larges: Box<[Uint]>,
 }
 
 impl SmoothBase {
-    pub fn new(b1: usize) -> Self {
+    pub fn new(b1: usize, use_large: bool) -> Self {
         const LARGE_THRESHOLD: u64 = 4096;
         let primes = if b1 < 65_536 {
             fbase::primes(b1 as u32 / 2)
@@ -547,7 +547,7 @@ impl SmoothBase {
                 buffer = 1;
             }
             if 1 << buffer.leading_zeros() <= pow {
-                if p < LARGE_THRESHOLD {
+                if p < LARGE_THRESHOLD || !use_large {
                     factors.push(buffer);
                     buffer = 1;
                 } else {
@@ -562,7 +562,7 @@ impl SmoothBase {
             buffer *= pow;
         }
         if buffer > 1 {
-            if (b1 as u64) < LARGE_THRESHOLD {
+            if (b1 as u64) < LARGE_THRESHOLD || !use_large {
                 factors.push(buffer);
             } else {
                 buffer_lg *= Uint::from_digit(buffer);
@@ -593,6 +593,12 @@ pub struct Curve {
 /// A point in the projective plane using homogeneous coordinates.
 #[derive(Clone, Debug)]
 pub struct Point(MInt, MInt, MInt);
+
+impl Point {
+    pub(crate) fn xyz(&self) -> (MInt, MInt, MInt) {
+        (self.0, self.1, self.2)
+    }
+}
 
 /// An Edwards curve point in extended coordinates (x,y,z,t)
 /// located in the quadric xy=zt.
@@ -687,7 +693,11 @@ impl Curve {
         &self.g
     }
 
-    fn a_d(&self) -> (i64, Uint) {
+    pub fn n(&self) -> &Uint {
+        &self.zn.n
+    }
+
+    pub fn a_d(&self) -> (i64, Uint) {
         (if self.twisted { -1 } else { 1 }, self.zn.to_int(self.d))
     }
 
@@ -909,8 +919,8 @@ impl Curve {
         let p7 = self.addext(&p5, &p2);
         let gaps = [&pext, &p3, &p5, &p7];
         // Encode the chain as:
-        // 0 (doubling)
-        // ±k (add/sub kP)
+        // 2l (doubling l times)
+        // ±k (X -> 2X ± kP where k is odd)
         let mut c = [0_i8; 32];
         let l = Self::make_addition_chain(&mut c, k);
         // Get initial element (chain[l-1] = 1 or 3 or 5 or 7)
@@ -933,7 +943,7 @@ impl Curve {
         q
     }
 
-    fn make_addition_chain(chain: &mut [i8; 32], k: u64) -> usize {
+    pub(crate) fn make_addition_chain(chain: &mut [i8; 32], k: u64) -> usize {
         // Build an addition chain for a 64-bit multiplier
         // as a reversed list of opcodes:
         // - an odd opcode x (|x| <= 7) means: P -> 2P + xG
@@ -1167,6 +1177,10 @@ impl Curve {
     #[cfg(test)]
     fn equal(&self, p: &Point, q: &Point) -> bool {
         projective_equal(&self.zn, p, q)
+    }
+
+    pub(crate) fn is_twisted128(&self) -> bool {
+        self.twisted && self.zn.words() == 2
     }
 }
 
@@ -1495,7 +1509,7 @@ fn test_ecm_curve() {
     // This curve has smooth order for prime 602768606663711
     // order: 2^2 * 7 * 19 * 29 * 347 * 503 * 223843
     let c = Curve::from_point(zn.clone(), 2, 10).unwrap();
-    let sb = SmoothBase::new(1000);
+    let sb = SmoothBase::new(1000, true);
     let res = ecm_curve(&sb, &zn, &c, 500e3, Verbosity::Silent);
     eprintln!("{:?}", res);
     assert_eq!(res, Some((p, q)));
@@ -1511,7 +1525,7 @@ fn test_ecm_curve2() {
     // This curve has smooth order for prime 1174273970803390465747303
     // Order has largest prime factors 11329 and 802979
     let c = Curve::from_point(zn.clone(), 2, 132).unwrap();
-    let sb = SmoothBase::new(15000);
+    let sb = SmoothBase::new(15000, true);
     let res = ecm_curve(&sb, &zn, &c, 1.37e6, Verbosity::Silent);
     eprintln!("{:?}", res);
     assert_eq!(res, Some((p, q)));

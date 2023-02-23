@@ -22,14 +22,15 @@ except ImportError:
     pass
 
 p = argparse.ArgumentParser()
-p.add_argument(
-    "-j", dest="threads", type=int, default=os.cpu_count(), help="number of threads"
-)
-p.add_argument("--algo", default="auto", help="auto, ecm, siqs.. or 'sage'")
+p.add_argument("-j", dest="threads", type=int, default=None, help="number of threads")
+p.add_argument("--algo", default="auto", help="auto, ecm, siqs.. or 'sage' or sage-ecm")
 p.add_argument("--semiprimes", action="store_true")
 p.add_argument("minsize", metavar="SIZE1", type=int, help="lower range of number size")
 p.add_argument("maxsize", metavar="SIZE2", type=int, help="upper range of number size")
 args = p.parse_args()
+
+if args.threads is None:
+    args.threads = 1 if args.algo.startswith("sage") else os.cpu_count()
 
 print(f"Test using {args.threads} threads")
 for sz in range(args.minsize, args.maxsize + 1):
@@ -65,6 +66,12 @@ for sz in range(args.minsize, args.maxsize + 1):
                 for p, k in sage.all.factor(n):
                     factors += k * [p]
                 return factors
+            elif args.algo == "sage-ecm":
+                # For Sage ECM, cheat by hinting at factor size.
+                if args.semiprimes:
+                    return sage.all.ecm.find_factor(n, factor_digits=sz // 7)
+                else:
+                    return sage.all.ecm.factor(n)
             else:
                 return pymqs.factor(n, algo=args.algo)
         except Exception:

@@ -1,11 +1,14 @@
 use std::str::FromStr;
 use std::time::Duration;
 
+use bnum::cast::CastFrom;
 use brunch::Bench;
 use yamaquasi::arith_montgomery::ZmodN;
-use yamaquasi::{ecm, Preferences, Uint, Verbosity};
+use yamaquasi::{ecm, ecm128, Preferences, Uint, Verbosity};
 
 fn main() {
+    // A 128-bit modulus.
+    let p128: u128 = 192361420203955321314102766284003105319;
     // A 256-bit prime.
     let p256 = Uint::from_str(
         "92786510271815932444618978328822237837414362351005653014234479629925371473357",
@@ -22,12 +25,29 @@ fn main() {
     brunch::benches! {
         inline:
         {
+            let c = ecm128::Curve::from_fractional_point(p128, 8, 9, 3, 4);
+            let g = c.gen().clone();
+            let n: u64 = 1511 * 1523 * 1531 * 1543 * 1549 * 1553;
+            Bench::new("ECM128 scalar mul n64 x G (p128)")
+                .with_samples(10_000)
+                .run_seeded((), |_| c.scalar64_mul(n, &g))
+        },
+        {
+            let zn = ZmodN::new(Uint::cast_from(p128));
+            let c = ecm::Curve::from_point(zn, 8, 9).unwrap();
+            let g = c.gen();
+            let n: u64 = 1511 * 1523 * 1531 * 1543 * 1549 * 1553;
+            Bench::new("ECM scalar mul n64 x G (p128)")
+                .with_samples(10_000)
+                .run_seeded((), |_| c.scalar64_chainmul(n, &g))
+        },
+        {
             let zn = ZmodN::new(p256);
             let c = ecm::Curve::from_point(zn, 8, 9).unwrap();
             let g = c.gen();
             let n: u64 = 1511 * 1523 * 1531;
             Bench::new("scalar mul n32 x G (p256)")
-                .with_timeout(Duration::from_secs(3))
+                .with_samples(10_000)
                 .run_seeded((), |_| c.scalar64_mul_dbladd(n, &g))
         },
         {
@@ -36,7 +56,7 @@ fn main() {
             let g = c.gen();
             let n: u64 = 1511 * 1523 * 1531 * 1543 * 1549 * 1553;
             Bench::new("scalar mul n64 x G (p256)")
-                .with_timeout(Duration::from_secs(3))
+                .with_samples(10_000)
                 .run_seeded((), |_| c.scalar64_mul_dbladd(n, &g))
         },
         {
@@ -45,7 +65,7 @@ fn main() {
             let g = c.gen();
             let n: u64 = 1511 * 1523 * 1531;
             Bench::new("chain mul n32 x G (p256)")
-                .with_timeout(Duration::from_secs(3))
+                .with_samples(10_000)
                 .run_seeded((), |_| c.scalar64_chainmul(n, &g))
         },
         {
@@ -54,7 +74,7 @@ fn main() {
             let g = c.gen();
             let n: u64 = 1511 * 1523 * 1531 * 1543 * 1549 * 1553;
             Bench::new("chain mul n64 x G (p256)")
-                .with_timeout(Duration::from_secs(3))
+                .with_samples(10_000)
                 .run_seeded((), |_| c.scalar64_chainmul(n, &g))
         },
         {

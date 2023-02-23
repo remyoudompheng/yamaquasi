@@ -27,6 +27,7 @@ pub mod relations;
 
 // Implementations
 pub mod ecm;
+pub mod ecm128;
 pub mod mpqs;
 pub mod pollard_pm1;
 pub mod pollard_rho;
@@ -87,6 +88,7 @@ pub enum Algo {
     Qs64,
     Pm1,
     Ecm,
+    Ecm128,
     Qs,
     Mpqs,
     Siqs,
@@ -101,6 +103,7 @@ impl FromStr for Algo {
             "squfof" => Ok(Self::Squfof),
             "pm1" => Ok(Self::Pm1),
             "ecm" => Ok(Self::Ecm),
+            "ecm128" => Ok(Self::Ecm128),
             "qs" => Ok(Self::Qs),
             "qs64" => Ok(Self::Qs64),
             "mpqs" => Ok(Self::Mpqs),
@@ -267,7 +270,12 @@ fn factor_impl(
                     );
                 }
             }
-            if let Some((a, b)) = ecm::ecm_auto(n, prefs, tpool) {
+            let ecm_res = if matches!(n.bits(), 65..=128) {
+                ecm128::ecm128(n, false, prefs)
+            } else {
+                ecm::ecm_auto(n, prefs, tpool)
+            };
+            if let Some((a, b)) = ecm_res {
                 factor_impl(a, alg, prefs, factors, tpool);
                 if prefs.verbose(Verbosity::Info) {
                     eprintln!("Recursively factor {b}");
@@ -304,10 +312,25 @@ fn factor_impl(
             return;
         }
         Algo::Ecm => {
-            // Pure ECM is requested.
+            if let Some((a, b)) = ecm::ecm_only(n, prefs, tpool) {
+                factor_impl(a, alg, prefs, factors, tpool);
+                if prefs.verbose(Verbosity::Info) {
+                    eprintln!("Recursively factor {b}");
+                }
+                factor_impl(b, alg, prefs, factors, tpool);
+                return;
+            }
+            if prefs.verbose(Verbosity::Info) {
+                eprintln!("Factorization is incomplete.");
+            }
+            factors.push(n);
+            return;
+        }
+        Algo::Ecm128 => {
+            // "Small" ECM
             // However due to determinism the recursion will go through the
             // same curves, which is not very useful.
-            if let Some((a, b)) = ecm::ecm_only(n, prefs, tpool) {
+            if let Some((a, b)) = ecm128::ecm128(n, true, prefs) {
                 factor_impl(a, alg, prefs, factors, tpool);
                 if prefs.verbose(Verbosity::Info) {
                     eprintln!("Recursively factor {b}");
@@ -381,6 +404,7 @@ fn factor_impl(
         Algo::Squfof => unreachable!("impossible"),
         Algo::Pm1 => unreachable!("impossible"),
         Algo::Ecm => unreachable!("impossible"),
+        Algo::Ecm128 => unreachable!("impossible"),
         Algo::Qs => Ok(qsieve::qsieve(n, k, prefs, tpool)),
         Algo::Mpqs => Ok(mpqs::mpqs(n, k, prefs, tpool)),
         Algo::Siqs => siqs::siqs(&n, k, prefs, tpool),

@@ -206,11 +206,10 @@ pub fn pm1_quick(n: &Uint, v: Verbosity) -> Option<(Vec<Uint>, Uint)> {
     match n.bits() {
         // Ignore single word integers: the multiprecision implementation
         // is too costly.
-        0..=64 => None,
-        // Extremely quick run
-        65..=128 => pm1_impl(n, 400, 15e3, v),
+        // Also ignore numbers until 84-bit where ECM is very fast.
+        0..=84 => None,
         // Catches many 24-bit factors in 1-5ms.
-        129..=190 => pm1_impl(n, 600, 40e3, v),
+        85..=190 => pm1_impl(n, 600, 40e3, v),
         // Takes less than a few ms
         191..=220 => pm1_impl(n, 10_000, 270e3, v),
         // Takes less than 0.01 second
