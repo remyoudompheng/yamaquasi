@@ -44,21 +44,23 @@ use crate::{Int, Preferences, Uint, UnexpectedFactor, Verbosity};
 
 pub fn siqs(
     n: &Uint,
+    k: u32, // multiplier
     prefs: &Preferences,
     tpool: Option<&rayon::ThreadPool>,
-) -> Result<Vec<Relation>, UnexpectedFactor> {
+) -> Result<Vec<Uint>, UnexpectedFactor> {
+    let (norig, n) = (n, n * Uint::from(k));
     let use_double = prefs.use_double.unwrap_or(n.bits() > 256);
     // Choose factor base. Sieve twice the number of primes
     // (n will be a quadratic residue for only half of them)
-    let fb = prefs.fb_size.unwrap_or(fb_size(n, use_double));
-    let fbase = FBase::new(*n, fb);
+    let fb = prefs.fb_size.unwrap_or(fb_size(&n, use_double));
+    let fbase = FBase::new(n, fb);
     if let Err(e) = fbase.check_divisors() {
         if prefs.verbose(Verbosity::Info) {
             eprintln!("Unexpected divisor {} in factor base", e.0);
         }
         return Err(e);
     }
-    let mm = interval_size(n);
+    let mm = interval_size(&n);
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Smoothness bound {}", fbase.bound());
         eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls(),);
@@ -66,9 +68,9 @@ pub fn siqs(
     }
 
     // Generate all values of A now.
-    let nfacs = nfactors(n) as usize;
-    let factors = select_siqs_factors(&fbase, n, nfacs, mm as usize, prefs.verbosity);
-    let a_ints = select_a(&factors, a_value_count(n), prefs.verbosity);
+    let nfacs = nfactors(&n) as usize;
+    let factors = select_siqs_factors(&fbase, &n, nfacs, mm as usize, prefs.verbosity);
+    let a_ints = select_a(&factors, a_value_count(&n), prefs.verbosity);
     let polys_per_a = 1 << (nfacs - 1);
     if prefs.verbose(Verbosity::Verbose) {
         eprintln!(
@@ -83,7 +85,7 @@ pub fn siqs(
     }
 
     let maxprime = fbase.bound() as u64;
-    let maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(n));
+    let maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(&n));
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Max large prime {}", maxlarge);
         if use_double {
@@ -94,7 +96,7 @@ pub fn siqs(
         }
     }
 
-    let s = SieveSIQS::new(n, &fbase, maxlarge, use_double, mm as usize, prefs);
+    let s = SieveSIQS::new(&n, &fbase, maxlarge, use_double, mm as usize, prefs);
 
     // When using multiple threads, each thread will sieve a different A
     // to avoid breaking parallelism during 'prepare_a'.
@@ -144,7 +146,11 @@ pub fn siqs(
     if s.gap.load(Ordering::Relaxed) != 0 && rels.len() <= fbase.len() {
         panic!("Internal error: not enough smooth numbers with selected parameters (n={n})");
     }
-    Ok(rels.into_inner())
+    let rels = rels.into_inner();
+    if rels.len() == 0 {
+        return Ok(vec![]);
+    }
+    Ok(relations::final_step(norig, &fbase, &rels, prefs.verbosity))
 }
 
 fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {
@@ -183,7 +189,7 @@ fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {
             // unlikely: are we done yet?
             let rgap = {
                 let rels = s.rels.read().unwrap();
-                rels.gap()
+                rels.gap(s.fbase)
             };
             s.gap.store(rgap, Ordering::Relaxed);
             if rgap == 0 {

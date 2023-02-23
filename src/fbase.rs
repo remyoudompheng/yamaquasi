@@ -25,9 +25,13 @@ pub struct FBase {
     // idx_by_log[i] is the index of the first prime
     // such that bit_length >= i.
     pub idx_by_log: [usize; 24 + 2],
+    revidx: Box<[u32]>,
 }
 
 impl FBase {
+    // Resolution of reverse index.
+    const REVIDX_STEP: usize = 128;
+
     pub fn new(n: Uint, size: u32) -> Self {
         // We may be very unlucky and not get enough primes, because we keep
         // only those having n as a quadratic residue. So take a few extra primes.
@@ -35,6 +39,7 @@ impl FBase {
         let mut primes = vec![];
         let mut sqrts = vec![];
         let mut divs = vec![];
+        let mut revidx = vec![];
         let mut idx_by_log = [0; 24 + 2];
         let mut log = 0;
         let mut prepared = prepare_factor_base(&n, &ps);
@@ -53,8 +58,15 @@ impl FBase {
             primes.push(p);
             sqrts.push(r as u32);
             divs.push(div);
+            // revidx[p/REVIDX_STEP] = pidx
+            let pidx = primes.len() as u32 - 1;
+            while revidx.len() < p as usize / Self::REVIDX_STEP + 1 {
+                revidx.push(pidx);
+            }
         }
+        // Extra indices
         assert!(primes.len() % 8 == 0);
+        revidx.push(primes.len() as u32);
         for idx in log..idx_by_log.len() {
             idx_by_log[idx] = primes.len();
         }
@@ -63,6 +75,33 @@ impl FBase {
             sqrts,
             divs,
             idx_by_log,
+            revidx: revidx.into_boxed_slice(),
+        }
+    }
+
+    pub fn new64(n: u64) -> Self {
+        let mut primes: Vec<u32> = vec![];
+        let mut sqrts: Vec<u32> = vec![];
+        let mut divs = vec![];
+        for &p in &SMALL_PRIMES {
+            if let Some(r) = arith::sqrt_mod(n, p) {
+                primes.push(p as u32);
+                sqrts.push(r as u32);
+                divs.push(arith::Dividers::new(p as u32));
+            }
+        }
+        assert!(2 * Self::REVIDX_STEP > primes[primes.len() - 1] as usize);
+        let len = primes.len();
+        let mid = primes
+            .iter()
+            .position(|&p| p >= Self::REVIDX_STEP as u32)
+            .unwrap_or(len);
+        FBase {
+            primes,
+            sqrts,
+            divs,
+            idx_by_log: [0usize; 26],
+            revidx: vec![0, mid as u32, len as u32].into_boxed_slice(),
         }
     }
 
@@ -102,6 +141,22 @@ impl FBase {
 
     pub fn div(&self, idx: usize) -> &arith::Dividers {
         &self.divs[idx]
+    }
+
+    /// Reverse lookup for the index of a given prime.
+    ///
+    /// This can be used as a "perfect hash function" in some places.
+    pub fn idx(&self, p: u32) -> Option<usize> {
+        let idx = p as usize / Self::REVIDX_STEP;
+        if idx >= self.revidx.len() - 1 {
+            return None;
+        }
+        for i in self.revidx[idx]..self.revidx[idx + 1] {
+            if self.primes[i as usize] == p {
+                return Some(i as usize);
+            }
+        }
+        None
     }
 
     // Returns a (large) structure for a given prime.

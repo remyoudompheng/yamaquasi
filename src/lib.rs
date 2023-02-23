@@ -373,27 +373,26 @@ fn factor_impl(
     if prefs.verbose(Verbosity::Verbose) {
         eprintln!("Selected multiplier {k} (score {score:.2}/10)");
     }
-    let nk = n * Uint::from(k);
     // TODO: handle the case where n is not coprime to the factor base
     // TODO: handle the case of prime powers
-    let rels = match alg_real {
+    let divs = match alg_real {
         Algo::Auto => unreachable!("impossible"),
         Algo::Qs64 => unreachable!("impossible"),
         Algo::Squfof => unreachable!("impossible"),
         Algo::Pm1 => unreachable!("impossible"),
         Algo::Ecm => unreachable!("impossible"),
-        Algo::Qs => Ok(qsieve::qsieve(nk, prefs, tpool)),
-        Algo::Mpqs => Ok(mpqs::mpqs(nk, prefs, tpool)),
-        Algo::Siqs => siqs::siqs(&nk, prefs, tpool),
+        Algo::Qs => Ok(qsieve::qsieve(n, k, prefs, tpool)),
+        Algo::Mpqs => Ok(mpqs::mpqs(n, k, prefs, tpool)),
+        Algo::Siqs => siqs::siqs(&n, k, prefs, tpool),
     };
-    let rels = match rels {
-        Ok(rels) => {
-            if rels.len() == 0 {
+    let divs = match divs {
+        Ok(divs) => {
+            if divs.len() == 0 {
                 // Failure or interrupted.
                 factors.push(n);
                 return;
             } else {
-                rels
+                divs
             }
         }
         Err(UnexpectedFactor(d)) => {
@@ -402,8 +401,7 @@ fn factor_impl(
             return;
         }
     };
-    // Determine non trivial divisors.
-    let divs = relations::final_step(&n, &rels, prefs.verbosity);
+    // Use non trivial divisors to factor n.
     // A factorization of n.
     let mut facs = vec![n];
     for d in divs {

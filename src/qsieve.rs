@@ -25,7 +25,13 @@ use crate::relations::{self, Relation, RelationSet};
 use crate::sieve::{Sieve, SievePrime, BLOCK_SIZE};
 use crate::{Int, Preferences, Uint, Verbosity};
 
-pub fn qsieve(n: Uint, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -> Vec<Relation> {
+pub fn qsieve(
+    n: Uint,
+    k: u32,
+    prefs: &Preferences,
+    tpool: Option<&rayon::ThreadPool>,
+) -> Vec<Uint> {
+    let (norig, n) = (n, n * Uint::from(k));
     // We cannot use quadratic sieve for numbers above 400 bits
     // (or at least it is extremely unreasonable and cost days of CPU).
     // This is so that sqrt(n) * interval size always fits in 256 bits.
@@ -138,7 +144,7 @@ pub fn qsieve(n: Uint, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -
         // test whether we already have enough relations.
         if n.bits() < 64 || rels.len() >= target {
             let rels = qs.rels.read().unwrap();
-            let gap = rels.gap();
+            let gap = rels.gap(&fbase);
             if gap == 0 {
                 if prefs.verbose(Verbosity::Info) {
                     eprintln!("Found enough relations");
@@ -163,7 +169,10 @@ pub fn qsieve(n: Uint, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -
     if rels.len() > fbase.len() + relations::MIN_KERNEL_SIZE {
         rels.truncate(fbase.len() + relations::MIN_KERNEL_SIZE)
     }
-    rels.into_inner()
+    if rels.len() == 0 {
+        return vec![];
+    }
+    relations::final_step(&norig, &fbase, &rels.into_inner(), prefs.verbosity)
 }
 
 /// Large factor multiplier for classical QS.

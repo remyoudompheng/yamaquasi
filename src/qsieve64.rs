@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use crate::arith::{self, Num};
-use crate::fbase::SMALL_PRIMES;
+use crate::fbase::{FBase, SMALL_PRIMES};
 use crate::relations::{self, Relation};
 use crate::{Uint, Verbosity};
 
@@ -27,22 +27,11 @@ pub fn qsieve(n: u64, v: Verbosity) -> Option<(u64, u64)> {
         return Some((nsqrt, nsqrt));
     }
     let nk = n * k as u64;
-    let mut primes: Vec<u32> = vec![];
-    let mut sqrts: Vec<u32> = vec![];
-    let mut divs = vec![];
-    for &p in &SMALL_PRIMES {
-        if n % p == 0 {
-            return Some((p, n / p));
-        }
-        if let Some(r) = arith::sqrt_mod(nk, p) {
-            primes.push(p as u32);
-            sqrts.push(r as u32);
-            divs.push(arith::Dividers::new(p as u32));
-        }
-    }
+    let fb = FBase::new64(nk);
     if v >= Verbosity::Debug {
-        eprintln!("Selected factor base {:?}", primes,);
+        eprintln!("Selected factor base {:?}", fb.primes);
     }
+    let (primes, sqrts, divs) = (&fb.primes, &fb.sqrts, &fb.divs);
 
     let nsqrt = arith::isqrt(nk);
     if nk == nsqrt * nsqrt {
@@ -161,7 +150,7 @@ pub fn qsieve(n: u64, v: Verbosity) -> Option<(u64, u64)> {
         interval.fill(0u8);
     }
 
-    let divs = relations::final_step(&Uint::from(n), &rels, v);
+    let divs = relations::final_step(&Uint::from(n), &fb, &rels, v);
     if let Some(p) = divs.first() {
         let p = p.low_u64();
         assert_eq!(n % p, 0);
@@ -226,6 +215,10 @@ fn test_qsieve() {
     );
     let mut factored = 0;
     for n in 1 << 49..(1 << 49) + 2000 {
+        if n % 2 == 0 {
+            // Modular arithmetic will fail.
+            continue;
+        }
         if crate::fbase::certainly_composite(n) {
             let Some((p, q)) = qsieve(n, Verbosity::Silent) else {
                 panic!("FAIL {}", n);

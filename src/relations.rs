@@ -18,6 +18,7 @@ use num_traits::One;
 
 use crate::arith::{pow_mod, Num, U512};
 use crate::arith_montgomery::ZmodN;
+use crate::fbase::FBase;
 use crate::matrix;
 use crate::{Int, Uint, Verbosity};
 
@@ -116,8 +117,37 @@ impl RelationSet {
         self.cycles.len()
     }
 
-    pub fn gap(&self) -> usize {
-        relation_gap(&self.cycles)
+    /// Compute the number of additional relations required
+    /// to cover a reference factor base.
+    pub fn gap(&self, fbase: &FBase) -> usize {
+        if self.cycles.len() == 0 {
+            return 1000; // infinity
+        }
+
+        // The factor has a natural index, so we use an array
+        // instead of a (costly) hashmap, because we expect
+        // all primes to be covered.
+        let mut count = vec![0u8; fbase.len()];
+        let rels = &self.cycles;
+        for r in rels {
+            for &(f, k) in r.factors.iter() {
+                if k % 2 == 1 {
+                    if let Some(idx) = fbase.idx(f as u32) {
+                        let idx = idx as usize;
+                        count[idx] = count[idx].saturating_add(1);
+                    }
+                }
+            }
+        }
+        // We require additional relations compared to the number of factors.
+        // This is because relations may accidentally be trivial
+        // (x^2=y^2 where n divides x-y or x+y).
+        let nprimes = count.into_iter().filter(|&c| c > 0).count();
+        if nprimes + MIN_KERNEL_SIZE > rels.len() {
+            nprimes + MIN_KERNEL_SIZE - rels.len()
+        } else {
+            0
+        }
     }
 
     pub fn log_progress<S: AsRef<str>>(&self, prefix: S) {
@@ -410,49 +440,35 @@ impl RelationSet {
     }
 }
 
-pub fn relation_gap(rels: &[Relation]) -> usize {
-    if rels.len() == 0 {
-        return 1000; // infinity
-    }
-    let mut occs = HashMap::<i64, u64>::new();
-    for r in rels {
-        for (f, k) in r.factors.iter() {
-            if k % 2 == 1 {
-                let c = occs.get(f).unwrap_or(&0);
-                occs.insert(*f, c + 1);
-            }
-        }
-    }
-    // We require additional relations compared to the number of factors.
-    // This is because relations may accidentally be trivial
-    // (x^2=y^2 where n divides x-y or x+y).
-    if occs.len() + MIN_KERNEL_SIZE > rels.len() {
-        occs.len() + MIN_KERNEL_SIZE - rels.len()
-    } else {
-        0
-    }
-}
-
 /// Finds non trivial square roots of 1 modulo n and returns
 /// a list of non-trivial divisors of n.
 ///
 /// Note that n may be different from the original sieve modulus
 /// which includes the multiplier.
-pub fn final_step(n: &Uint, rels: &[Relation], verbose: Verbosity) -> Vec<Uint> {
+pub fn final_step(n: &Uint, fb: &FBase, rels: &[Relation], verbose: Verbosity) -> Vec<Uint> {
     for r in rels {
         debug_assert!(r.verify(n));
     }
-    // Collect occurrences
-    let mut occs = HashMap::<i64, u64>::new();
+    // Collect occurrences of small factors.
+    // The index is the same as the factor base, with -1 prepended.
+    let mut occs = vec![(0i64, 0u64); fb.len() + 1];
     for r in rels {
-        for (f, k) in r.factors.iter() {
-            let c = occs.get(f);
-            if k % 2 == 1 {
-                occs.insert(*f, c.unwrap_or(&0) + 1);
-            } else if c.is_none() {
-                // Make sure to register all factors.
+        for &(f, k) in r.factors.iter() {
+            if f == -1 {
+                occs[0].0 = -1;
+                if k % 2 == 1 {
+                    occs[0].1 += 1;
+                }
+            } else if let Some(i) = fb.idx(f as u32) {
+                // Make sure to register all (small) factors,
+                // including even exponents.
                 // They will be required when computing products below.
-                occs.insert(*f, 0);
+                occs[i + 1].0 = f;
+                if k % 2 == 1 {
+                    occs[i + 1].1 += 1;
+                }
+            } else {
+                assert!(k % 2 == 0, "f={f} k={k}");
             }
         }
     }
@@ -463,28 +479,46 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: Verbosity) -> Vec<Uint> 
     // Gauss elimination is much more efficient if it starts by eliminating
     // the (few) densest rows: the remaining rows will remain relatively sparse
     // during the rest of the elimination.
-    let mut occs: Vec<(i64, u64)> = occs.into_iter().collect();
+    occs.retain(|&(f, _)| f != 0);
     occs.sort_by_key(|&(_, k)| -(k as i64));
     // We keep only factors with > 1 occurrences for the matrix.
     let nfactors = occs.iter().position(|&(_, k)| k <= 1).unwrap_or(occs.len());
-    // Map primes to their index (even filtered ones).
-    let mut idxs = HashMap::<i64, usize>::new();
+    // Map factor base primes to their sorted index (even filtered ones).
+    // To avoid using a hashmap we actually map idxs[factor base idx] => index in occs.
+    // The special factor -1 is prepended with index zero.
+    // Large primes are ignored.
+    let mut idxs = vec![0u32; 1 + fb.len()];
     for (idx, &(f, _)) in occs.iter().enumerate() {
-        idxs.insert(f, idx);
+        if f == -1 {
+            idxs[0] = idx as u32;
+        } else if let Some(i) = fb.idx(f as u32) {
+            assert_eq!(fb.p(i) as i64, f);
+            idxs[i as usize + 1] = idx as u32;
+        }
     }
+    let get_index = |f: i64| -> Option<usize> {
+        let i = if f == -1 {
+            idxs[0] as usize
+        } else {
+            idxs[fb.idx(f as u32)? as usize + 1] as usize
+        };
+        debug_assert!(occs[i].0 == f);
+        Some(i)
+    };
     // Build vectors
     // ridx[i] = j if rels[j] is the i-th vector in the matrix
     let mut filt_rels: Vec<Relation> = vec![];
-    let mut matrix = vec![];
+    let mut matrix = Vec::with_capacity(rels.len());
     let size = nfactors;
     let mut coeffs = 0;
     'skiprel: for r in rels.iter() {
-        let mut v = vec![];
-        for (f, k) in r.factors.iter() {
+        let mut v = Vec::with_capacity(r.factors.len());
+        for &(f, k) in r.factors.iter() {
             if k % 2 == 0 {
                 continue;
             }
-            let &idx = idxs.get(f).unwrap();
+            // Large primes have even exponent, f must be small.
+            let idx = get_index(f).unwrap();
             if idx < nfactors {
                 v.push(idx);
                 coeffs += 1;
@@ -546,20 +580,28 @@ pub fn final_step(n: &Uint, rels: &[Relation], verbose: Verbosity) -> Vec<Uint> 
     for eq in k {
         // Collect relations for this vector.
         let mut xs = vec![];
+        let mut factors = vec![];
+        // Collect exponents of small primes.
         let mut exps = vec![0u64; occs.len()];
         for i in eq.into_usizes().into_iter() {
             xs.push(filt_rels[i].x);
-            for (f, k) in &filt_rels[i].factors {
-                let idx = idxs.get(f).unwrap();
-                exps[*idx] += k;
+            for &(f, k) in &filt_rels[i].factors {
+                if let Some(idx) = get_index(f) {
+                    assert_eq!(occs[idx].0, f);
+                    exps[idx] += k;
+                } else {
+                    assert!(k % 2 == 0);
+                    factors.push((f, k));
+                }
             }
         }
-        let factors: Vec<(i64, u64)> = exps
-            .into_iter()
-            .enumerate()
-            .filter(|&(_, exp)| exp > 0)
-            .map(|(idx, exp)| (occs[idx].0, exp))
-            .collect();
+        for (idx, &exp) in exps.iter().enumerate() {
+            if exp > 0 {
+                assert!(exp % 2 == 0);
+                let f = occs[idx].0;
+                factors.push((f, exp));
+            }
+        }
         if verbose >= Verbosity::Debug {
             eprintln!("Combine {} relations...", xs.len());
         }

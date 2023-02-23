@@ -22,8 +22,9 @@ use crate::relations::{self, Relation, RelationSet};
 use crate::sieve::{self, BLOCK_SIZE};
 use crate::{Int, Preferences, Uint, Verbosity};
 
-/// Run MPQS to factor `n`
-pub fn mpqs(n: Uint, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -> Vec<Relation> {
+/// Run MPQS to factor `n` with multiplier k
+pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -> Vec<Uint> {
+    let (norig, n) = (n, n * Uint::from(k));
     // We cannot use MPQS for numbers above 448 bits
     // (or at least it is extremely unreasonable and cost days of CPU).
     // This is so that sqrt(n) * interval size always fits in 256 bits.
@@ -134,7 +135,7 @@ pub fn mpqs(n: Uint, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -> 
         // Pop next polynomial.
         if polyidx == d_r_values.len() {
             let rels = rels.read().unwrap();
-            let gap = rels.gap();
+            let gap = rels.gap(s.fbase);
             if gap == 0 {
                 if prefs.verbose(Verbosity::Info) {
                     eprintln!("Found enough relations");
@@ -179,7 +180,7 @@ pub fn mpqs(n: Uint, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -> 
         }
         let rels = rels.read().unwrap();
         if rels.len() >= target {
-            let gap = rels.gap();
+            let gap = rels.gap(s.fbase);
             if gap == 0 {
                 if prefs.verbose(Verbosity::Info) {
                     eprintln!("Found enough relations");
@@ -204,7 +205,11 @@ pub fn mpqs(n: Uint, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -> 
     if rels.len() > fbase.len() + relations::MIN_KERNEL_SIZE {
         rels.truncate(fbase.len() + relations::MIN_KERNEL_SIZE)
     }
-    rels.into_inner()
+    let rels = rels.into_inner();
+    if rels.len() == 0 {
+        return vec![];
+    }
+    relations::final_step(&norig, &fbase, &rels, prefs.verbosity)
 }
 
 /// A polynomial is a quadratic Ax^2 + Bx + C
