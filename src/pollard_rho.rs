@@ -82,8 +82,22 @@ pub fn rho64(n: u64, c: u64, iters: u64) -> Option<(u64, u64)> {
             continue;
         }
         // We are in the interval, compare.
-        prod = mg_mul(n, ninv, prod, x1.abs_diff(x2));
-
+        let prodnext = mg_mul(n, ninv, prod, x1.abs_diff(x2));
+        if prodnext == 0 {
+            // Probably the previous value had a nontrivial GCD with n
+            // and the remaining factor was multiplied in.
+            let d = Integer::gcd(&n, &x1.abs_diff(x2));
+            if d > 1 && d < n {
+                return Some((d, n / d));
+            }
+        }
+        if e2 >= 512 && e2 % 128 == 127 {
+            let d = Integer::gcd(&n, &prod);
+            if d > 1 && d < n {
+                return Some((d, n / d));
+            }
+        }
+        prod = prodnext;
         if e2 == next_interval_end {
             // Set e1 = e2
             x1 = x2;
@@ -92,13 +106,6 @@ pub fn rho64(n: u64, c: u64, iters: u64) -> Option<(u64, u64)> {
             debug_assert!(pow2k & (pow2k - 1) == 0);
             next_interval_start = pow2k + pow2k / 2;
             next_interval_end = 2 * pow2k - 1;
-        }
-
-        if e2 % 128 == 127 {
-            let d = Integer::gcd(&n, &prod);
-            if d > 1 && d < n {
-                return Some((d, n / d));
-            }
         }
     }
     let d = Integer::gcd(&n, &prod);
@@ -121,9 +128,11 @@ pub fn rho(n: &Uint, verbosity: Verbosity) -> Option<(Vec<Uint>, Uint)> {
         25..=32 => 512,
         33..=40 => 2048,
         41..=48 => 8192,
-        49..=56 => 16384,
-        57..=60 => 32768,
-        61..=64 => 65536,
+        // 16384 is a bit too small for 55 bits.
+        49..=52 => 16384,
+        53..=57 => 32768,
+        58..=62 => 65536,
+        63..=64 => 131072,
         // Skip multiprecision inputs: factors will already be found
         // by P-1 and ECM. Even if Pollard rho is quick, it is redundant
         // with other fast methods.
@@ -131,11 +140,12 @@ pub fn rho(n: &Uint, verbosity: Verbosity) -> Option<(Vec<Uint>, Uint)> {
     };
     // Use several functions to avoid large cycles.
     // We don't want to fallback to a slower algorithm.
-    for c in 1..5 {
+    // Typical runtime is below 1ms.
+    for c in 1..10 {
         if let Some((p, q)) = rho64(n0, c, iters) {
             if verbosity >= Verbosity::Info {
                 let ms = start.elapsed().as_secs_f64() * 1000.0;
-                eprintln!("Found factor {p} with Pollard rho (iters={c}x{iters}) in {ms:.1}ms");
+                eprintln!("Found factor {p} with Pollard rho (iters={c}x{iters}) in {ms:.3}ms");
             }
             return Some((vec![p.into()], q.into()));
         }
@@ -222,6 +232,41 @@ fn test_rho_basic() {
     let n = 0xeb67d1ff62bd9f49;
     let (p, q) = rho_semiprime(n).unwrap();
     assert_eq!(p * q, n);
+}
+
+#[test]
+fn test_rho_small() {
+    // Test some numbers observed to fail with some parameters.
+    // Especially if cycles happens simultaneously.
+    // Requires checking GCD often enough or testing enough values.
+    let ns: &[u64] = &[
+        281 * 331,
+        2179 * 2539,
+        2707 * 3821,
+        3119 * 3719,
+        12011 * 13619,
+        14879 * 16229,
+        43037 * 59107,
+        139801 * 146381,
+        611641 * 995651,
+        937571 * 917209,
+        // Needs many iterations for iters=16384
+        114385069 * 94938061,
+        168806699 * 197877437,
+        173937383 * 240881257,
+        946617377 * 892240367,
+        693965191 * 1582979039,
+        // Needs many iterations for iters=65536
+        4088764103 * 3473680711,
+        3142887637 * 2807200547,
+    ];
+    for &n in ns {
+        if let Some((p, q)) = rho(&Uint::from(n), Verbosity::Info) {
+            assert_eq!(p[0] * q, Uint::from_digit(n));
+        } else {
+            panic!("failure for {n}");
+        }
+    }
 }
 
 #[test]
