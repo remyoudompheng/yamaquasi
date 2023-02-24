@@ -1,8 +1,11 @@
-// Copyright 2022 Rémy Oudompheng. All rights reserved.
+// Copyright 2022, 2023 Rémy Oudompheng. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! Random YMQS testing
+//! Random YMQS testing.
+//!
+//! This program generates random semiprimes for the requested bit length
+//! and runs yamaquasi with selected algorithm for test and benchmark purposes.
 
 use std::str::FromStr;
 use std::time::Instant;
@@ -22,7 +25,7 @@ fn main() {
         eprintln!("");
         eprintln!("Options:");
         eprintln!("  --help                    show this help");
-        eprintln!("  --mode ecm|qs|qs64|mpqs|siqs: force algorithm selection");
+        eprintln!("  --mode ecm|ecm128|rho|qs|mpqs|siqs: force algorithm selection");
         eprintln!("  --bits B:                 input length");
         return;
     }
@@ -40,7 +43,7 @@ fn main() {
         rng.try_fill(&mut words).unwrap();
         let q0 = U256::from_digits(words) | U256::power_of_two(255);
         let p = Uint::cast_from(nextprime(&fbase, p0 >> (256 - bits / 2)));
-        let q = Uint::cast_from(nextprime(&fbase, q0 >> (256 - bits / 2)));
+        let q = Uint::cast_from(nextprime(&fbase, q0 >> (256 - bits + bits / 2)));
         eprint!("{}", format!("p={p} q={q} => n={}\n", p * q));
         // Factor
         let n = p * q;

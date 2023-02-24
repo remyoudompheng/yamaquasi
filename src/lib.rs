@@ -84,6 +84,7 @@ impl Preferences {
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum Algo {
     Auto,
+    Rho,
     Squfof,
     Qs64,
     Pm1,
@@ -100,6 +101,7 @@ impl FromStr for Algo {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "auto" => Ok(Self::Auto),
+            "rho" => Ok(Self::Rho),
             "squfof" => Ok(Self::Squfof),
             "pm1" => Ok(Self::Pm1),
             "ecm" => Ok(Self::Ecm),
@@ -228,8 +230,8 @@ fn factor_impl(
         factors.push(n);
         return;
     }
-    // Do we need to try an ECM step?
-    match alg {
+    // Apply automatic strategy.
+    let alg_real = match alg {
         Algo::Auto => {
             // For small inputs, Pollard rho is faster than ECM and quadratic sieve.
             if n.bits() < 52 {
@@ -286,7 +288,20 @@ fn factor_impl(
                 factor_impl(b, alg, prefs, factors, tpool);
                 return;
             }
+            // Select fallback algorithm
+            // The above Rho and ECM128 steps should not fail.
+            // Select ECM128 as the fallback for small integers.
+            if n.bits() <= 80 {
+                Algo::Ecm128
+            } else {
+                Algo::Siqs
+            }
         }
+        _ => alg,
+    };
+    // Now the strategy cannot be Auto.
+    match alg_real {
+        Algo::Auto => unreachable!("impossible"),
         Algo::Pm1 => {
             // Pure Pollard P-1
             let start_pm1 = std::time::Instant::now();
@@ -347,20 +362,6 @@ fn factor_impl(
             factors.push(n);
             return;
         }
-        _ => {}
-    }
-    // Select algorithm
-    let alg_real = if let Algo::Auto = alg {
-        // FIXME: consider using Pollard's rho.
-        if n.bits() <= 60 {
-            Algo::Squfof
-        } else {
-            Algo::Siqs
-        }
-    } else {
-        alg
-    };
-    match alg_real {
         Algo::Qs64 => {
             assert!(n.bits() <= 64);
             if let Some((a, b)) = qsieve64::qsieve(n.low_u64(), prefs.verbosity) {
@@ -375,6 +376,23 @@ fn factor_impl(
             }
             return;
         }
+        Algo::Rho => {
+            assert!(n.bits() <= 64);
+            if let Some((a_s, b)) = pollard_rho::rho(&n, prefs.verbosity) {
+                for a in a_s {
+                    factor_impl(a, alg, prefs, factors, tpool);
+                }
+                if prefs.verbose(Verbosity::Info) {
+                    eprintln!("Recursively factor {b}");
+                }
+                factor_impl(b, alg, prefs, factors, tpool);
+                return;
+            } else {
+                if prefs.verbose(Verbosity::Info) {
+                    eprintln!("Rho algorithm failed");
+                }
+            }
+        }
         Algo::Squfof => {
             assert!(n.bits() <= 64);
             if let Some((a, b)) = squfof::squfof(n.low_u64()) {
@@ -388,7 +406,8 @@ fn factor_impl(
             }
             return;
         }
-        _ => {}
+        // Otherwise it is a quadratic sieve.
+        Algo::Qs | Algo::Mpqs | Algo::Siqs => {}
     }
     if prefs.abort() {
         factors.push(n);
@@ -399,18 +418,11 @@ fn factor_impl(
     if prefs.verbose(Verbosity::Verbose) {
         eprintln!("Selected multiplier {k} (score {score:.2}/10)");
     }
-    // TODO: handle the case where n is not coprime to the factor base
-    // TODO: handle the case of prime powers
     let divs = match alg_real {
-        Algo::Auto => unreachable!("impossible"),
-        Algo::Qs64 => unreachable!("impossible"),
-        Algo::Squfof => unreachable!("impossible"),
-        Algo::Pm1 => unreachable!("impossible"),
-        Algo::Ecm => unreachable!("impossible"),
-        Algo::Ecm128 => unreachable!("impossible"),
         Algo::Qs => Ok(qsieve::qsieve(n, k, prefs, tpool)),
         Algo::Mpqs => Ok(mpqs::mpqs(n, k, prefs, tpool)),
         Algo::Siqs => siqs::siqs(&n, k, prefs, tpool),
+        _ => unreachable!("impossible"),
     };
     let divs = match divs {
         Ok(divs) => {
@@ -531,10 +543,18 @@ pub fn isprime64(p: u64) -> bool {
         }
         ok
     };
-    // Bases for 40-bit integers.
-    for b in [2, 3, 5, 7, 11] {
+    // Bases for 20-bit integers.
+    for b in [2, 3] {
         if !miller(b) {
             return false;
+        }
+    }
+    if p >> 20 != 0 {
+        // Bases for 40-bit integers.
+        for b in [5, 7, 11] {
+            if !miller(b) {
+                return false;
+            }
         }
     }
     if p >> 40 != 0 {
