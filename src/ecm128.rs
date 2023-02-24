@@ -12,7 +12,6 @@
 ///
 /// Bibliography
 /// Bos, Kleinjung, "ECM at Work", https://eprint.iacr.org/2012/089
-
 use bnum::cast::CastFrom;
 use num_integer::Integer;
 
@@ -29,10 +28,11 @@ pub fn ecm128(n: Uint, try_harder: bool, prefs: &Preferences) -> Option<(Uint, U
     let n128 = u128::cast_from(n);
     let multiplier = if try_harder { 1000 } else { 1 };
     let (p, q) = match n.bits() {
-        // Only number between 64 and 128 bits are supported.
-        0..=64 => None,
-        129.. => None,
         // Target factors of size sqrt(n): use 2x the number of expected curves.
+        0..=40 => ecm(n128, 4 * multiplier, 50, 1080., prefs),
+        41..=48 => ecm(n128, 8 * multiplier, 50, 1920., prefs),
+        49..=56 => ecm(n128, 8 * multiplier, 100, 3e3, prefs),
+        57..=64 => ecm(n128, 10 * multiplier, 180, 7.7e3, prefs),
         65..=72 => ecm(n128, 12 * multiplier, 350, 13.2e3, prefs),
         73..=80 => ecm(n128, 30 * multiplier, 600, 20e3, prefs),
         // ECM is no longer optimal, reduce the number of curves (1/10th of required curves)
@@ -40,6 +40,8 @@ pub fn ecm128(n: Uint, try_harder: bool, prefs: &Preferences) -> Option<(Uint, U
         89..=96 => ecm(n128, 3 * multiplier, 1500, 81e3, prefs),
         97..=112 => ecm(n128, 7 * multiplier, 3600, 181e3, prefs),
         113..=128 => ecm(n128, 8 * multiplier, 10000, 554e3, prefs),
+        // Only numbers below 128 bits are supported.
+        129.. => None,
     }?;
     Some((p.into(), q.into()))
 }
@@ -52,9 +54,24 @@ fn ecm(n: u128, curves: usize, b1: u64, b2: f64, prefs: &Preferences) -> Option<
         eprintln!("Attempting small ECM with {curves} curves B1={b1} B2={b2:e}",);
     }
     let start = std::time::Instant::now();
-    for seed in 0..curves {
-        let p = suyama.element(seed as u32 + 2).unwrap();
-        let g = suyama.params_point(&p).unwrap();
+    for seed in 1..=curves {
+        let g = suyama
+            .element(seed as u32 + 1)
+            .and_then(|p| suyama.params_point(&p));
+        let g = match g {
+            Ok(g) => g,
+            Err(ecm::UnexpectedLargeFactor(p)) => {
+                let p = u128::cast_from(p);
+                if p < n {
+                    if prefs.verbose(Verbosity::Info) {
+                        eprintln!("Unexpected factor {p} while selecting curve");
+                    }
+                    return Some((p, n / p));
+                }
+                continue;
+            }
+        };
+
         // Convert point to u128.
         let (gx, gy, gz) = g.xyz();
         let g128 = Point(
@@ -66,7 +83,9 @@ fn ecm(n: u128, curves: usize, b1: u64, b2: f64, prefs: &Preferences) -> Option<
         if let res @ Some((p, _)) = ecm_curve(&c, &sb, b2, prefs.verbosity) {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
             if prefs.verbose(Verbosity::Info) {
-                eprintln!("ECM found factor {p} at curve {seed}/{curves} elapsed={elapsed:.2}ms");
+                eprintln!(
+                    "Small ECM found factor {p} at curve {seed}/{curves} elapsed={elapsed:.2}ms"
+                );
             }
             return res;
         }
@@ -208,31 +227,20 @@ fn ecm_curve(
     None
 }
 
-// TODO:
-// Montgomery 128-bit arithmetic
-// double proj to ext
-// add ext
-// for twisted
-//
-// precomputed modular curve points:
-// or use the Suyama11 structure??
-// 1G P=(2 : -14 : 1) σ=11 r=-168 G=(-11/60, 11529/12860)
-// 2G P=(13 : -30 : 1) σ=11/13 r=-1440/169 G=(8580/3059, 4426974/1502767)
-// 3G P=(2892 : 155496 : 1) σ=-239/241 r=51832/58081 G=(373183921/10071303480, 3638235658681/194731258551480)
-// 4G P=(207348/83521 : -288872640/24137569 : 1) σ=149763/17279 r=-27828064320/298563841
-// 5G P=(-40402086/10621081 : -990568806630/34614102979 : 1) σ=-49218005/6733681 r=-4304351654409560/45342459809761
-//
-//
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct M128(u128);
 
 // Montgomery modular arithmetic for 128-bit moduli.
+// If the modulus fits in 64 bits, operations are defined with
+// multiplier 2^64 instead of 2^128.
 impl M128 {
     fn inv_2adic(n: u128) -> u128 {
         debug_assert!(n % 2 == 1);
         // Use 64-bit inverse as starting point.
         let mut x = arith_montgomery::mg_2adic_inv(n as u64) as u128;
+        if n >> 64 == 0 {
+            return x;
+        }
         loop {
             let rem = n.wrapping_mul(x) - 1;
             if rem == 0 {
@@ -248,6 +256,9 @@ impl M128 {
     fn r_r2(n: u128, ninv: u128) -> (M128, M128) {
         // (2^128 - n) % n
         let r = M128(0_u128.wrapping_sub(n) % n);
+        if n >> 64 == 0 {
+            return (M128((1 << 64) % n), r);
+        }
         // 2^256 % n
         // This is the Montgomery representation of 2^128.
         let two = M128::add(n, r, r);
@@ -278,6 +289,11 @@ impl M128 {
     }
 
     fn mul(n: u128, ninv: u128, x: M128, y: M128) -> M128 {
+        if n >> 64 == 0 {
+            return M128(
+                arith_montgomery::mg_mul(n as u64, ninv as u64, x.0 as u64, y.0 as u64) as u128,
+            );
+        }
         fn mul256(x: u128, y: u128) -> (u128, u128) {
             // Compute the 256-bit product xy.
             let (x0, x1) = (x as u64, (x >> 64) as u64);
@@ -575,6 +591,14 @@ fn test_curve() {
     eprintln!("g1 = {g1:?}");
     assert!(g1.0 .0 % p == 0);
     assert!(g2.0 .0 == 0);
+
+    // Also test 64-bit.
+    let c = Curve::from_fractional_point(p, -11, 60, 11529, 12860);
+    let g = c.gen();
+    assert!(c.is_valid(&c.ext(&g)));
+
+    let g1 = c.scalar64_mul(602768647071432, g);
+    assert!(g1.0 .0 == 0);
 }
 
 #[test]

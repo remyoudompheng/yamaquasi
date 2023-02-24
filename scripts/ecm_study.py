@@ -51,7 +51,7 @@ smooths = sorted([
 ])
 # fmt:on
 # For small values, we want "square" patterns (1 block)
-for t in [32, 40, 48, 64, 80, 100, 120, 150, 180, 210, 240, 320, 360, 420]:
+for t in [12, 16, 20, 24, 32, 40, 48, 64, 80, 100, 120, 150, 180, 210, 240, 320, 360, 420]:
     nbest = 0
     for n in smooths:
         if 0.80 <= euler_phi(n) / 2 / t <= 1.01:

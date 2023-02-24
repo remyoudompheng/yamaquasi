@@ -619,7 +619,7 @@ impl ExtPoint {
 
 #[derive(Debug)]
 #[doc(hidden)]
-pub struct UnexpectedLargeFactor(Uint);
+pub struct UnexpectedLargeFactor(pub(crate) Uint);
 
 impl UnexpectedLargeFactor {
     fn new(zn: &ZmodN, x: &MInt) -> Self {

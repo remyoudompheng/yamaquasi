@@ -231,16 +231,18 @@ fn factor_impl(
     // Do we need to try an ECM step?
     match alg {
         Algo::Auto => {
-            // For small inputs, Pollard rho is a good complement to Pollard P-1.
-            if let Some((a_s, b)) = pollard_rho::rho(&n, prefs.verbosity) {
-                for a in a_s {
-                    factor_impl(a, alg, prefs, factors, tpool);
+            // For small inputs, Pollard rho is faster than ECM and quadratic sieve.
+            if n.bits() < 52 {
+                if let Some((a_s, b)) = pollard_rho::rho(&n, prefs.verbosity) {
+                    for a in a_s {
+                        factor_impl(a, alg, prefs, factors, tpool);
+                    }
+                    if prefs.verbose(Verbosity::Info) {
+                        eprintln!("Recursively factor {b}");
+                    }
+                    factor_impl(b, alg, prefs, factors, tpool);
+                    return;
                 }
-                if prefs.verbose(Verbosity::Info) {
-                    eprintln!("Recursively factor {b}");
-                }
-                factor_impl(b, alg, prefs, factors, tpool);
-                return;
             }
             // Only in automatic mode, for large inputs, Pollard P-1 and ECM can be useful.
             if n.bits() > 64 && !prefs.pm1_done.load(Ordering::Relaxed) {
@@ -270,7 +272,8 @@ fn factor_impl(
                     );
                 }
             }
-            let ecm_res = if matches!(n.bits(), 65..=128) {
+            // ECM, in its 128-bit variant, is already efficient for 52-bit numbers.
+            let ecm_res = if matches!(n.bits(), 52..=128) {
                 ecm128::ecm128(n, false, prefs)
             } else {
                 ecm::ecm_auto(n, prefs, tpool)
@@ -803,6 +806,12 @@ fn test_factor_ecm_edgecases() -> Result<(), bnum::errors::ParseIntError> {
     let fs = factor(n, Algo::Ecm, &Preferences::default());
     assert_eq!(fs.len(), 3);
     assert_eq!(fs[0] * fs[1] * fs[2], n);
+
+    // Similarly for the small variant.
+    let n = Uint::from_str("35095808598940323061")?;
+    let fs = factor(n, Algo::Ecm128, &Preferences::default());
+    assert_eq!(fs.len(), 2);
+    assert_eq!(fs[0] * fs[1], n);
 
     Ok(())
 }
