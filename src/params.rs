@@ -45,8 +45,9 @@ pub fn large_prime_factor(n: &Uint) -> u64 {
 const STAGE2_PARAMS: &[(f64, u64, u64)] = &[
     // B2, d1, d2
     // Using quadratic method, d2=φ(d1)/2, cost d2^2
-    (1.08e3, 90, 12),
-    (1.92e3, 120, 16),
+    (660., 66, 10),
+    (1080., 90, 12),
+    (1920., 120, 16),
     (3e3, 150, 20),
     (5.04e3, 210, 24),
     (7.7e3, 240, 32),

@@ -21,27 +21,30 @@ use crate::params::stage2_params;
 use crate::{Preferences, Uint, Verbosity};
 
 pub fn ecm128(n: Uint, try_harder: bool, prefs: &Preferences) -> Option<(Uint, Uint)> {
-    // The CPU budget here is only a few seconds (at most 1% of SIQS time).
-    // So we intentionally use small parameters hoping to be very lucky.
-    // This means that the parameters should be tuned to find factors
-    // smaller than about n^1/4.
     let n128 = u128::cast_from(n);
-    let multiplier = if try_harder { 1000 } else { 1 };
+    // If we want to completely factor the input number, multiply the average
+    // required number of curves by the size of n.
+    let multiplier = if try_harder { n.bits() as usize } else { 1 };
     let (p, q) = match n.bits() {
         // Target factors of size sqrt(n): use 2x the number of expected curves.
-        0..=40 => ecm(n128, 4 * multiplier, 50, 1080., prefs),
+        0..=32 => ecm(n128, 6 * multiplier, 16, 660., prefs),
+        33..=40 => ecm(n128, 6 * multiplier, 40, 1080., prefs),
         41..=48 => ecm(n128, 8 * multiplier, 50, 1920., prefs),
-        49..=56 => ecm(n128, 8 * multiplier, 100, 3e3, prefs),
-        57..=64 => ecm(n128, 10 * multiplier, 180, 7.7e3, prefs),
-        65..=72 => ecm(n128, 12 * multiplier, 350, 13.2e3, prefs),
-        73..=80 => ecm(n128, 30 * multiplier, 600, 20e3, prefs),
+        // For smallest inputs, boost the number of curves to avoid fallback
+        // to slower Pollard's Rho or SIQS (2x expected curves for success)
+        49..=56 => ecm(n128, 8 * 2 * multiplier, 100, 3e3, prefs),
+        57..=64 => ecm(n128, 10 * 2 * multiplier, 180, 7.7e3, prefs),
+        65..=72 => ecm(n128, 12 * 2 * multiplier, 350, 13.2e3, prefs),
+        73..=80 => ecm(n128, 30 * 2 * multiplier, 600, 20e3, prefs),
         // ECM is no longer optimal, reduce the number of curves (1/10th of required curves)
-        81..=88 => ecm(n128, 2 * multiplier, 1000, 53e3, prefs),
-        89..=96 => ecm(n128, 3 * multiplier, 1500, 81e3, prefs),
-        97..=112 => ecm(n128, 7 * multiplier, 3600, 181e3, prefs),
-        113..=128 => ecm(n128, 8 * multiplier, 10000, 554e3, prefs),
+        // and keep small parameters.
+        81..=128 if !try_harder => ecm(n128, 3 * multiplier, 600, 20e3, prefs),
+        81..=88 if try_harder => ecm(n128, 20 * multiplier, 1000, 53e3, prefs),
+        89..=96 if try_harder => ecm(n128, 30 * multiplier, 1500, 81e3, prefs),
+        97..=112 if try_harder => ecm(n128, 70 * multiplier, 3600, 181e3, prefs),
+        113..=128 if try_harder => ecm(n128, 80 * multiplier, 10000, 554e3, prefs),
         // Only numbers below 128 bits are supported.
-        129.. => None,
+        _ => None,
     }?;
     Some((p.into(), q.into()))
 }
@@ -90,6 +93,10 @@ fn ecm(n: u128, curves: usize, b1: u64, b2: f64, prefs: &Preferences) -> Option<
             return res;
         }
     }
+    if prefs.verbose(Verbosity::Info) {
+        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("Small ECM failure after {elapsed:.2}ms");
+    }
     None
 }
 
@@ -107,18 +114,25 @@ fn ecm_curve(
     // ECM stage 1
     let start1 = std::time::Instant::now();
     let mut g = c.gen().clone();
-    let mut gxs = Vec::with_capacity(sb.factors.len());
-    gxs.push(c.one);
+    // Assume that factors will not be found simultaneously
     for &f in sb.factors.iter() {
-        g = c.scalar64_mul(f, &g);
-        gxs.push(g.0);
+        let fg = c.scalar64_mul(f, &g);
+        if fg.0 .0 == 0 {
+            // All factors are found, maybe the previous point
+            // was the solution? Otherwise abort.
+            let d = Integer::gcd(&g.0 .0, &n);
+            if d > 1 && d < n {
+                return Some((d, n / d));
+            }
+            return None;
+        }
+        g = fg;
     }
     // FIXME: gcd factors
     let d = Integer::gcd(&g.0 .0, &n);
-    if d > n && d < n {
+    if d > 1 && d < n {
         return Some((d, n / d));
     }
-    drop(gxs);
     assert!(c.is_valid(&c.ext(&g)));
     let elapsed1 = start1.elapsed();
 
@@ -215,9 +229,9 @@ fn ecm_curve(
         prods.push(buffer);
     }
     if verbosity >= Verbosity::Verbose {
-        let stage1 = elapsed1.as_secs_f64();
-        let stage2 = start2.elapsed().as_secs_f64();
-        eprintln!("ECM128 stage1={stage1:.6}s stage2={stage2:.6}s");
+        let stage1 = elapsed1.as_secs_f64() * 1000.0;
+        let stage2 = start2.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("ECM128 stage1={stage1:.3}ms stage2={stage2:.3}ms");
     }
     // FIXME: gcd factors
     let d = Integer::gcd(&buffer.0, &c.n);
@@ -614,4 +628,33 @@ fn test_ecm_curve() {
     let res = ecm_curve(&c, &sb, 554e3, Verbosity::Verbose);
     eprintln!("{res:?}");
     assert_eq!(res, Some((p, q)));
+}
+
+#[test]
+fn test_ecm_small() {
+    // Test that tiny integers can be factored (during stage 1, both factors
+    // can be found very closely).
+    // Examples were found during random testing for various
+    // input sizes.
+    let ns = &[
+        211 * 401,
+        269 * 479,
+        263 * 839,
+        347 * 859,
+        769 * 797,
+        919 * 1889,
+        1187 * 1693,
+        1319 * 2663,
+        3203 * 6449,
+        8297 * 12473,
+    ];
+    let mut prefs = Preferences::default();
+    prefs.verbosity = Verbosity::Info;
+    for &n in ns {
+        if let Some((p, q)) = ecm128(Uint::from(n), false, &prefs) {
+            assert_eq!(p * q, Uint::from_digit(n));
+        } else {
+            panic!("failure for {n}");
+        }
+    }
 }
