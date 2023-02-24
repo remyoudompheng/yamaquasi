@@ -66,7 +66,13 @@ It has a single function `factor`:
 The `verbose` argument accepts values `silent` (default), `info`, `verbose`.
 
 The `timeout` argument accepts an optional numerical value in seconds
-and the library will tentatively stop computation after that duration.
+and the library will tentatively stop computation after that duration
+and possibly return a partial factorization.
+
+The Python API returns factors as a list of Python integers. This is similar
+to SageMath API `ecm.factor()` but not SageMath `factor()` which returns
+a factorization object. When not using a timeout, the elements of the list
+are expected to be pseudoprimes.
 
 # CPU-specific performance
 
@@ -238,44 +244,6 @@ the optimized matrices `Di`, `Ei`, `Fi` from Montgomery's article that avoid
 several inner products of blocks.
 The implementation uses width 64 blocks with `u64` word type.
 
-# ECM implementation
+# Notes on ECM implementation
 
-To make it easier to factorize general numbers (not necessarily balanced
-products of 2 primes), a basic implementation of ECM using Edwards curves
-is provided. It partially follows the EECM paper (Bernstein-Birkner-Lange-Peters)
-available at https://eecm.cr.yp.to/index.html
-
-Relevant references include:
-
-Peter. L. Montgomery. An FFT extension of the elliptic curve method of factorization.
-PhD thesis, University of California, 1992.
-
-[B. Dodson, P. Zimmermann, 20 Years of ECM](https://hal.archives-ouvertes.fr/inria-00070192)
-
-[G. Hanrot, M. Quercia, P. Zimmermann, The Middle Product Algorithm I](https://hal.inria.fr/inria-00071921)
-
-[D.J. Bernstein, P. Birkner, T. Lange, C. Peters, ECM Using Edwards curves](https://eecm.cr.yp.to/eecm-20111008.pdf)
-
-[R. Barbulescu, J.W. Bos, C. Bouvier, T. Kleinjung, P.L. Montgomery,
-Finding ECM-friendly curves through a study of Galois properties 
-](https://hal.archives-ouvertes.fr/hal-00671948)
-
-It uses several high-torsion curves from the EECM list (available at
-https://eecm.cr.yp.to/goodcurves.html) and a family of curves with
-rational Z/2 x Z/4 torsion which is not optimal but has a very simple
-definition.
-
-The implementation uses several state-of-the-art techniques such as
-Montgomery arithmetic, Schonhage-Strassen FFT multiplication, and
-scaled remainder trees for multipoint polynomial evaluation.
-It will usually be 2x-3x slower than GMP-ECM.
-
-The ECM implementation is run when using the "automatic" factoring mode,
-with very low parameters (that can easily catch factors with 1/5th
-of input integer digits).
-
-## Limitations
-
-The ECM implementation assumes the same bounds as the rest of the program.
-In particular, only input integers below 512 bits are accepted.
-
+See dedicated [README](README_ecm.md)
