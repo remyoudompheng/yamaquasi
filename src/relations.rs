@@ -80,6 +80,8 @@ impl Relation {
 #[derive(Default)]
 pub struct RelationSet {
     pub n: Uint,
+    // Size of the factor base
+    pub fbsize: usize,
     pub maxlarge: u64,
     pub cycles: Vec<Relation>,
     // p => relation with cofactor p
@@ -96,9 +98,10 @@ pub struct RelationSet {
 }
 
 impl RelationSet {
-    pub fn new(n: Uint, maxlarge: u64) -> Self {
+    pub fn new(n: Uint, fbsize: usize, maxlarge: u64) -> Self {
         RelationSet {
             n,
+            fbsize,
             maxlarge,
             ..Default::default()
         }
@@ -151,9 +154,65 @@ impl RelationSet {
     }
 
     pub fn log_progress<S: AsRef<str>>(&self, prefix: S) {
+        // Heuristics studies say that large prime relations grow quadratically
+        // and double large prime relations grow as t^e where exponent e is in interval (3.5, 4)
+        // Because the pp-relations do not exactly follow a power law, using the more
+        // pessimistic exponent 3.5 avoids large bias.
+        //
+        // See "MPQS with 3 large primes" doi.org/10.1007/3-540-45455-1_35
+        let prefix = prefix.as_ref();
+        // Compute K >= 1 such that finding K times more relations would end the sieve.
+        let n0 = self.n_cycles[0] as f64;
+        if self.n_partials == 0 {
+            // No large primes, easy estimate.
+            let progress = n0 / self.fbsize as f64 * 100.0;
+            eprintln!(
+                "{prefix} found {} relations (~{progress:.1}% done)",
+                self.len()
+            );
+            return;
+        }
+        let n1 = self.n_cycles[1] as f64;
+        if self.n_doubles == 0 {
+            // Single large primes: solve K such that n0 K + n1 K^2 == target
+            let mut kmin = 1.0;
+            let mut kmax = self.fbsize as f64 / n0;
+            while kmax / kmin > 1.001 {
+                let k = (kmin + kmax) / 2.0;
+                let est = n0 * k + n1 * k * k;
+                if est > self.fbsize as f64 {
+                    kmax = k;
+                } else {
+                    kmin = k;
+                }
+            }
+            let k = (kmin + kmax) / 2.0;
+            let progress = 100.0 / k;
+            eprintln!(
+                "{prefix} found {} relations (~{progress:.1}% done, p={} cycles={:?})",
+                self.len(),
+                self.n_partials,
+                &self.n_cycles[..2],
+            );
+            return;
+        }
+        // Double large primes: solve K such that n0 K + n1 K^2 + n2 K^3.5 = target
+        let n2 = self.n_cycles[2..].iter().sum::<usize>() as f64;
+        let mut kmin = 1.0;
+        let mut kmax = self.fbsize as f64 / n0;
+        while kmax / kmin > 1.001 {
+            let k = (kmin + kmax) / 2.0;
+            let est = n0 * k + n1 * k * k + n2 * k.powf(3.5);
+            if est > self.fbsize as f64 {
+                kmax = k;
+            } else {
+                kmin = k;
+            }
+        }
+        let k = (kmin + kmax) / 2.0;
+        let progress = 100.0 / k;
         eprintln!(
-            "{} found {} smooths (p={} p12={} pp={} cycles={:?})",
-            prefix.as_ref(),
+            "{prefix} found {} relations (~{progress:.1}% done, p={} p12={} pp={} cycles={:?})",
             self.len(),
             self.n_partials,
             self.n_combined12,

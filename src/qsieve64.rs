@@ -45,7 +45,7 @@ pub fn qsieve(n: u64, v: Verbosity) -> Option<(u64, u64)> {
         eprintln!("Polynomial x^2 + {} x - {}", b, c);
     }
 
-    let dummy_rset = relations::RelationSet::new(Uint::from(n), 0);
+    let dummy_rset = relations::RelationSet::new(Uint::from(n), fb.len(), 0);
     let mut rels = vec![];
     let mut larges = HashMap::new();
     let mut extras = 0;

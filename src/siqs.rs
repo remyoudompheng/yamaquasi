@@ -200,7 +200,7 @@ fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {
                 return;
             } else {
                 if s.prefs.verbose(Verbosity::Info) {
-                    eprintln!("Need {} additional relations", rgap);
+                    eprintln!("Need {rgap} additional relations");
                 }
                 s.target.store(
                     rlen + rgap + std::cmp::min(10, s.fbase.len() / 4),
@@ -213,9 +213,8 @@ fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {
     let rels = s.rels.read().unwrap();
     if s.prefs.verbose(Verbosity::Verbose) {
         rels.log_progress(format!(
-            "Sieved {}M {} polys",
+            "Sieved {}M {pdone} polys",
             (pdone as u64 * mm as u64) >> 20,
-            pdone,
         ));
     }
 }
@@ -225,7 +224,7 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
     // Prepare central parameters and A values.
     let (k, score) = fbase::select_multiplier(n);
     let prefs = Preferences::default();
-    eprintln!("Using fixed multiplier {} (score {:.2}/10)", k, score);
+    eprintln!("Using fixed multiplier {k} (score {score:.2}/10)");
     let n = &(n * Uint::from(k));
 
     let fb0 = params::factor_base_size(n);
@@ -1125,7 +1124,7 @@ impl<'a> SieveSIQS<'a> {
             nsqrt: arith::isqrt(*n),
             interval_size,
             fbase: fb,
-            rels: RwLock::new(RelationSet::new(*n, maxlarge)),
+            rels: RwLock::new(RelationSet::new(*n, fb_size, maxlarge)),
             maxlarge,
             use_double,
             offset_modp: offsets,

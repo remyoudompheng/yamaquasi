@@ -241,7 +241,7 @@ impl<'a> SieveQS<'a> {
             only_odds,
             maxlarge,
             use_double,
-            rels: RwLock::new(RelationSet::new(n, maxlarge)),
+            rels: RwLock::new(RelationSet::new(n, fbase.len(), maxlarge)),
         }
     }
 

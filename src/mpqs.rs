@@ -117,7 +117,7 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
             );
         }
     }
-    let rels = RwLock::new(RelationSet::new(n, maxlarge));
+    let rels = RwLock::new(RelationSet::new(n, fbase.len(), maxlarge));
 
     // Prepare shared context.
     let s = SieveMPQS {
