@@ -623,7 +623,7 @@ fn sieve_block_poly(s: &SieveMPQS, pol: &Poly, st: &mut sieve::Sieve) {
         debug_assert!((x * x) % n == Uint::cast_from(Int::cast_from(*n) + Int::cast_from(v)) % n);
         let Some(((p, q), factors)) = fbase::cofactor(
             s.fbase, &v, &facs,
-            maxlarge, max_cofactor)
+            maxlarge)
             else { continue };
         let pq = if q > 1 { Some((p, q)) } else { None };
         let cofactor = p * q;

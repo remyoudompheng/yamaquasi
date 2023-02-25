@@ -33,26 +33,23 @@ use num_integer::Integer;
 use crate::arith_montgomery::{gcd_factors, mg_2adic_inv, mg_mul, MInt, ZmodN};
 use crate::{Uint, Verbosity};
 
-/// Attempt to factor a 64-bit integer into 2 primes.
-/// The argument is expected to have 2 large prime factors.
+/// Attempt to factor a double large prime from quadratic sieve
 ///
-/// The expected use case is to factor cofactors of the quadratic sieve.
-/// In particular we don't expect the smaller prime factor to exceed 2^28.
+/// The argument is expected to have 2 large prime factors.
+/// The smallest prime factor usually has 19-30 bits.
+/// This function focuses on factors under 25 bits.
 pub fn rho_semiprime(n: u64) -> Option<(u64, u64)> {
-    // Unlucky primes may have a huge cycle attracting all seeds.
-    // Switching polynomial will usually break the pattern.
-    let sz = u64::BITS - u64::leading_zeros(n);
-    match sz {
-        0..=34 => rho64(n, 1, 500)
-            .or_else(|| rho64(n, 2, 500))
-            .or_else(|| rho64(n, 3, 500)),
-        35..=40 => rho64(n, 1, 2048)
+    if n >> 40 == 0 {
+        rho64(n, 1, 2048)
             .or_else(|| rho64(n, 2, 2048))
-            .or_else(|| rho64(n, 3, 2048)),
-        41..=45 => rho64(n, 1, 4096).or_else(|| rho64(n, 2, 4096)),
-        46..=49 => rho64(n, 1, 8192).or_else(|| rho64(n, 2, 8192)),
-        50..=54 => rho64(n, 1, 16384).or_else(|| rho64(n, 2, 16384)),
-        55.. => rho64(n, 1, 32768).or_else(|| rho64(n, 2, 32768)),
+            .or_else(|| rho64(n, 3, 2048))
+    } else if n >> 48 == 0 {
+        rho64(n, 1, 4096)
+            .or_else(|| rho64(n, 2, 4096))
+            .or_else(|| rho64(n, 3, 4096))
+    } else {
+        // Don't try too much
+        rho64(n, 1, 8192)
     }
 }
 

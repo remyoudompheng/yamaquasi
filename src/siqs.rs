@@ -26,7 +26,7 @@
 //! If N=5 mod 8 all polynomial values will be odd.
 //! If N=1 mod 8 all polynomial values will be even.
 
-use std::cmp::max;
+use std::cmp::{max, min};
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::RwLock;
@@ -86,7 +86,13 @@ pub fn siqs(
 
     let maxprime = fbase.bound() as u64;
     let maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(&n));
-    let maxdouble = maxprime * maxprime * DOUBLE_LARGE_PRIME_FACTOR;
+    // Don't allow maxlarge to exceed 32 bits (it would not be very useful anyway).
+    let maxlarge = min(maxlarge, (1 << 32) - 1);
+    let maxdouble = if use_double {
+        maxprime * maxprime * double_large_factor(&n)
+    } else {
+        0
+    };
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Max large prime B2={maxlarge} ({} B1)", maxlarge / maxprime);
         if use_double {
@@ -277,7 +283,7 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
             let a = &prepare_a(&factors, &a0, &fbase0, -(mm as i64) / 2);
             let b1 = fbase0.bound() as u64;
             let maxdouble = if use_double {
-                b1 * b1 * DOUBLE_LARGE_PRIME_FACTOR
+                b1 * b1 * double_large_factor(&n)
             } else {
                 0
             };
@@ -304,7 +310,7 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
                     let maxprime = fbase.bound() as u64;
                     let maxlarge: u64 = maxprime * lf;
                     let maxdouble = if use_double {
-                        maxprime * maxprime * DOUBLE_LARGE_PRIME_FACTOR
+                        maxprime * maxprime * double_large_factor(&n)
                     } else {
                         0
                     };
@@ -394,16 +400,17 @@ fn a_value_count(n: &Uint) -> usize {
     // When sz=180 we need more than 5k polynomials
     // When sz=200 we need more than 20k polynomials
     // When sz=280 we need more than 1M polynomials
+    // When sz=360 we need more than 20M polynomials
     let sz = n.bits() as usize;
     match sz {
         // Even one A value (2-4 polynomials) will give enough smooth values.
         0..=48 => 8,
         49..=71 => 12,
-        72..=129 => sz / 5,            // 14..25
-        130..=169 => sz - 60,          // 70..100
-        170..=199 => 50 * (sz - 168),  // 100..1000
-        200..=249 => 100 * (sz - 190), // 1000..5000
-        _ => 20 * sz,                  // 5000..
+        72..=129 => sz / 5,           // 14..25
+        130..=169 => sz - 60,         // 70..100
+        170..=199 => 50 * (sz - 168), // 100..1000
+        200.. => 100 * (sz - 190),    // 1000..5000 (sz=256).. 17000 (sz=360)
+        _ => unreachable!("impossible"),
     }
 }
 
@@ -473,29 +480,41 @@ fn large_prime_factor(n: &Uint) -> u64 {
         0..=96 => 1,
         97..=128 => 2,
         // More large primes to compensate fewer relations
-        129..=250 => sz,
+        129..=250 => (sz * (sz - 100)) / 100, // 7..225
         251.. => {
             // For these input sizes, smooth numbers are so sparse
             // that we need very large cofactors, so any value of B1 is fine.
             //
-            // For size 256, B1=200-300 is enough to deplete 90% of p-relations
-            // For size 320, B1=~400 is enough to deplete 90% of relations
-            128 + sz / 2
+            // Since cycles appear with frequency O(density^2) there is almost
+            // no benefit for B1 > 100. Reducing B1 avoids storing too many
+            // uninteresting pp-relations.
+            //
+            // Choose the same value as double_large_factor.
+            2 * sz - 384
         }
     }
 }
 
-// Constant B2 such that double large primes are bounded by
-// factor base bound * B1 * B2 where B1 is the single large prime factor.
-//
-// We don't want double large prime to reach maxlarge^2
-// because p-relations are much less dense in the large prime area
-// and this creates extra factoring pressure.
-// We require that at least one prime is "small" so multiply
-// the lower and upper end of the large prime range is a good
-// midpoint.
-// See [Lentra-Manasse]
-const DOUBLE_LARGE_PRIME_FACTOR: u64 = 2;
+// Parameter D such that double large primes are bounded by D*B1^2
+// where B1 is the factor base bound.
+fn double_large_factor(n: &Uint) -> u64 {
+    // We don't want double large prime to reach maxlarge^2
+    // because p-relations are much less dense in the large prime area
+    // and this creates extra factoring pressure.
+    // See [Lentra-Manasse]
+    //
+    // In practice, the density of double primes decreases quickly and the number
+    // of cycles is O(density^4) so all interesting double large primes are
+    // quickly depleted after 100-200 B1^2
+    //
+    // For small values of n, it is enough to require than
+    // double large primes are smaller than (10 B1)^2
+    let sz = n.bits() as u64;
+    match sz {
+        0..=255 => sz / 2,
+        256.. => 2 * sz - 384,
+    }
+}
 
 // Polynomial selection
 
@@ -1194,7 +1213,7 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
         // v is never divisible by A
         let Some(((p, q), mut factors)) = fbase::cofactor(
             s.fbase, &v, &facs,
-            maxlarge, max_cofactor)
+            maxlarge)
             else { continue };
         let pq = if q > 1 { Some((p, q)) } else { None };
         let cofactor = p * q;

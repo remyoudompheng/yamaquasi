@@ -424,24 +424,26 @@ pub fn certainly_composite(n: u64) -> bool {
 }
 
 /// Try to factor a possible "double large prime".
-/// A number of assumptions are made, in particular
-/// than composites are necessary more than 24 bit wide.
 ///
 /// This function is not required to be accurate, but to avoid performance
 /// degradation it is expected to find factors with at least 99% probability.
 pub fn try_factor64(n: u64) -> Option<(u64, u64)> {
-    if n >> 24 == 0 || !certainly_composite(n) {
+    if !certainly_composite(n) {
         return None;
     }
     if let Some(pq) = pollard_rho::rho_semiprime(n) {
         return Some(pq);
     }
-    crate::squfof::squfof(n)
+    crate::ecm128::ecm_semiprime(n)
 }
 
 /// Performs trial division of x by fbase[idx] for prime indices in facs.
 /// Returns the remaining cofactor as a product pq and a list of factors with exponents.
 /// If the cofactor is too large, return None.
+///
+/// Note that there is no check on the size of double large primes other than
+/// the size of the factors (meaning that the requested bound for double larges
+/// is only indicative). This is to avoid wasting hardly earned cofactors.
 ///
 /// Smooth candidates during quadratic sieve never exceed 256 bits.
 #[inline]
@@ -450,7 +452,6 @@ pub fn cofactor(
     x: &I256,
     facs: &[usize],
     maxlarge: u64,
-    max_cofactor: u64,
 ) -> Option<((u64, u64), Vec<(i64, u64)>)> {
     let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
     if x.is_negative() {
@@ -477,7 +478,8 @@ pub fn cofactor(
         }
     }
     let cofactor = cofactor.to_u64()?;
-    if cofactor > max_cofactor {
+    if cofactor > maxlarge * maxlarge {
+        // Too large
         return None;
     }
     let maxprime = fbase.bound() as u64;
@@ -486,7 +488,7 @@ pub fn cofactor(
         let pq = try_factor64(cofactor);
         match pq {
             Some((p, q)) if p > maxlarge || q > maxlarge => None,
-            None if cofactor > maxlarge => None,
+            None => None,
             _ => pq,
         }
     } else {

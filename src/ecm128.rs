@@ -25,35 +25,53 @@ pub fn ecm128(n: Uint, try_harder: bool, prefs: &Preferences) -> Option<(Uint, U
     // If we want to completely factor the input number, multiply the average
     // required number of curves by the size of n.
     let multiplier = if try_harder { n.bits() as usize } else { 1 };
+    let v = prefs.verbosity;
     let (p, q) = match n.bits() {
         // Target factors of size sqrt(n): use 2x the number of expected curves.
-        0..=32 => ecm(n128, 6 * multiplier, 16, 660., prefs),
-        33..=40 => ecm(n128, 6 * multiplier, 40, 1080., prefs),
-        41..=48 => ecm(n128, 8 * multiplier, 50, 1920., prefs),
+        0..=32 => ecm(n128, 6 * multiplier, 16, 660., v),
+        33..=40 => ecm(n128, 6 * multiplier, 40, 1080., v),
+        41..=48 => ecm(n128, 8 * multiplier, 50, 1920., v),
         // For smallest inputs, boost the number of curves to avoid fallback
         // to slower Pollard's Rho or SIQS (2x expected curves for success)
-        49..=56 => ecm(n128, 8 * 2 * multiplier, 100, 3e3, prefs),
-        57..=64 => ecm(n128, 10 * 2 * multiplier, 180, 7.7e3, prefs),
-        65..=72 => ecm(n128, 12 * 2 * multiplier, 350, 13.2e3, prefs),
-        73..=80 => ecm(n128, 30 * 2 * multiplier, 600, 20e3, prefs),
+        49..=56 => ecm(n128, 8 * 2 * multiplier, 100, 3e3, v),
+        57..=64 => ecm(n128, 10 * 2 * multiplier, 180, 7.7e3, v),
+        65..=72 => ecm(n128, 12 * 2 * multiplier, 350, 13.2e3, v),
+        73..=80 => ecm(n128, 30 * 2 * multiplier, 600, 20e3, v),
         // ECM is no longer optimal, reduce the number of curves (1/10th of required curves)
         // and keep small parameters.
-        81..=128 if !try_harder => ecm(n128, 3 * multiplier, 600, 20e3, prefs),
-        81..=88 if try_harder => ecm(n128, 20 * multiplier, 1000, 53e3, prefs),
-        89..=96 if try_harder => ecm(n128, 30 * multiplier, 1500, 81e3, prefs),
-        97..=112 if try_harder => ecm(n128, 70 * multiplier, 3600, 181e3, prefs),
-        113..=128 if try_harder => ecm(n128, 80 * multiplier, 10000, 554e3, prefs),
+        81..=128 if !try_harder => ecm(n128, 3 * multiplier, 600, 20e3, v),
+        81..=88 if try_harder => ecm(n128, 20 * multiplier, 1000, 53e3, v),
+        89..=96 if try_harder => ecm(n128, 30 * multiplier, 1500, 81e3, v),
+        97..=112 if try_harder => ecm(n128, 70 * multiplier, 3600, 181e3, v),
+        113..=128 if try_harder => ecm(n128, 80 * multiplier, 10000, 554e3, v),
         // Only numbers below 128 bits are supported.
         _ => None,
     }?;
     Some((p.into(), q.into()))
 }
 
-fn ecm(n: u128, curves: usize, b1: u64, b2: f64, prefs: &Preferences) -> Option<(u128, u128)> {
+/// Factor a number known to be a double large prime from quadratic sieve
+///
+/// Assumes that the smallest factor has size 25-31 bits.
+pub fn ecm_semiprime(n: u64) -> Option<(u64, u64)> {
+    let (p, q) = if n >> 52 == 0 {
+        // Assume a 25-bit factor
+        ecm(n as u128, 40, 60, 1920., Verbosity::Silent)?
+    } else if n >> 58 == 0 {
+        // Assume a 28-bit factor
+        ecm(n as u128, 80, 100, 3000., Verbosity::Silent)?
+    } else {
+        // Assume a 30-bit factor
+        ecm(n as u128, 60, 180, 7700., Verbosity::Silent)?
+    };
+    Some((p as u64, q as u64))
+}
+
+fn ecm(n: u128, curves: usize, b1: u64, b2: f64, v: Verbosity) -> Option<(u128, u128)> {
     let zn = ZmodN::new(Uint::from(n));
     let suyama = ecm::Suyama11::new(&zn).unwrap();
     let sb = ecm::SmoothBase::new(b1 as usize, false);
-    if prefs.verbose(Verbosity::Info) {
+    if v >= Verbosity::Info {
         eprintln!("Attempting small ECM with {curves} curves B1={b1} B2={b2:e}",);
     }
     let start = std::time::Instant::now();
@@ -66,7 +84,7 @@ fn ecm(n: u128, curves: usize, b1: u64, b2: f64, prefs: &Preferences) -> Option<
             Err(ecm::UnexpectedLargeFactor(p)) => {
                 let p = u128::cast_from(p);
                 if p < n {
-                    if prefs.verbose(Verbosity::Info) {
+                    if v >= Verbosity::Info {
                         eprintln!("Unexpected factor {p} while selecting curve");
                     }
                     return Some((p, n / p));
@@ -83,9 +101,9 @@ fn ecm(n: u128, curves: usize, b1: u64, b2: f64, prefs: &Preferences) -> Option<
             M128(u128::cast_from(Uint::from(gz))),
         );
         let c = Curve::from_point(n, g128);
-        if let res @ Some((p, _)) = ecm_curve(&c, &sb, b2, prefs.verbosity) {
-            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
-            if prefs.verbose(Verbosity::Info) {
+        if let res @ Some((p, _)) = ecm_curve(&c, &sb, b2, v) {
+            if v >= Verbosity::Info {
+                let elapsed = start.elapsed().as_secs_f64() * 1000.0;
                 eprintln!(
                     "Small ECM found factor {p} at curve {seed}/{curves} elapsed={elapsed:.2}ms"
                 );
@@ -93,7 +111,7 @@ fn ecm(n: u128, curves: usize, b1: u64, b2: f64, prefs: &Preferences) -> Option<
             return res;
         }
     }
-    if prefs.verbose(Verbosity::Info) {
+    if v >= Verbosity::Info {
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
         eprintln!("Small ECM failure after {elapsed:.2}ms");
     }
