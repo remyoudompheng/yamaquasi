@@ -415,7 +415,7 @@ fn factor_impl(
     }
 
     let (k, score) = fbase::select_multiplier(n);
-    if prefs.verbose(Verbosity::Verbose) {
+    if prefs.verbose(Verbosity::Info) {
         eprintln!("Selected multiplier {k} (score {score:.2}/10)");
     }
     let divs = match alg_real {

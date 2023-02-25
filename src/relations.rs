@@ -163,6 +163,9 @@ impl RelationSet {
         let prefix = prefix.as_ref();
         // Compute K >= 1 such that finding K times more relations would end the sieve.
         let n0 = self.n_cycles[0] as f64;
+        if n0 == 0.0 {
+            return; // Cannot say anything interesting.
+        }
         if self.n_partials == 0 {
             // No large primes, easy estimate.
             let progress = n0 / self.fbsize as f64 * 100.0;
@@ -175,18 +178,23 @@ impl RelationSet {
         let n1 = self.n_cycles[1] as f64;
         if self.n_doubles == 0 {
             // Single large primes: solve K such that n0 K + n1 K^2 == target
-            let mut kmin = 1.0;
-            let mut kmax = self.fbsize as f64 / n0;
-            while kmax / kmin > 1.001 {
-                let k = (kmin + kmax) / 2.0;
-                let est = n0 * k + n1 * k * k;
-                if est > self.fbsize as f64 {
-                    kmax = k;
-                } else {
-                    kmin = k;
+            let k = if n1 <= 2.0 {
+                // Cannot estimate, assume that n0 = fbsize/2 is the target.
+                self.fbsize as f64 / (2.0 * n0)
+            } else {
+                let mut kmin = 1.0;
+                let mut kmax = self.fbsize as f64 / n0;
+                while kmax / kmin > 1.001 {
+                    let k = (kmin + kmax) / 2.0;
+                    let est = n0 * k + n1 * k * k;
+                    if est > self.fbsize as f64 {
+                        kmax = k;
+                    } else {
+                        kmin = k;
+                    }
                 }
-            }
-            let k = (kmin + kmax) / 2.0;
+                (kmin + kmax) / 2.0
+            };
             let progress = 100.0 / k;
             eprintln!(
                 "{prefix} found {} relations (~{progress:.1}% done, p={} cycles={:?})",
@@ -198,18 +206,23 @@ impl RelationSet {
         }
         // Double large primes: solve K such that n0 K + n1 K^2 + n2 K^3.5 = target
         let n2 = self.n_cycles[2..].iter().sum::<usize>() as f64;
-        let mut kmin = 1.0;
-        let mut kmax = self.fbsize as f64 / n0;
-        while kmax / kmin > 1.001 {
-            let k = (kmin + kmax) / 2.0;
-            let est = n0 * k + n1 * k * k + n2 * k.powf(3.5);
-            if est > self.fbsize as f64 {
-                kmax = k;
-            } else {
-                kmin = k;
+        let k = if n2 <= 2.0 {
+            // Cannot estimate, assume that n0 = fbsize/4 is the target.
+            self.fbsize as f64 / (4.0 * n0)
+        } else {
+            let mut kmin = 1.0;
+            let mut kmax = self.fbsize as f64 / n0;
+            while kmax / kmin > 1.001 {
+                let k = (kmin + kmax) / 2.0;
+                let est = n0 * k + n1 * k * k + n2 * k.powf(3.5);
+                if est > self.fbsize as f64 {
+                    kmax = k;
+                } else {
+                    kmin = k;
+                }
             }
-        }
-        let k = (kmin + kmax) / 2.0;
+            (kmin + kmax) / 2.0
+        };
         let progress = 100.0 / k;
         eprintln!(
             "{prefix} found {} relations (~{progress:.1}% done, p={} p12={} pp={} cycles={:?})",

@@ -62,7 +62,7 @@ pub fn siqs(
     }
     let mm = interval_size(&n);
     if prefs.verbose(Verbosity::Info) {
-        eprintln!("Smoothness bound {}", fbase.bound());
+        eprintln!("Smoothness bound B1={}", fbase.bound());
         eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls(),);
         eprintln!("Sieving interval size {}k", mm >> 10);
     }
@@ -86,17 +86,18 @@ pub fn siqs(
 
     let maxprime = fbase.bound() as u64;
     let maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(&n));
+    let maxdouble = maxprime * maxprime * DOUBLE_LARGE_PRIME_FACTOR;
     if prefs.verbose(Verbosity::Info) {
-        eprintln!("Max large prime {}", maxlarge);
+        eprintln!("Max large prime B2={maxlarge} ({} B1)", maxlarge / maxprime);
         if use_double {
             eprintln!(
-                "Max double large prime {}",
-                maxlarge * maxprime * DOUBLE_LARGE_PRIME_FACTOR
+                "Max double large prime {maxdouble} ({} B1^2)",
+                maxdouble / maxprime / maxprime
             );
         }
     }
 
-    let s = SieveSIQS::new(&n, &fbase, maxlarge, use_double, mm as usize, prefs);
+    let s = SieveSIQS::new(&n, &fbase, maxlarge, maxdouble, mm as usize, prefs);
 
     // When using multiple threads, each thread will sieve a different A
     // to avoid breaking parallelism during 'prepare_a'.
@@ -211,7 +212,12 @@ fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {
     }
     let pdone = s.polys_done.load(Ordering::Relaxed);
     let rels = s.rels.read().unwrap();
-    if s.prefs.verbose(Verbosity::Verbose) {
+    if s.prefs.verbose(Verbosity::Info) {
+        if !s.prefs.verbose(Verbosity::Verbose) && rels.len() % factors.nfacs != 0 {
+            // Only log every nfacs A, should be enough,
+            // and avoid threads colliding.
+            return;
+        }
         rels.log_progress(format!(
             "Sieved {}M {pdone} polys",
             (pdone as u64 * mm as u64) >> 20,
@@ -269,7 +275,13 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
             eprintln!("Test set M={}k A={} npolys={}", mm / 2048, a0, polys_per_a);
             // sample polynomial
             let a = &prepare_a(&factors, &a0, &fbase0, -(mm as i64) / 2);
-            let s = SieveSIQS::new(n, &fbase0, 0, use_double, mm, &prefs);
+            let b1 = fbase0.bound() as u64;
+            let maxdouble = if use_double {
+                b1 * b1 * DOUBLE_LARGE_PRIME_FACTOR
+            } else {
+                0
+            };
+            let s = SieveSIQS::new(n, &fbase0, 0, maxdouble, mm, &prefs);
             let pol = make_polynomial(&s, a, 0);
             eprintln!("min(P) ~ {}", pol.eval(0).0);
             eprintln!("max(P) ~ {}", pol.eval(mm as i64 / 2).0);
@@ -291,7 +303,12 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
                     let factors = &factorss[idx];
                     let maxprime = fbase.bound() as u64;
                     let maxlarge: u64 = maxprime * lf;
-                    let s = SieveSIQS::new(n, &fbase, maxlarge, use_double, mm, &prefs);
+                    let maxdouble = if use_double {
+                        maxprime * maxprime * DOUBLE_LARGE_PRIME_FACTOR
+                    } else {
+                        0
+                    };
+                    let s = SieveSIQS::new(n, &fbase, maxlarge, maxdouble, mm, &prefs);
                     // Measure metrics
                     let t0 = std::time::Instant::now();
                     let a = &prepare_a(factors, &aint, &fbase, -(mm as i64) / 2);
@@ -312,8 +329,7 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
                     let dt = t0.elapsed().as_secs_f64();
                     let rels = s.rels.read().unwrap();
                     eprintln!(
-                        "fb={fb} B1={lf} B2={} M={}k dt={dt:2.3}s {:.2}ns/i c={} ({:.1}/s) p={} ({:.1}/s) pp={} ({:.1}/s)",
-                        if use_double { DOUBLE_LARGE_PRIME_FACTOR } else { 0 },
+                        "fb={fb} B2/B1={lf} D/B1²={maxdouble} M={}k dt={dt:2.3}s {:.2}ns/i c={} ({:.1}/s) p={} ({:.1}/s) pp={} ({:.1}/s)",
                         mm / 2048,
                         dt * 1.0e9 / (mm as f64) / (polys_per_a as f64),
                         rels.len(),
@@ -471,6 +487,14 @@ fn large_prime_factor(n: &Uint) -> u64 {
 
 // Constant B2 such that double large primes are bounded by
 // factor base bound * B1 * B2 where B1 is the single large prime factor.
+//
+// We don't want double large prime to reach maxlarge^2
+// because p-relations are much less dense in the large prime area
+// and this creates extra factoring pressure.
+// We require that at least one prime is "small" so multiply
+// the lower and upper end of the large prime range is a good
+// midpoint.
+// See [Lentra-Manasse]
 const DOUBLE_LARGE_PRIME_FACTOR: u64 = 2;
 
 // Polynomial selection
@@ -1090,7 +1114,7 @@ pub struct SieveSIQS<'a> {
     pub interval_size: usize,
     pub fbase: &'a FBase,
     pub maxlarge: u64,
-    pub use_double: bool,
+    pub maxdouble: u64,
     pub rels: RwLock<RelationSet>,
     pub offset_modp: Box<[u32]>,
     // A signal for threads to stop sieving.
@@ -1107,7 +1131,7 @@ impl<'a> SieveSIQS<'a> {
         n: &'a Uint,
         fb: &'a FBase,
         maxlarge: u64,
-        use_double: bool,
+        maxdouble: u64,
         interval_size: usize,
         prefs: &'a Preferences,
     ) -> Self {
@@ -1126,7 +1150,7 @@ impl<'a> SieveSIQS<'a> {
             fbase: fb,
             rels: RwLock::new(RelationSet::new(*n, fb_size, maxlarge)),
             maxlarge,
-            use_double,
+            maxdouble,
             offset_modp: offsets,
             done: AtomicBool::new(false),
             polys_done: AtomicUsize::new(0),
@@ -1144,15 +1168,8 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
     let maxprime = s.fbase.bound() as u64;
     let maxlarge = s.maxlarge;
     assert!(maxlarge == (maxlarge as u32) as u64);
-    let max_cofactor: u64 = if s.use_double {
-        // We don't want double large prime to reach maxlarge^2
-        // because p-relations are much less dense in the large prime area
-        // and this creates extra factoring pressure.
-        // We require that at least one prime is "small" so multiply
-        // the lower and upper end of the large prime range is a good
-        // midpoint.
-        // See [Lentra-Manasse]
-        maxlarge * maxprime * DOUBLE_LARGE_PRIME_FACTOR
+    let max_cofactor: u64 = if s.maxdouble > maxprime * maxprime {
+        s.maxdouble
     } else if maxlarge > maxprime {
         maxlarge
     } else {
@@ -1297,7 +1314,7 @@ fn test_poly_prepare() {
     let fb = fbase::FBase::new(n, 10000);
     let mm = 1_usize << 20;
     let prefs = Preferences::default();
-    let s = SieveSIQS::new(&n, &fb, fb.bound() as u64, false, mm, &prefs);
+    let s = SieveSIQS::new(&n, &fb, fb.bound() as u64, 0, mm, &prefs);
     // Prepare A values
     // Only test 10 A values and 35 polynomials per A.
     let f = select_siqs_factors(&fb, &n, 9, mm, prefs.verbosity);
