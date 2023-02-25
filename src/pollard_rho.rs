@@ -227,7 +227,7 @@ fn test_rho_basic() {
     assert_eq!(p * q, n);
     // 64-bit integers must work.
     let n = 0xeb67d1ff62bd9f49;
-    let (p, q) = rho_semiprime(n).unwrap();
+    let (p, q) = rho64(n, 2, 65536).unwrap();
     assert_eq!(p * q, n);
 }
 
