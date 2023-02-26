@@ -105,10 +105,13 @@ fn main() {
             let a_s: Vec<_> = a_ints.iter().map(|a_int| siqs::prepare_a(&f, a_int, &fb, 0)).collect();
             let prefs = yamaquasi::Preferences::default();
             let s = siqs::SieveSIQS::new(&n, &fb , fb.bound() as u64, 0, 1 << 20, &prefs);
-            Bench::new("prepare 1 SIQS polynomial (n = 256 bits)")
+            Bench::new("prepare 100 SIQS polynomial (n = 256 bits)")
             .with_samples(20_000)
             .run_seeded((&s, a_s.first().unwrap()), |(s, a)| {
-                siqs::make_polynomial(s, a, 123);
+                let mut pol = siqs::Poly::first(s, a);
+                for _ in 0..100 {
+                    pol.next(s, a);
+                }
             })
         },
         // Block sieve

@@ -176,13 +176,16 @@ fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {
     }
     let nfacs = a.factors.len();
     let polys_per_a = 1 << (nfacs - 1);
+    let mut pol = Poly::first(s, a);
     for idx in 0..polys_per_a {
         if s.done.load(Ordering::Relaxed) {
             // Interrupt early.
             return;
         }
-
-        let pol = make_polynomial(s, a, idx);
+        if idx > 0 {
+            pol.next(s, a);
+        }
+        assert!(pol.idx == idx);
         siqs_sieve_poly(s, a, &pol);
         // Check status.
         let rlen = {
@@ -232,7 +235,7 @@ fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {
 }
 
 /// Helper function to study performance impact of parameters
-pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
+pub fn siqs_calibrate(n: Uint) {
     // Prepare central parameters and A values.
     let (k, score) = fbase::select_multiplier(n);
     let prefs = Preferences::default();
@@ -250,13 +253,6 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
 
     let nfacs = nfactors(n) as usize;
     let polys_per_a = 1 << (nfacs - 1);
-
-    let tpool = threads.map(|t| {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(t)
-            .build()
-            .expect("cannot create thread pool")
-    });
 
     eprintln!("Base params fb={fb0} lf={lf0}");
     // The value of a varies according to interval size.
@@ -288,7 +284,7 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
                 0
             };
             let s = SieveSIQS::new(n, &fbase0, 0, maxdouble, mm, &prefs);
-            let pol = make_polynomial(&s, a, 0);
+            let pol = Poly::first(&s, a);
             eprintln!("min(P) ~ {}", pol.eval(0).0);
             eprintln!("max(P) ~ {}", pol.eval(mm as i64 / 2).0);
             mms.push(mm);
@@ -318,19 +314,13 @@ pub fn siqs_calibrate(n: Uint, threads: Option<usize>) {
                     // Measure metrics
                     let t0 = std::time::Instant::now();
                     let a = &prepare_a(factors, &aint, &fbase, -(mm as i64) / 2);
-                    if let Some(pool) = tpool.as_ref() {
-                        let poly_idxs: Vec<usize> = (0..polys_per_a).collect();
-                        pool.install(|| {
-                            poly_idxs.par_iter().for_each(|&idx| {
-                                let pol = make_polynomial(&s, a, idx);
-                                siqs_sieve_poly(&s, a, &pol);
-                            });
-                        })
-                    } else {
-                        for idx in 0..polys_per_a {
-                            let pol = make_polynomial(&s, a, idx);
-                            siqs_sieve_poly(&s, a, &pol);
+                    let mut pol = Poly::first(&s, a);
+                    for idx in 0..polys_per_a {
+                        if idx > 0 {
+                            pol.next(&s, &a);
                         }
+                        assert!(pol.idx == idx);
+                        siqs_sieve_poly(&s, a, &pol);
                     }
                     let dt = t0.elapsed().as_secs_f64();
                     let rels = s.rels.read().unwrap();
@@ -613,6 +603,7 @@ pub fn select_siqs_factors<'a>(
 /// then combine them for each polynomial (faster than computing 2^F vectors).
 ///
 /// Beware: for type 2 polynomials (Ax^2+Bx+C) the roots are `(±r - B) / 2A`
+/// and it is required that B is odd (B is a square root of n modulo 4A)
 pub struct A<'a> {
     a: Uint,
     factors: Vec<Prime<'a>>,
@@ -620,20 +611,19 @@ pub struct A<'a> {
     // Base data for polynomials:
     // Precomputed bj = CRT[j] * sqrt(n) mod pj
     // bj^2 = n mod pj, 0 mod pi (i != j)
-    roots: Vec<[Uint; 2]>,
-    // To prepare polynomial roots faster, precompute sets of roots mod p
-    // in a "radix-16" way. We need (-B±r)/A - offset
     //
-    // roots_mod_p[16i+j] is the combination of minus roots[4i+j1][j2] mod p
-    // where (j1,j2) goes through the bit mask (j << (4*i)).
-    // The roots are pre-multiplied by ainv to make preparation easier.
+    // To control the parity of B=sum(bj) it is required that
+    // roots[0] are odd and roots[i>0] are even
+    // (a multiple of A can be added if necessary).
+    roots: Vec<[I256; 2]>,
+    // Prepare root differences for the Gray code iteration.
+    // We require that roots[i][0] <= roots[i][1]
     //
-    // If i==0 we also add -rp - start_offset % p
-    // to avoid doing it repeatedly.
-    //
-    // Since the number of factors is at most 12, at most 3 vectors
-    // out of 48 will be added to compute the final result for a given polynomial.
-    roots_mod_p: Box<[Box<[u32]>]>,
+    // For each i, store deltas_mod_p[i][j] = -1/A (root1[i] - root0[i]) % p
+    deltas_mod_p: Vec<Vec<u32>>,
+    // To initialize polynomials, compute:
+    // B0 mod pi - rp[i] - start_offset % pi
+    root0_mod_p: Vec<u32>,
     // Precomputed p.r / a mod p
     rp: Vec<u32>,
 }
@@ -764,36 +754,41 @@ pub fn select_a(f: &Factors, want: usize, v: Verbosity) -> Vec<Uint> {
 }
 
 pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase, start_offset: i64) -> A<'a> {
+    assert!(a.bits() < 255);
     let afactors: Vec<(usize, &Prime)> = f
         .factors
         .iter()
         .enumerate()
         .filter(|(_, p)| p.div.mod_uint(a) == 0)
         .collect();
-    let mut crt = vec![];
-    // Each CRT coefficient is the product of pj (pj^-1 mod pi)
+    // Compute A/pi = product(pj for j != i)
+    // And also pinv[i] = product(pj^1 for j != i) mod pi
+    let mut p_over_pi = vec![];
+    let mut pinv = vec![];
     for &(idx, p) in afactors.iter() {
         let mut c = Uint::one();
+        let mut inv = 1;
         for &(jdx, q) in afactors.iter() {
             if jdx != idx {
-                c *= Uint::from(q.p * (f.inverses[jdx][idx] as u64));
-                debug_assert!(c % q.p == 0);
-                debug_assert!(c % p.p == 1);
+                c *= Uint::from(q.p);
+                inv = (inv * f.inverses[jdx][idx] as u64) % p.p;
             }
         }
-        crt.push(c % a);
+        p_over_pi.push(c);
+        pinv.push(inv);
     }
     // Compute modular inverses of A or 1 for prime factors of A.
     let mut ainv = vec![];
     let mut factors_idx = vec![];
+    let a2a = if polytype(f.n) == PolyType::Type1 {
+        U256::cast_from(*a)
+    } else {
+        U256::cast_from(*a) << 1
+    };
     for pidx in 0..fbase.len() {
         let p = fbase.p(pidx);
         let div = fbase.div(pidx);
-        let amod = if polytype(f.n) == PolyType::Type1 {
-            div.mod_uint(a)
-        } else {
-            div.mod_uint(&(a << 1))
-        };
+        let amod = div.mod_uint(&a2a);
         // We have made sure that 2 never divides A.
         if amod == 0 && p != 2 {
             factors_idx.push(pidx);
@@ -812,58 +807,53 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase, start_offset: i64
     // For type 2 polynomials we require that B is odd!
     // To achieve that, choose roots all having the same parity (odd for i=0, even for i>0)
     let mut roots = vec![];
-    for i in 0..afactors.len() {
-        let r = (crt[i] * Uint::from(afactors[i].1.r)) % a;
-        let parity = (r % 2_u64) + (if i == 0 { 1 } else { 0 });
-        if parity % 2 == 1 {
-            roots.push([a - r, a + r])
+    let mut deltas_mod_p = vec![];
+    let mut root0 = Uint::ZERO;
+    for (i, (_, f)) in afactors.iter().enumerate() {
+        // The CRT basis is pinv[i]*p_over_pi[i]
+        let k: u64 = (f.r * pinv[i]) % f.p;
+        let r = Uint::from(k) * p_over_pi[i];
+        // Parity is 1 if r is odd (reverse if i == 0)
+        let parity = r.bit(0) ^ (i == 0);
+        let (r0, r1) = if parity {
+            (a - r, a + r)
         } else {
-            roots.push([r, (a << 1) - r])
-        }
-    }
-    // Compute roots mod p.
-    // We need 16(l/4) + (2^(l%4)) vectors.
-    let n_parts = 16 * (afactors.len() / 4)
-        + if afactors.len() % 4 > 0 {
-            1 << (afactors.len() % 4)
-        } else {
-            0
+            (r, (a << 1) - r)
         };
-    let mut roots_mod_p = Box::from_iter(
-        (0..n_parts).map(|_| vec![0u32; (fbase.len() + 15) & !15].into_boxed_slice()),
-    );
-    for idx in 0..n_parts {
-        let (i, j) = (idx / 16, idx % 16);
-        // Compute the partial B corresponding to mask (j << 4i)
-        let mut b = Uint::ZERO;
-        for k in 0..4 {
-            if 4 * i + k >= afactors.len() {
-                continue;
-            }
-            b += roots[4 * i + k][(j >> k) & 1];
-        }
-        let b = arith::U256::cast_from(b);
-        assert!(b.bits() < 250);
-        let v = &mut roots_mod_p[idx];
-        assert!(v.len() % 16 == 0);
+        debug_assert!(r0 <= r1);
+        roots.push([I256::cast_from(r0), I256::cast_from(r1)]);
+        root0 += r0;
+        let mut deltas = Vec::with_capacity(fbase.len());
+        let d = r1 - r0;
         for pidx in 0..fbase.len() {
-            let p = fbase.p(pidx) as i32;
+            let p = fbase.p(pidx);
             let pdiv = fbase.div(pidx);
-            let b_over_a = b * arith::U256::from(ainv[pidx]);
-            // If i = 0, subtract rp and offset
-            let mut val = p - pdiv.mod_uint(&b_over_a) as i32;
-            if i == 0 {
-                val = val - rp[pidx] as i32 - start_offset as i32;
-            }
-            v[pidx] = pdiv.div31.modi32(val);
+            // Compute -(r1-r0)/a
+            let d_over_a = {
+                let dmod = pdiv.mod_uint(&d);
+                pdiv.divmod64(dmod * ainv[pidx] as u64).1 as u32
+            };
+            deltas.push(if d_over_a == 0 { 0 } else { p - d_over_a });
         }
+        deltas_mod_p.push(deltas);
+    }
+    debug_assert!((root0 * root0) % a == f.n % a);
+    // Compute root0 - rp[i] - start_offset
+    let mut root0_mod_p = Vec::with_capacity(fbase.len());
+    for pidx in 0..fbase.len() {
+        let pdiv = fbase.div(pidx);
+        let r0 = pdiv.mod_uint(&root0);
+        let r0_over_a = pdiv.divmod64(r0 * ainv[pidx] as u64).1 as i32;
+        let val = -r0_over_a - rp[pidx] as i32 - start_offset as i32;
+        root0_mod_p.push(pdiv.div31.modi32(val) as u32);
     }
     A {
         a: *a,
         factors: afactors.into_iter().map(|(_, p)| p).cloned().collect(),
         factors_idx: factors_idx.into_boxed_slice(),
         roots,
-        roots_mod_p,
+        deltas_mod_p,
+        root0_mod_p,
         rp,
     }
 }
@@ -876,6 +866,7 @@ enum PolyType {
 
 #[derive(Debug)]
 pub struct Poly {
+    idx: usize,
     kind: PolyType,
     a: I256,
     b: I256,
@@ -914,113 +905,119 @@ impl Poly {
             (v, y)
         }
     }
+
+    /// First polynomial in the family determined by A.
+    #[doc(hidden)]
+    pub fn first(s: &SieveSIQS, a: &A) -> Poly {
+        let mut b = I256::ZERO;
+        for i in 0..a.factors.len() {
+            b += a.roots[i][0];
+        }
+        let typ = polytype(s.n);
+        if typ == PolyType::Type2 {
+            assert!(b.bit(0));
+        }
+        // Compute polynomial roots
+        // (±r - B)/A = (-B/A) ± (r/A) solutions of (Ax+B)^2 = N
+        //
+        // root0 contains precomputed: (-b-r)/a - offset
+        let r1p = a.root0_mod_p.clone();
+        let mut r2p = r1p.clone();
+        for i in 0..s.fbase.len() {
+            let p = s.fbase.p(i);
+            r2p[i] += 2 * a.rp[i];
+            while r2p[i] >= p {
+                r2p[i] -= p;
+            }
+        }
+        let mut pol = Poly {
+            idx: 0,
+            kind: typ,
+            a: I256::cast_from(a.a),
+            b: I256::cast_from(b),
+            c: I256::ZERO,
+            root: 0,
+            r1p: r1p.into_boxed_slice(),
+            r2p: r2p.into_boxed_slice(),
+            n: *s.n,
+        };
+        _finish_polynomial(s, a, &mut pol);
+        pol
+    }
+    /// Given coefficients A and B, compute all roots (Ax+B)^2=N
+    /// modulo the factor base, computing (r - B)/A mod p
+    ///
+    /// We iterate only up to 2*(nfacs-1) so that one bit is constant.
+    #[doc(hidden)]
+    pub fn next(&mut self, s: &SieveSIQS, a: &A) {
+        // Advance to next polynomial.
+        // This is done by adding a single delta.
+        let prev_idx = self.idx;
+        let next_idx = prev_idx + 1;
+        self.idx = next_idx;
+        let prev_gray = prev_idx ^ (prev_idx >> 1);
+        let next_gray = next_idx ^ (next_idx >> 1);
+        let bit = (prev_gray ^ next_gray).trailing_zeros() as usize;
+        assert!(next_gray == prev_gray ^ (1 << bit));
+
+        // Flip requested bit/root
+        let delta_mod = &a.deltas_mod_p[bit][..];
+        let primes = &s.fbase.primes[..];
+        if (prev_gray >> bit) & 1 == 0 {
+            // Flip bit from 0 to 1
+            self.b = self.b + a.roots[bit][1] - a.roots[bit][0];
+            // This loop should be vectorized by LLVM.
+            // SSE2/AVX2/NEON have native packed min/max
+            for i in 0..delta_mod.len() {
+                let (d, p) = (delta_mod[i], primes[i]);
+                let (r1, r2) = (self.r1p[i] + d, self.r2p[i] + d);
+                self.r1p[i] = min(r1, r1.wrapping_sub(p));
+                self.r2p[i] = min(r2, r2.wrapping_sub(p));
+            }
+        } else {
+            // Flip bit from 1 to 0
+            self.b = self.b + a.roots[bit][0] - a.roots[bit][1];
+            // This loop should be vectorized by LLVM.
+            for i in 0..delta_mod.len() {
+                let (d, p) = (delta_mod[i], primes[i]);
+                let r1 = self.r1p[i].wrapping_sub(d);
+                let r2 = self.r2p[i].wrapping_sub(d);
+                self.r1p[i] = min(r1, r1.wrapping_add(p));
+                self.r2p[i] = min(r2, r2.wrapping_add(p));
+            }
+            if self.kind == PolyType::Type2 {
+                assert!(self.b.bit(0));
+            }
+        }
+        _finish_polynomial(s, a, self);
+    }
 }
 
-/// Given coefficients A and B, compute all roots (Ax+B)^2=N
-/// modulo the factor base, computing (r - B)/A mod p
-pub fn make_polynomial(s: &SieveSIQS, a: &A, pol_idx: usize) -> Poly {
-    let n = s.n;
-    let polytype = polytype(n);
-    let pol_idx = pol_idx << 1;
-    // Combine roots: don't reduce modulo n.
-    // This allows combining the roots modulo the factor base,
-    // with the issue that (Ax+B) is no longer minimal for x=0
-    // but for round(-B/A) which is extremely small.
-    let mut b = Uint::ZERO;
-    for i in 0..a.factors.len() {
-        b += a.roots[i][(pol_idx >> i) & 1];
-    }
-    if polytype == PolyType::Type2 {
-        assert!(b.low_u64() % 2 == 1);
-    }
-    // Also combine roots mod p
-    let mut bmodp = vec![0u32; a.roots_mod_p[0].len()].into_boxed_slice();
-    for i in 0..(a.factors.len() + 3) / 4 {
-        let v = &a.roots_mod_p[16 * i + ((pol_idx >> (4 * i)) % 16)];
-        assert_eq!(v.len() % 8, 0);
-        // first += v
-        let mut idx = 0;
-        while idx < v.len() {
-            unsafe {
-                // (possibly) unaligned pointers
-                let v8 = (v.get_unchecked(idx) as *const u32) as *const [u32; 8];
-                let r8 = (bmodp.get_unchecked_mut(idx) as *const u32) as *mut [u32; 8];
-                let v8w = wide::u32x8::new(*v8);
-                let r8w = wide::u32x8::new(*r8);
-                *r8 = (r8w + v8w).to_array();
-            }
-            idx += 8;
-        }
-    }
-    // Compute final polynomial roots
-    // (±r - B)/A = (-B/A) ± (r/p) solutions of (Ax+B)^2 = N
-    //
-    // In prepare_a, everything has been done so that bmodp = (-r - B)/A - offset
-    // We only need to add 2r for the second root, and reduce mod p.
-    let mut r1p = bmodp;
-    let mut r2p = vec![0u32; r1p.len()].into_boxed_slice();
-    let mut idx = 0;
-    let primes = &s.fbase.primes[..];
-    assert_eq!(r1p.len(), r2p.len());
-    assert!(r1p.len() >= primes.len());
-    assert_eq!(primes.len() % 8, 0);
-    while idx < primes.len() {
-        unsafe {
-            // (possibly) unaligned pointers
-            let r18 = (r1p.get_unchecked_mut(idx) as *mut u32) as *mut [u32; 8];
-            let r28 = (r2p.get_unchecked_mut(idx) as *mut u32) as *mut [u32; 8];
-            let rs = (a.rp.get_unchecked(idx) as *const u32) as *const [u32; 8];
-            let ps = (primes.get_unchecked(idx) as *const u32) as *const [u32; 8];
-            let mut r1w = wide::u32x8::new(*r18);
-            let r8 = wide::u32x8::new(*rs);
-            let p8 = wide::u32x8::new(*ps);
-
-            // Reduce r1 mod p.
-            // To properly benefit from SIMD vectorization we need to avoid
-            // multiplication and division.
-            // We use the fact that individual terms are already reduced modulo p
-            // so that the reduction can be written as conditional subtractions by p.
-
-            // r1 < 3p so at most 2 subtractions are required.
-            // Repeatedly mask and subtract p to reduce mod p.
-            // FIXME: there is a bug in wide 0.7.5
-            // where u32x8::cmp_lt is mapped to cmp_eq_mask_i32_m256i
-            // We use (r2 > p-1) as mask instead of (not r2 < p)
-            let p8_m1 = p8 - wide::u32x8::ONE;
-            r1w -= p8 & r1w.cmp_gt(p8_m1);
-            r1w -= p8 & r1w.cmp_gt(p8_m1);
-            *r18 = r1w.to_array();
-            debug_assert!(r1w >> 24 == wide::u32x8::ZERO);
-            debug_assert!(r1w.cmp_gt(p8_m1) == wide::u32x8::ZERO);
-            // Compute the second root by adding 2*rp
-            let mut r2w: wide::u32x8 = r1w + (r8 << 1);
-            // The result is < 3p, subtract at most 2 times p.
-            // FIXME: don't use u32x8::cmp_lt in wide 0.7.5
-            r2w -= p8 & r2w.cmp_gt(p8_m1);
-            r2w -= p8 & r2w.cmp_gt(p8_m1);
-            *r28 = r2w.to_array();
-            debug_assert!(r2w >> 24 == wide::u32x8::ZERO);
-            debug_assert!(r2w.cmp_gt(p8_m1) == wide::u32x8::ZERO);
-        }
-        idx += 8;
-    }
-
+// Complete polynomial information from a modular root B and computed
+// roots mod p.
+//
+// Fields c, root and r1p/r2p for factors of A are populated.
+fn _finish_polynomial(s: &SieveSIQS, a: &A, pol: &mut Poly) {
+    let n = pol.n;
+    let polytype = pol.kind;
     // Compute c such that b^2 - ac = N
     // (Ax+B)^2 - n = A(Ax^2 + 2Bx + C)
+    assert!(pol.b.is_positive());
+    let b = Uint::cast_from(pol.b);
     let c = if polytype == PolyType::Type1 {
         debug_assert!((b * b) % a.a == n % a.a);
-        (Int::from_bits(b * b) - Int::from_bits(*n)) / Int::from_bits(a.a)
+        (Int::cast_from(b * b) - Int::from_bits(n)) / Int::from_bits(a.a)
     } else {
         debug_assert!((b * b) % (a.a << 2) == n % (a.a << 2));
-        (Int::from_bits(b * b) - Int::from_bits(*n)) / Int::from_bits(a.a << 2)
+        (Int::cast_from(b * b) - Int::from_bits(n)) / Int::from_bits(a.a << 2)
     };
 
     // Manually repair roots modulo 2 for Type 2
     if polytype == PolyType::Type2 && s.fbase.p(0) == 2 {
         // A and B are odd. If C is even, 0 and 1 are roots.
         if c.abs().to_bits() % 2_u64 == 0 {
-            r1p[0] = 0;
-            r2p[0] = 1;
+            pol.r1p[0] = 0;
+            pol.r2p[0] = 1;
         }
     }
 
@@ -1042,8 +1039,8 @@ pub fn make_polynomial(s: &SieveSIQS, a: &A, pol_idx: usize) -> Poly {
         let r = div.divmod64(cp * binv).1 as u32;
         let off = s.offset_modp[pidx];
         let r = div.div31.modu31(r + p - off);
-        r1p[pidx] = r;
-        r2p[pidx] = r;
+        pol.r1p[pidx] = r;
+        pol.r2p[pidx] = r;
     }
     // Each r1p,r2p[idx] is a root of P(x+offset) modulo p[idx]
 
@@ -1074,18 +1071,10 @@ pub fn make_polynomial(s: &SieveSIQS, a: &A, pol_idx: usize) -> Poly {
     // C has the size of sqrt(n)M
     let mlog = usize::BITS - usize::leading_zeros(s.interval_size);
     assert!(a.a.bits() + 2 * mlog < 255);
-    assert!(b.bits() + mlog < 255);
-    assert!(c.abs().bits() < 255);
-    Poly {
-        kind: polytype,
-        a: I256::cast_from(a.a),
-        b: I256::cast_from(b),
-        c: I256::cast_from(c),
-        root: root as u32,
-        r1p,
-        r2p,
-        n: *s.n,
-    }
+    assert!(pol.b.bits() + mlog < 255);
+    assert!(pol.c.abs().bits() < 255);
+    pol.c = I256::cast_from(c);
+    pol.root = root as u32;
 }
 
 // Sieving process
@@ -1346,6 +1335,7 @@ fn test_poly_prepare() {
         for (i, r) in a.roots.iter().enumerate() {
             for (j, p) in a.factors.iter().enumerate() {
                 let &[r1, r2] = r;
+                let (r1, r2) = (Uint::cast_from(r1), Uint::cast_from(r2));
                 if i == j {
                     assert_eq!((r1 * r1) % p.p, n % p.p);
                     assert_eq!((r2 * r2) % p.p, n % p.p);
@@ -1355,10 +1345,16 @@ fn test_poly_prepare() {
                 }
             }
         }
-        for idx in 0..35 {
-            let idx = 7 * idx;
-            // Generate and check each polynomial.
-            let pol = make_polynomial(&s, &a, idx);
+        let mut pol = Poly::first(&s, &a);
+        for idx in 0..7 * 35 {
+            // Generate and check several polynomial.
+            if idx > 0 {
+                pol.next(&s, &a);
+            }
+            assert!(pol.idx == idx);
+            if idx % 7 != 0 {
+                continue;
+            }
             let (pa, pb) = (pol.a, pol.b);
             let pa = Int::cast_from(pa);
             let pb = Int::cast_from(pb);

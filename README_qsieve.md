@@ -53,11 +53,6 @@ It features the 3 variants: classical quadratic sieve, multiple polynomial
 quadratic sieve, self-initializing (hypercube) multiple polynomial
 quadratic sieve.
 
-Several optimization techniques are not used in Yamaquasi: the Gray code enumeration
-for SIQS polynomials is not used (instead a base 16 representation avoids excessive
-initialization cost), and the formulas avoiding a few inner products in Block Lanczos
-are not implemented.
-
 ## Case of numbers n=8k+1
 
 The numbers such that `n % 8 == 1` are special because they have modular square

@@ -13,12 +13,10 @@ fn main() {
         eprintln!("");
         eprintln!("Options:");
         eprintln!("  --help                    show this help");
-        eprintln!("  --threads N:              enable up to N computation threads");
         return;
     }
-    let threads = arg.get::<usize>("threads");
     let number = &arg.orphans[0];
     let n = Uint::from_str(number).unwrap();
     eprintln!("Input number {}", n);
-    siqs::siqs_calibrate(n, threads);
+    siqs::siqs_calibrate(n);
 }
