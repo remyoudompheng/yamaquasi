@@ -452,6 +452,7 @@ pub fn cofactor(
     x: &I256,
     facs: &[usize],
     maxlarge: u64,
+    double: bool,
 ) -> Option<((u64, u64), Vec<(i64, u64)>)> {
     let mut factors: Vec<(i64, u64)> = Vec::with_capacity(20);
     if x.is_negative() {
@@ -483,7 +484,7 @@ pub fn cofactor(
         return None;
     }
     let maxprime = fbase.bound() as u64;
-    let pq = if cofactor > maxprime * maxprime {
+    let pq = if double && cofactor > maxprime * maxprime {
         // Possibly a double large prime
         let pq = try_factor64(cofactor);
         match pq {
@@ -492,11 +493,11 @@ pub fn cofactor(
             _ => pq,
         }
     } else {
-        // Must be prime
-        debug_assert!(!certainly_composite(cofactor));
         if cofactor > maxlarge {
             None
         } else {
+            // Must be prime
+            debug_assert!(!certainly_composite(cofactor));
             Some((cofactor, 1))
         }
     };

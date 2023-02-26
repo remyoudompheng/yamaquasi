@@ -1213,7 +1213,7 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
         // v is never divisible by A
         let Some(((p, q), mut factors)) = fbase::cofactor(
             s.fbase, &v, &facs,
-            maxlarge)
+            maxlarge, s.maxdouble > maxprime * maxprime)
             else { continue };
         let pq = if q > 1 { Some((p, q)) } else { None };
         let cofactor = p * q;

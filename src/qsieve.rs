@@ -404,7 +404,7 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, backward: bool) {
             I256::from(x as i128 * x as i128) + I256::from(2 * x) * s.nsqrt + s.nsqrt2_minus_n;
         let Some(((p, q), factors)) = fbase::cofactor(
             s.fbase, &candidate, &facs,
-            maxlarge)
+            maxlarge, s.use_double)
             else { continue };
         let pq = if q > 1 { Some((p, q)) } else { None };
         let cofactor = p * q;
