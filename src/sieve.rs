@@ -178,7 +178,8 @@ impl<'a> Sieve<'a> {
         // Need tables for logp in 16..=log(maxprime)
         let maxlog = 32 - u32::leading_zeros(maxprime) as usize;
         let mut tables: Vec<_> = if let Some(rec) = recycled {
-            // Use recycled memory.
+            // Use recycled memory: it should originate from a sieve
+            // with the same factor base and number of blocks.
             let mut ts = rec.tables;
             let expected_len = max(maxlog + 1, LARGE_PRIME_LOG) - LARGE_PRIME_LOG;
             assert_eq!(ts.len(), expected_len);
@@ -194,10 +195,12 @@ impl<'a> Sieve<'a> {
         };
 
         fbase.len();
+        let interval_size = (nblocks * BLOCK_SIZE) as isize;
         for log in 0..=maxlog {
             let idx1 = fbase.idx_by_log[log];
             let idx2 = fbase.idx_by_log[log + 1];
             if log < LARGE_PRIME_LOG {
+                // First size class: primes smaller than block size.
                 for idx in idx1..idx2 {
                     let SievePrime {
                         p: _,
@@ -216,13 +219,14 @@ impl<'a> Sieve<'a> {
                     });
                     debug_assert!(offs.len() == 2 * idx + 2);
                 }
-            } else {
+            } else if interval_size >> (log - 1) != 0 {
+                // Second class: primes larger than block size but (roughly)
+                // smaller than interval size.
                 assert!(prime_bucket((idx2 - idx1) as u32, log) < 256);
                 let table = &mut tables[log - LARGE_PRIME_LOG];
                 let pbsize = PRIME_BUCKET_SIZES[log - LARGE_PRIME_LOG];
                 let mut pbidx = 0;
                 let mut pbucket = 0;
-                let interval_size = (nblocks * BLOCK_SIZE) as isize;
                 for idx in idx1..idx2 {
                     // Large prime: register them in hashmap
                     let SievePrime {
@@ -258,6 +262,45 @@ impl<'a> Sieve<'a> {
                         pbidx = 0;
                         pbucket += 1;
                     }
+                }
+            } else {
+                // Last size class: primes even larger than the interval size.
+                // (interval size has at most (log-1) bits.
+                //
+                // FIXME: we can enter this category as soon as primes exceed interval size.
+                //
+                // Some (many?) of them will never do anything during this sieve.
+                // This category is a majority when factoring large integers:
+                // for numbers above 10^100 smoothness bounds exceed 3M-4M
+                // but we prefer interval sizes smaller than 1M.
+                //
+                // This is like above but many primes will be ignored and we don't need to loop.
+                assert!(prime_bucket((idx2 - idx1) as u32, log) < 256);
+                let table = &mut tables[log - LARGE_PRIME_LOG];
+                let pbsize = PRIME_BUCKET_SIZES[log - LARGE_PRIME_LOG];
+                let mut pbidx = 0;
+                let mut pbucket = 0;
+                for idx in idx1..idx2 {
+                    // Large prime: register them in hashmap
+                    let SievePrime {
+                        p,
+                        offsets: [o1, o2],
+                    } = f(idx);
+                    let [Some(o1), Some(o2)] = [o1, o2]
+                        else { unreachable!("large primes must have 2 roots") };
+                    if (o1 as isize) < interval_size {
+                        table.add(o1 as usize, pbucket);
+                    }
+                    if (o2 as isize) < interval_size {
+                        table.add(o2 as usize, pbucket);
+                    }
+                    pbidx += 1;
+                    if pbidx == pbsize {
+                        pbidx = 0;
+                        pbucket += 1;
+                    }
+                    debug_assert!(o1 + p >= interval_size as u32);
+                    debug_assert!(o2 + p >= interval_size as u32);
                 }
             }
         }
