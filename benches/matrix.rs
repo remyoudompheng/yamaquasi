@@ -57,6 +57,7 @@ fn main() {
         },
         {
             let mat = matrix::make_test_sparsemat(8000, 10, 20);
+            let mat = matrix::qs_optimize(&mat);
             Bench::new("gen lanczos block(sparse 8000x8010)")
             .run_seeded(&mat, |m| matrix::genblock(m) as matrix::Block)
         },

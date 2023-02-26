@@ -518,6 +518,9 @@ impl RelationSet {
 /// Note that n may be different from the original sieve modulus
 /// which includes the multiplier.
 pub fn final_step(n: &Uint, fb: &FBase, rels: &[Relation], verbose: Verbosity) -> Vec<Uint> {
+    // The traditional terminology is that:
+    // - a row refers to a relation (row elements are exponents of small primes)
+    // - a column refers to a prime (the weight is the number of relations containing that prime)
     for r in rels {
         debug_assert!(r.verify(n));
     }
@@ -583,6 +586,8 @@ pub fn final_step(n: &Uint, fb: &FBase, rels: &[Relation], verbose: Verbosity) -
     let mut matrix = Vec::with_capacity(rels.len());
     let size = nfactors;
     let mut coeffs = 0;
+    // How many factors are in first rows?
+    let mut c64 = 0;
     'skiprel: for r in rels.iter() {
         let mut v = Vec::with_capacity(r.factors.len());
         for &(f, k) in r.factors.iter() {
@@ -594,6 +599,9 @@ pub fn final_step(n: &Uint, fb: &FBase, rels: &[Relation], verbose: Verbosity) -
             if idx < nfactors {
                 v.push(idx);
                 coeffs += 1;
+                if idx < 64 {
+                    c64 += 1
+                }
             } else {
                 continue 'skiprel;
             }
@@ -607,16 +615,12 @@ pub fn final_step(n: &Uint, fb: &FBase, rels: &[Relation], verbose: Verbosity) -
         matrix.push(v);
     }
     if verbose >= Verbosity::Info {
+        eprintln!("Filtered {} relations {nfactors} factors", filt_rels.len(),);
+        let dense_weight = c64 as f64 / size as f64;
         eprintln!(
-            "Filtered {} relations {} factors",
-            filt_rels.len(),
-            nfactors
-        );
-        eprintln!(
-            "Build matrix {}x{} ({:.1} entries/col)",
-            size,
+            "Build matrix {size}x{} ({:.1} entries/col, {dense_weight:.1} in size 64 dense block)",
             matrix.len(),
-            coeffs as f64 / size as f64
+            coeffs as f64 / size as f64,
         );
     }
     let start = std::time::Instant::now();

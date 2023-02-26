@@ -1,9 +1,34 @@
-// Copyright 2022 Rémy Oudompheng. All rights reserved.
+// Copyright 2022, 2023 Rémy Oudompheng. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 //! Linear algebra algorithms for kernels of matrices modulo 2.
 //!
+//! The purpose of this module is to compute kernels of large matrices over GF(2).
+//! These matrices represent the parity of exponents in the factorization of
+//! pseudorandom integers so their coefficients are not evenly distributed:
+//! a typical matrix coming from the quadratic sieve has extremely high density
+//! on the first columns (corresponding to smallest primes or factors of A
+//! in the case of SIQS) and decreasing density for larger primes.
+//!
+//! Numerical simulations show that more than half of coefficients
+//! (or 40% for input integers over 256 bits) is concentrated on the densest
+//! 64 columns (even for the largest matrices of size ~400000).
+//!
+//! In this module the kernel is meant as a right kernel, so the matrix
+//! density "gradient" follows the rows (downward) rather than the columns.
+//!
+//! The block Lanczos implementation uses system randomness and is thus
+//! non-deterministic.
+//!
+//! Relevant bibliography
+//! A Block Lanczos Algorithm for Finding Dependencies over GF(2)
+//! Peter L. Montgomery, <https://doi.org/10.1007/3-540-49264-X_9>
+//!
+//! Charles Bouillaguet, Paul Zimmermann.
+//! Parallel Structured Gaussian Elimination for the Number Field Sieve.
+//! Mathematical Cryptology, 2021, 1, pp.22-39.
+//! https://hal.inria.fr/hal-02098114v2/document
 
 // Note that crate bitvec 1.0 generates slow code for our purpose.
 
@@ -80,9 +105,6 @@ pub fn kernel_gauss(columns: Vec<BitVec>) -> Vec<BitVec> {
 
 /// Block Lanczos algorithm for kernel of sparse matrices.
 ///
-/// A Block Lanczos Algorithm for Finding Dependencies over GF(2)
-/// Peter L. Montgomery, <https://doi.org/10.1007/3-540-49264-X_9>
-///
 /// Computation involves:
 /// - Dot product of blocks of vectors (a few ms)
 /// - Product of a small matrix by a block (a few ms)
@@ -93,6 +115,10 @@ pub fn kernel_lanczos(b: &SparseMat, verbose: Verbosity) -> Vec<BitVec> {
     // Decompose the entire space in blocks such that
     // A is block-diagonal over these blocks.
     // Compute kernel by X = preimage(AY) => A(X-Y) = 0
+
+    // Optimize matrix for sparse multiply.
+    let b = &qs_optimize(b);
+    let mul_aab = mul_aab_opt;
 
     // At each step:
     // Wk = B0 + ... + Bk
@@ -272,8 +298,8 @@ pub fn kernel_lanczos(b: &SparseMat, verbose: Verbosity) -> Vec<BitVec> {
     basis
 }
 
-// Compute A^T A B, which is a block of the same
-// shape as b.
+/// Compute A^T A B, which is a block of the same
+/// shape as b.
 pub fn mul_aab(a: &SparseMat, b: &Block) -> Block {
     assert_eq!(a.cols.len(), b.0.len());
     // Output[k,*] = sum a[i,k] a[i,j] b[j,*]
@@ -287,16 +313,30 @@ pub fn mul_aab(a: &SparseMat, b: &Block) -> Block {
     out
 }
 
-pub fn genblock(b: &SparseMat) -> Block {
+pub fn mul_aab_opt(a: &SparseMatOpt, b: &Block) -> Block {
+    // Output[k,*] = sum a[i,k] a[i,j] b[j,*]
+    let tmp: Block = a * b;
+    // Dense part (i < LSIZE)
+    // The contribution is a.block * tmp[:LSIZE]
+    let tmp_dense = SmallMat(tmp.0[..LSIZE].try_into().unwrap());
+    let mut out = &a.block * &tmp_dense;
+    // Sparse part
+    // This is a.xy.transposed * tmp[LSIZE:]
+    for &(i, k) in &a.xy {
+        out.0[k as usize] ^= tmp.0[i as usize];
+    }
+    out
+}
+
+pub fn genblock(b: &SparseMatOpt) -> Block {
     // Input matrix B.
     // Generate block Y such that Gram(B A Y) has full rank
     // This is to avoid null rows in the Gram matrix of AY
     let mut rng = rand::thread_rng();
-    let n = b.cols.len();
-    let mut y = Block::new(n);
+    let mut y = Block::new(b.ny);
     loop {
         y.try_fill(&mut rng).unwrap();
-        let ay: Block = mul_aab(b, &y);
+        let ay: Block = mul_aab_opt(b, &y);
         let bay = b * &ay;
         let gram: SmallMat = &bay * &bay;
         if gram.rank().0 == LSIZE {
@@ -308,7 +348,7 @@ pub fn genblock(b: &SparseMat) -> Block {
 type Lane = u64;
 const LSIZE: usize = Lane::BITS as usize;
 
-// A square symmetric matrix of size BxB (B=256)
+/// A square (often symmetric) matrix of size BxB (B=256)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SmallMat([Lane; LSIZE]);
 
@@ -318,13 +358,53 @@ impl Default for SmallMat {
     }
 }
 
-// A matrix of size K rows x N columns
+/// A matrix of size K rows x N columns
 pub struct SparseMat {
     pub k: usize,
     pub cols: Vec<Vec<usize>>,
 }
 
-// A block of B vectors of length N
+/// Sparse GF(2) matrix represented as a coordinate list and a dense part.
+pub struct SparseMatOpt {
+    pub nx: usize,
+    pub ny: usize,
+    /// A dense block corresponding to rows 0..LSIZE
+    pub block: Block,
+    /// List of (row, col) coordinates.
+    pub xy: Vec<(u32, u32)>,
+}
+
+// Sort a sparse matrix into a list of coordinates adapted
+// for efficient multiplication.
+// Since QSieve matrices are concentrated in low row indices
+// sort by blocks in row major order:
+//
+//  1    2    3 ...
+//  4    5    6 ...
+pub fn qs_optimize(mat: &SparseMat) -> SparseMatOpt {
+    const BLOCK_SIZE: u64 = 64;
+    let mut coords = vec![];
+    let mut dense = Block::new(mat.cols.len());
+    for (j, col) in mat.cols.iter().enumerate() {
+        for &i in col {
+            if i < LSIZE {
+                dense.0[j] |= 1 << i;
+            } else {
+                coords.push((i as u32, j as u32));
+            }
+        }
+    }
+    coords
+        .sort_unstable_by_key(|&(i, j)| ((i as u64 / BLOCK_SIZE) << 32) + (j as u64 / BLOCK_SIZE));
+    SparseMatOpt {
+        nx: mat.k,
+        ny: mat.cols.len(),
+        block: dense,
+        xy: coords,
+    }
+}
+
+/// A block of B vectors of length N
 #[derive(Clone, PartialEq, Eq)]
 pub struct Block(Vec<Lane>);
 
@@ -460,6 +540,7 @@ impl Mul<&Block> for &SparseMat {
     type Output = Block;
 
     fn mul(self, rhs: &Block) -> Block {
+        assert_eq!(self.cols.len(), rhs.0.len());
         // output[i] = sum self[i,j] * rhs[j]
         let mut out = Block::new(self.k);
         for (j, col) in self.cols.iter().enumerate() {
@@ -467,6 +548,27 @@ impl Mul<&Block> for &SparseMat {
             for &i in col {
                 out.0[i] ^= row;
             }
+        }
+        out
+    }
+}
+
+impl Mul<&Block> for &SparseMatOpt {
+    type Output = Block;
+
+    fn mul(self, rhs: &Block) -> Block {
+        assert_eq!(self.ny, rhs.0.len());
+        // output[i] = sum self[i,j] * rhs[j]
+        let mut out = Block::new(self.nx);
+        // dense part
+        let dense = &self.block * rhs;
+        for i in 0..LSIZE {
+            out.0[i] = dense.0[i];
+        }
+        // sparse part
+        for &(i, j) in &self.xy {
+            let row = &rhs.0[j as usize];
+            out.0[i as usize] ^= row;
         }
         out
     }
@@ -865,6 +967,20 @@ fn test_sparsemat() {
         x.try_fill(&mut rng).unwrap();
         let ax = &mat * &x;
         assert_eq!(&ax * &ax, &x * &mul_aab(&mat, &x));
+    }
+}
+
+#[test]
+fn test_sparsemat_opt() {
+    // Test that X·A^T A X == (AX)^T (AX)
+    for _ in 0..10 {
+        let mat = make_test_sparsemat(1000, 10, 20);
+        let mat = qs_optimize(&mat);
+        let mut x = Block::new(1010);
+        let mut rng = rand::thread_rng();
+        x.try_fill(&mut rng).unwrap();
+        let ax = &mat * &x;
+        assert_eq!(&ax * &ax, &x * &mul_aab_opt(&mat, &x));
     }
 }
 

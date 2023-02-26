@@ -2,7 +2,18 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-/// Benchmarks for matrix algebra.
+//! An artificial benchmark for matrix algebra.
+//!
+//! It tries to imitate the shape of quadratic sieve matrices by packing
+//! coefficients towards first rows.
+//!
+//! However the current choices fail to reproduce the actual performance
+//! of linear algebra during actual factorization.
+//!
+//! For size 20000 we expect Gauss elimination to be at least 10x slower
+//! than block Lanczos (case of 270-bit integers in SIQS with double large primes).
+
+///
 use std::time::Instant;
 
 use bitvec_simd::BitVec;
@@ -53,12 +64,15 @@ fn main() {
 /// 220 bits
 /// 9788x9809 (27.8 entries/col, p50=37 p80=921 p90=3215 p95=5471 p99=8460)
 /// 9708x9746 (28.0 entries/col, p50=37 p80=824 p90=3046 p95=5320 p99=8359)
+/// (60% in first size 64 block)
 ///
 /// 240 bits
 /// 17419x17482 (27.6 entries/col, p50=38 p80=1575 p90=5586 p95=9639 p99=15010)
 ///
 /// 260 bits
 /// 35522x35550 (45.1 entries/col, p50=80 p80=4459 p90=12377 p95=19796 p99=30125)
+///
+/// Larger matrices have 40-45% of coefficients in first block.
 ///
 /// where the CDF looks like a power law (x^0.1)
 fn qs_like_matrix(size: usize, extra: usize, density: usize) -> matrix::SparseMat {
@@ -69,8 +83,16 @@ fn qs_like_matrix(size: usize, extra: usize, density: usize) -> matrix::SparseMa
         let mut col = vec![];
         while col.len() < density {
             // Use the power law slightly combined with a uniform law.
-            let x: f64 = rng.gen_range(0.0..1.0);
-            let x = 0.01 * x + 0.99 * x.powf(10.0);
+            let x: f64 = rng.gen_range(0.0..2.0);
+            let x = if x < 1.0 {
+                0.02 * x + 0.98 * x.powf(10.0)
+            } else {
+                // Concentrate half of coefficients in the dense part.
+                // It must fit in about 64 columns, let's select an exponential
+                // law with parameter log2(size) so that large matrices
+                // have less than half of coefficients in first block.
+                (1.0_f64).min(-(x - 0.99999).ln() * (size as f64).log2() / size as f64)
+            };
             let idx = (size as f64 * x) as usize;
             if idx < size && !col.contains(&idx) {
                 col.push(idx);
@@ -118,9 +140,10 @@ fn qs_like_matrix(size: usize, extra: usize, density: usize) -> matrix::SparseMa
             p99 = idx
         }
     }
+    let densepart: u32 = stats[..64].iter().sum();
     eprintln!(
-        "Generated matrix of size {} (p50={} p80={} p90={} p95={} p99={}) filled={}",
-        size, p50, p80, p90, p95, p99, extra_fill
+        "Generated matrix of size {} (dense block={:.2}% p50={} p80={} p90={} p95={} p99={}) filled={}",
+        size, 100.0*densepart as f64 / total as f64, p50, p80, p90, p95, p99, extra_fill
     );
     matrix::SparseMat { k: size, cols }
 }
