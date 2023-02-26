@@ -11,7 +11,7 @@ on how many roots are available on small primes.
 Usually the performance is very similar (sometimes better) than msieve,
 but much slower than YAFU.
 
-THe numbers are relative to the entire program execution and do not reflect
+The numbers are relative to the entire program execution and do not reflect
 the actual performance of the `factor` function.
 
 Benchmarks on Ryzen 5500U
@@ -33,7 +33,7 @@ Benchmarks on Ryzen 5500U
 | 280 bits | 400-650s| 550-700s|    —    |1800-3000s| 350-550s | 100-120s |
 | 300 bits |1300-1800s| ~2000s |    —    | ~2 hours |1200-1800s| 350-500s |
 | 320 bits |  ~4300s  | ~20000s|    —    |    —     |4800-5400s|1200-2000s|
-| RSA-100  | 10500s   | 41400s |    —    |    —     |   8500s  |  2400s   |
+| RSA-100  | 10500s   | 41400s |    —    |    —     |   7500s  |  2200s   |
 
 RSA-100 is number 1522605027922533360535618378132637429718068114961380688657908494580122963258952897654000350692006139.
 
@@ -76,12 +76,14 @@ guaranteed to be smaller than 256 bits.
 ## Multithread support
 
 Yamaquasi uses the `rayon` Rust crate to provide parallel computation capabilities.
+It does not provide distributed computing capabilities: a single modern CPU with
+8 or 16 cores can already factor a 100-digit number in a few minutes.
 
 In classical quadratic sieve, 2 threads can process the forward sieve
 interval `[0,M]` and the backward sieve interval `[-M,0]` simultaneously.
 
-It is used in the MPQS and the SIQS/HMPQS implementation to process a batch
-of polynomials over a thread pool.
+In the MPQS and the SIQS/HMPQS implementation, the thread pool handles
+(batches of) polynomials without particular limitation.
 
 ## Memory usage
 

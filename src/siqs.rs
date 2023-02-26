@@ -72,7 +72,7 @@ pub fn siqs(
     let factors = select_siqs_factors(&fbase, &n, nfacs, mm as usize, prefs.verbosity);
     let a_ints = select_a(&factors, a_value_count(&n), prefs.verbosity);
     let polys_per_a = 1 << (nfacs - 1);
-    if prefs.verbose(Verbosity::Verbose) {
+    if prefs.verbose(Verbosity::Info) {
         eprintln!(
         "Generated {} values of A with {} factors in {}..{} ({} polynomials each, spread={:.2}%)",
         a_ints.len(),
@@ -376,12 +376,10 @@ fn nfactors(n: &Uint) -> u32 {
         90..=119 => 4,
         120..=149 => 5,
         150..=169 => 6,
-        170..=189 => 7,
-        190..=209 => 8,
-        210..=239 => 9,
-        240..=269 => 10,
-        270..=299 => 11,
-        _ => 12,
+        170..=199 => 7,
+        // 13 factors for size 330
+        // 14 factors for size 360
+        200.. => n.bits() / 25,
     }
 }
 
@@ -442,23 +440,21 @@ fn a_tolerance_divisor(n: &Uint) -> usize {
 fn interval_size(n: &Uint) -> u32 {
     // Choose very small intervals since the cost of switching
     // polynomials is very small (less than 1ms).
-    // Large intervals also hurt memory locality during sieve.
-    // We want an integral amount of 32k blocks:
-    // 1 block under 100 bits
-    // 4 blocks for 120-180 bits
-    // ~10 blocks for 240 bits
-    // ~32 blocks for 300 bits
+    //
+    // Due to fixed costs being proportional to factor base size,
+    // choose interval size accordingly.
     let sz = n.bits();
     let nblocks = match sz {
+        // For small integers, A values are scarce, choose a large
+        // interval to avoid running out of values.
         0..=48 => 3,
-        49..=100 => 2,
-        101..=130 => 2,
+        49..=130 => 2,
         131..=160 => 3,
-        161..=190 => 5,
-        191..=260 => (sz - 140) / 10,    // 5..12
-        261..=300 => (sz - 200) / 5,     // 12..20
-        301..=350 => (2 * sz - 500) / 5, // 20..40
-        _ => 40,
+        161..=190 => 4,
+        191..=250 => (sz - 141) / 10, // 5..10
+        251..=310 => (sz - 171) / 7,  // 11..19
+        311..=370 => (sz - 210) / 5,  // 20..32
+        _ => 33,
     };
     nblocks * sieve::BLOCK_SIZE as u32
 }

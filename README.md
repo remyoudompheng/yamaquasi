@@ -111,6 +111,15 @@ is as follows:
 For numbers under 128-bit, calling the Python API will usually be faster than SageMath
 `factor()` or `ecm.factor()` with default options.
 
+Yamaquasi is never expected to run for more than a couple of hours.
+If it is the case, you are either using the wrong algorithm, or encountering a bug,
+or the number is too large and you should use a better program (Cado-NFS or GMP-ECM).
+
+The quadratic sieve is known to be slower than the number field sieve for number
+above 100 decimal digits. Sample runs show that Yamaquasi is still faster than Cado-NFS
+when factoring RSA-100 (about 40% less time), but slower when factoring RSA-110
+(about 3x slower).
+
 ## Multiprecision arithmetic
 
 Yamaquasi includes various homemade multiprecision routines which are used intensively
