@@ -523,7 +523,7 @@ fn mpqs_poly(s: &SieveMPQS, a: &Uint, r: &Uint) {
         roots.push(rs);
     }
     let pfunc = move |pidx: usize| roots[pidx].clone();
-    let mut state = sieve::Sieve::new(start_offset, nblocks, fbase, &pfunc);
+    let mut state = sieve::Sieve::new(start_offset, nblocks, fbase, &pfunc, None);
     if nblocks == 0 {
         sieve_block_poly(s, &pol, &mut state);
     }

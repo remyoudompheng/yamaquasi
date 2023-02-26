@@ -177,6 +177,8 @@ fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {
     let nfacs = a.factors.len();
     let polys_per_a = 1 << (nfacs - 1);
     let mut pol = Poly::first(s, a);
+    // Storage for recycled resources.
+    let mut recycled = None;
     for idx in 0..polys_per_a {
         if s.done.load(Ordering::Relaxed) {
             // Interrupt early.
@@ -186,7 +188,7 @@ fn sieve_a(s: &SieveSIQS, a_int: &Uint, factors: &Factors) {
             pol.next(s, a);
         }
         assert!(pol.idx == idx);
-        siqs_sieve_poly(s, a, &pol);
+        recycled = Some(siqs_sieve_poly(s, a, &pol, recycled));
         // Check status.
         let rlen = {
             let rels = s.rels.read().unwrap();
@@ -320,7 +322,7 @@ pub fn siqs_calibrate(n: Uint) {
                             pol.next(&s, &a);
                         }
                         assert!(pol.idx == idx);
-                        siqs_sieve_poly(&s, a, &pol);
+                        siqs_sieve_poly(&s, a, &pol, None);
                     }
                     let dt = t0.elapsed().as_secs_f64();
                     let rels = s.rels.read().unwrap();
@@ -1075,7 +1077,12 @@ fn _finish_polynomial(s: &SieveSIQS, a: &A, pol: &mut Poly) {
 
 // Sieving process
 
-fn siqs_sieve_poly(s: &SieveSIQS, a: &A, pol: &Poly) {
+fn siqs_sieve_poly(
+    s: &SieveSIQS,
+    a: &A,
+    pol: &Poly,
+    rec: Option<sieve::SieveRecycle>,
+) -> sieve::SieveRecycle {
     let mm = s.interval_size;
     let nblocks: usize = mm / BLOCK_SIZE;
     if s.prefs.verbose(Verbosity::Debug) {
@@ -1102,7 +1109,7 @@ fn siqs_sieve_poly(s: &SieveSIQS, a: &A, pol: &Poly) {
             sieve::SievePrime { p, offsets }
         }
     };
-    let mut state = sieve::Sieve::new(start_offset, nblocks, s.fbase, &pfunc);
+    let mut state = sieve::Sieve::new(start_offset, nblocks, s.fbase, &pfunc, rec);
     if nblocks == 0 {
         sieve_block_poly(s, pol, a, &mut state);
     }
@@ -1110,6 +1117,7 @@ fn siqs_sieve_poly(s: &SieveSIQS, a: &A, pol: &Poly) {
         sieve_block_poly(s, pol, a, &mut state);
         state.next_block();
     }
+    state.recycle()
 }
 
 pub struct SieveSIQS<'a> {

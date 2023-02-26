@@ -101,8 +101,8 @@ pub fn qsieve(
     // Construct 2 initial states, forward and backwards.
     let pfunc1 = |pidx| qs.prepare_prime_fwd(pidx, fwd_offset.load(Ordering::SeqCst));
     let pfunc2 = |pidx| qs.prepare_prime_bck(pidx, bck_offset.load(Ordering::SeqCst));
-    let mut s_fwd = Sieve::new(0, qs.nblocks(), qs.fbase, &pfunc1);
-    let mut s_bck = Sieve::new(0, qs.nblocks(), qs.fbase, &pfunc2);
+    let mut s_fwd = Sieve::new(0, qs.nblocks(), qs.fbase, &pfunc1, None);
+    let mut s_bck = Sieve::new(0, qs.nblocks(), qs.fbase, &pfunc2, None);
     loop {
         if let Some(pool) = tpool {
             pool.install(|| {
@@ -362,7 +362,7 @@ impl<'a> SieveQS<'a> {
     pub fn init_sieve_for_test(&'a self) -> Sieve<'a> {
         let pfunc = |pidx| self.prepare_prime_fwd(pidx, 0);
         let unsafe_pfunc = Box::leak(Box::new(pfunc));
-        Sieve::new(0, self.nblocks(), self.fbase, unsafe_pfunc)
+        Sieve::new(0, self.nblocks(), self.fbase, unsafe_pfunc, None)
     }
 }
 

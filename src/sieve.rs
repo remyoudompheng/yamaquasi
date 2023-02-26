@@ -141,12 +141,23 @@ pub struct SievePrime {
     pub offsets: [Option<u32>; 2],
 }
 
+/// A dummy structure used to recycle allocated resources between sieves.
+pub struct SieveRecycle {
+    tables: Vec<SieveTable>,
+}
+
 impl<'a> Sieve<'a> {
     // Initialize sieve starting at offset = -M
     // Function f determines starting offsets for a given prime
     // and returns log(p). This allows reading log(p) from an
     // alterante memory location when relevant.
-    pub fn new<F>(offset: i64, nblocks: usize, fbase: &'a FBase, f: &'a F) -> Self
+    pub fn new<F>(
+        offset: i64,
+        nblocks: usize,
+        fbase: &'a FBase,
+        f: &'a F,
+        recycled: Option<SieveRecycle>,
+    ) -> Self
     where
         F: Fn(usize) -> SievePrime + Sync,
     {
@@ -166,9 +177,21 @@ impl<'a> Sieve<'a> {
         let maxprime = fbase.bound();
         // Need tables for logp in 16..=log(maxprime)
         let maxlog = 32 - u32::leading_zeros(maxprime) as usize;
-        let mut tables: Vec<_> = (LARGE_PRIME_LOG..=maxlog)
-            .map(|_| SieveTable::new(nblocks))
-            .collect();
+        let mut tables: Vec<_> = if let Some(rec) = recycled {
+            // Use recycled memory.
+            let mut ts = rec.tables;
+            let expected_len = max(maxlog + 1, LARGE_PRIME_LOG) - LARGE_PRIME_LOG;
+            assert_eq!(ts.len(), expected_len);
+            for t in &mut ts {
+                assert_eq!(t.entries.len(), SieveTable::N_ENTRIES * nblocks);
+                t.reset();
+            }
+            ts
+        } else {
+            (LARGE_PRIME_LOG..=maxlog)
+                .map(|_| SieveTable::new(nblocks))
+                .collect()
+        };
 
         fbase.len();
         for log in 0..=maxlog {
@@ -299,6 +322,13 @@ impl<'a> Sieve<'a> {
                 }
             }
             table_pidx += 1;
+        }
+    }
+
+    /// Consume the sieve and recycle allocated hash tables.
+    pub fn recycle(self) -> SieveRecycle {
+        SieveRecycle {
+            tables: self.tables,
         }
     }
 
