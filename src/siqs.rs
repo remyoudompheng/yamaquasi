@@ -256,13 +256,14 @@ pub fn siqs_calibrate(n: Uint) {
     let nfacs = nfactors(n) as usize;
     let polys_per_a = 1 << (nfacs - 1);
 
-    eprintln!("Base params fb={fb0} lf={lf0}");
+    eprintln!("Base params B1={} fb={fb0} lf={lf0}", fbase0.bound());
     // The value of a varies according to interval size.
     let mut factorss = vec![];
     let mut mms = vec![];
     let mut a_s = vec![];
     let dblk = max(1, blocks0 / 6);
     for blks in [
+        blocks0 - 3 * dblk,
         blocks0 - 2 * dblk,
         blocks0 - dblk,
         blocks0,
@@ -300,7 +301,7 @@ pub fn siqs_calibrate(n: Uint) {
         // Print separator: results have different meanings
         eprintln!("===");
         let fbase = FBase::new(*n, fb);
-        for lf in [2 * lf0 / 3, lf0, 3 * lf0 / 2] {
+        for lf in [lf0] {
             for use_double in [false, true] {
                 for (idx, &mm) in mms.iter().enumerate() {
                     let aint = a_s[idx];
@@ -312,22 +313,24 @@ pub fn siqs_calibrate(n: Uint) {
                     } else {
                         0
                     };
+                    let df = maxdouble / maxprime / maxprime;
                     let s = SieveSIQS::new(n, &fbase, maxlarge, maxdouble, mm, &prefs);
                     // Measure metrics
                     let t0 = std::time::Instant::now();
                     let a = &prepare_a(factors, &aint, &fbase, -(mm as i64) / 2);
                     let mut pol = Poly::first(&s, a);
+                    let mut recycled = None;
                     for idx in 0..polys_per_a {
                         if idx > 0 {
                             pol.next(&s, &a);
                         }
                         assert!(pol.idx == idx);
-                        siqs_sieve_poly(&s, a, &pol, None);
+                        recycled = Some(siqs_sieve_poly(&s, a, &pol, recycled));
                     }
                     let dt = t0.elapsed().as_secs_f64();
                     let rels = s.rels.read().unwrap();
                     eprintln!(
-                        "fb={fb} B2/B1={lf} D/B1²={maxdouble} M={}k dt={dt:2.3}s {:.2}ns/i c={} ({:.1}/s) p={} ({:.1}/s) pp={} ({:.1}/s)",
+                        "fb={fb} B2/B1={lf} D/B1²={df} M={}k dt={dt:2.3}s {:.2}ns/i c={} ({:.1}/s) p={} ({:.1}/s) pp={} ({:.1}/s)",
                         mm / 2048,
                         dt * 1.0e9 / (mm as f64) / (polys_per_a as f64),
                         rels.len(),
