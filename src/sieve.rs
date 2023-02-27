@@ -21,7 +21,8 @@
 //! # Small primes
 //!
 //! Since the number of operations is O(M log log maxprime)
-//! most operations are caused by small primes:
+//! most operations are caused by small primes, especially
+//! for a properly optimized multiplier.
 //!
 //! In the case of primes where 1e6+3 is a quadratic residue
 //! the distribution of sum(#roots/p) is:
@@ -84,35 +85,33 @@
 //! algorithm simple). Each slot contains an offset (1 byte) and an approximage
 //! prime index (1 byte) so the size of each table is interval_size/4.
 //!
+//! # Very large primes
+//!
+//! Very large primes (above 512k, size class 20) appear for factor
+//! base sizes above ~20k. In that case, it is not so important to quickly
+//! find prime factors (because there are very few smooth numbers).
+//!
+//! Using the same memory footprint, we can use large buckets (size 16384),
+//! so that the hit count is at most 840 on average (less than 1024 up to 6
+//! standard deviations). We can store a 16-bit offset and a 16-bit prime
+//! offset using 4096 bytes.
+//!
+//! By applying this strategy for size classes >= 20, the number of sieve reports
+//! should be very low and the impact of searching linearly through the large
+//! buckets is less important.
+//!
 //! TODO: Bibliography
 
 use std::cmp::{max, min};
 use wide;
 
-use crate::arith;
 use crate::fbase::FBase;
 
 pub const BLOCK_SIZE: usize = 32 * 1024;
 const OFFSET_NONE: u16 = 0xffff;
 
 const LARGE_PRIME_LOG: usize = 16;
-const PRIME_BUCKET_SIZES: &[usize] = &[7, 13, 23, 43, 79, 147, 277, 527, 1009];
-const PRIME_BUCKET_DIVIDERS: &[arith::Divider31] = &[
-    arith::Divider31::new(7),
-    arith::Divider31::new(13),
-    arith::Divider31::new(23),
-    arith::Divider31::new(43),
-    arith::Divider31::new(79),
-    arith::Divider31::new(147),
-    arith::Divider31::new(277),
-    arith::Divider31::new(527),
-    arith::Divider31::new(1009),
-];
-
-// Map prime indices to 0..256
-fn prime_bucket(pidx: u32, logp: usize) -> u32 {
-    PRIME_BUCKET_DIVIDERS[logp - 16].divu31(pidx)
-}
+const VERY_LARGE_PRIME_LOG: usize = 19;
 
 // The sieve makes an array of offsets progress through the
 // sieve interval. All offsets are assumed to fit in a u16.
@@ -133,6 +132,7 @@ pub struct Sieve<'a> {
     pub blk: [u8; BLOCK_SIZE],
     // Cache for large prime hits
     pub tables: Vec<SieveTable>,
+    pub ltables: Vec<SieveTableLarge>,
 }
 
 #[derive(Clone)]
@@ -144,6 +144,7 @@ pub struct SievePrime {
 /// A dummy structure used to recycle allocated resources between sieves.
 pub struct SieveRecycle {
     tables: Vec<SieveTable>,
+    ltables: Vec<SieveTableLarge>,
 }
 
 impl<'a> Sieve<'a> {
@@ -177,21 +178,33 @@ impl<'a> Sieve<'a> {
         let maxprime = fbase.bound();
         // Need tables for logp in 16..=log(maxprime)
         let maxlog = 32 - u32::leading_zeros(maxprime) as usize;
-        let mut tables: Vec<_> = if let Some(rec) = recycled {
+        let (mut tables, mut ltables) = if let Some(rec) = recycled {
             // Use recycled memory: it should originate from a sieve
             // with the same factor base and number of blocks.
             let mut ts = rec.tables;
-            let expected_len = max(maxlog + 1, LARGE_PRIME_LOG) - LARGE_PRIME_LOG;
+            let expected_len =
+                (maxlog + 1).clamp(LARGE_PRIME_LOG, VERY_LARGE_PRIME_LOG) - LARGE_PRIME_LOG;
             assert_eq!(ts.len(), expected_len);
             for t in &mut ts {
                 assert_eq!(t.entries.len(), SieveTable::N_ENTRIES * nblocks);
                 t.reset();
             }
-            ts
+            let mut lts = rec.ltables;
+            let expected_len = max(maxlog + 1, VERY_LARGE_PRIME_LOG) - VERY_LARGE_PRIME_LOG;
+            assert_eq!(lts.len(), expected_len);
+            for t in &mut lts {
+                t.reset();
+            }
+            (ts, lts)
         } else {
-            (LARGE_PRIME_LOG..=maxlog)
-                .map(|_| SieveTable::new(nblocks))
-                .collect()
+            (
+                (LARGE_PRIME_LOG..=min(VERY_LARGE_PRIME_LOG - 1, maxlog))
+                    .map(|_| SieveTable::new(nblocks))
+                    .collect(),
+                (VERY_LARGE_PRIME_LOG..=maxlog)
+                    .map(|_| SieveTableLarge::new(nblocks))
+                    .collect(),
+            )
         };
 
         fbase.len();
@@ -219,20 +232,17 @@ impl<'a> Sieve<'a> {
                     });
                     debug_assert!(offs.len() == 2 * idx + 2);
                 }
-            } else if interval_size >> (log - 1) != 0 {
+            } else if log < VERY_LARGE_PRIME_LOG {
                 // Second class: primes larger than block size but (roughly)
                 // smaller than interval size.
-                assert!(prime_bucket((idx2 - idx1) as u32, log) < 256);
                 let table = &mut tables[log - LARGE_PRIME_LOG];
-                let pbsize = PRIME_BUCKET_SIZES[log - LARGE_PRIME_LOG];
-                let mut pbidx = 0;
-                let mut pbucket = 0;
-                for idx in idx1..idx2 {
+                for pidx in idx1..idx2 {
                     // Large prime: register them in hashmap
                     let SievePrime {
                         p,
                         offsets: [o1, o2],
-                    } = f(idx);
+                    } = f(pidx);
+                    let pidx = pidx as u32;
                     let mut kp: isize = 0;
                     let [Some(o1), Some(o2)] = [o1, o2]
                         else { unreachable!("large primes must have 2 roots") };
@@ -241,66 +251,44 @@ impl<'a> Sieve<'a> {
                     let rmax = max(o1, o2);
                     let m = interval_size - p - rmax;
                     while kp < m {
-                        table.add((kp + o1) as usize, pbucket);
-                        table.add((kp + o2) as usize, pbucket);
-                        table.add((kp + p + o1) as usize, pbucket);
-                        table.add((kp + p + o2) as usize, pbucket);
+                        table.add((kp + o1) as usize, pidx);
+                        table.add((kp + o2) as usize, pidx);
+                        table.add((kp + p + o1) as usize, pidx);
+                        table.add((kp + p + o2) as usize, pidx);
                         kp += 2 * p;
                     }
                     let mut off = o1 + kp;
                     while off < interval_size {
-                        table.add(off as usize, pbucket);
+                        table.add(off as usize, pidx);
                         off += p;
                     }
                     let mut off = o2 + kp;
                     while off < interval_size {
-                        table.add(off as usize, pbucket);
+                        table.add(off as usize, pidx);
                         off += p;
-                    }
-                    pbidx += 1;
-                    if pbidx == pbsize {
-                        pbidx = 0;
-                        pbucket += 1;
                     }
                 }
             } else {
-                // Last size class: primes even larger than the interval size.
-                // (interval size has at most (log-1) bits.
-                //
-                // FIXME: we can enter this category as soon as primes exceed interval size.
-                //
-                // Some (many?) of them will never do anything during this sieve.
-                // This category is a majority when factoring large integers:
-                // for numbers above 10^100 smoothness bounds exceed 3M-4M
-                // but we prefer interval sizes smaller than 1M.
-                //
-                // This is like above but many primes will be ignored and we don't need to loop.
-                assert!(prime_bucket((idx2 - idx1) as u32, log) < 256);
-                let table = &mut tables[log - LARGE_PRIME_LOG];
-                let pbsize = PRIME_BUCKET_SIZES[log - LARGE_PRIME_LOG];
-                let mut pbidx = 0;
-                let mut pbucket = 0;
-                for idx in idx1..idx2 {
+                // Very large primes (above 500k).
+                // We use large hash buckets that need fewer active cache
+                // lines. Many primes will not even generate a hit.
+                let table = &mut ltables[log - VERY_LARGE_PRIME_LOG];
+                for pidx in idx1..idx2 {
                     // Large prime: register them in hashmap
                     let SievePrime {
                         p,
                         offsets: [o1, o2],
-                    } = f(idx);
-                    let [Some(o1), Some(o2)] = [o1, o2]
+                    } = f(pidx);
+                    let [Some(mut o1), Some(mut o2)] = [o1, o2]
                         else { unreachable!("large primes must have 2 roots") };
-                    if (o1 as isize) < interval_size {
-                        table.add(o1 as usize, pbucket);
+                    while (o1 as isize) < interval_size {
+                        table.add(o1 as usize, pidx);
+                        o1 += p;
                     }
-                    if (o2 as isize) < interval_size {
-                        table.add(o2 as usize, pbucket);
+                    while (o2 as isize) < interval_size {
+                        table.add(o2 as usize, pidx);
+                        o2 += p;
                     }
-                    pbidx += 1;
-                    if pbidx == pbsize {
-                        pbidx = 0;
-                        pbucket += 1;
-                    }
-                    debug_assert!(o1 + p >= interval_size as u32);
-                    debug_assert!(o2 + p >= interval_size as u32);
                 }
             }
         }
@@ -326,11 +314,12 @@ impl<'a> Sieve<'a> {
             lo_prev: vec![0u16; len],
             blk: [0u8; BLOCK_SIZE],
             tables,
+            ltables,
         }
     }
 
     // Recompute largehits/largeoffs for next blocks.
-    // This is onyl for classic quadratic sieve where a single
+    // This is only for classic quadratic sieve where a single
     // polynomial is sieved over a huge interval.
     pub fn rehash(&mut self) {
         self.blk_no = 0;
@@ -340,31 +329,41 @@ impl<'a> Sieve<'a> {
         for t in &mut self.tables {
             t.reset();
         }
-        let mut table_pidx = 0;
-        let mut prevlog = 0;
-        for (idx, &p) in self.fbase.primes.iter().enumerate() {
+        for t in &mut self.ltables {
+            t.reset();
+        }
+        for (pidx, &p) in self.fbase.primes.iter().enumerate() {
             if (p as usize) < BLOCK_SIZE {
                 continue; // Small prime
             }
             let l = 32 - u32::leading_zeros(p) as usize;
-            if l != prevlog {
-                table_pidx = 0;
-                prevlog = l;
-            }
-            let pbucket = prime_bucket(table_pidx, l);
-            let table = &mut self.tables[l - LARGE_PRIME_LOG];
-            for o in (self.pfunc)(idx).offsets {
-                let Some(o) = o else { continue };
-                let mut off = o as usize;
-                loop {
-                    if off >= self.nblocks * BLOCK_SIZE {
-                        break;
+            if l < VERY_LARGE_PRIME_LOG {
+                let table = &mut self.tables[l - LARGE_PRIME_LOG];
+                for o in (self.pfunc)(pidx).offsets {
+                    let Some(o) = o else { continue };
+                    let mut off = o as usize;
+                    loop {
+                        if off >= self.nblocks * BLOCK_SIZE {
+                            break;
+                        }
+                        table.add(off, pidx as u32);
+                        off += p as usize;
                     }
-                    table.add(off, pbucket);
-                    off += p as usize;
+                }
+            } else {
+                let ltable = &mut self.ltables[l - VERY_LARGE_PRIME_LOG];
+                for o in (self.pfunc)(pidx).offsets {
+                    let Some(o) = o else { continue };
+                    let mut off = o as usize;
+                    loop {
+                        if off >= self.nblocks * BLOCK_SIZE {
+                            break;
+                        }
+                        ltable.add(off, pidx);
+                        off += p as usize;
+                    }
                 }
             }
-            table_pidx += 1;
         }
     }
 
@@ -372,6 +371,7 @@ impl<'a> Sieve<'a> {
     pub fn recycle(self) -> SieveRecycle {
         SieveRecycle {
             tables: self.tables,
+            ltables: self.ltables,
         }
     }
 
@@ -499,10 +499,24 @@ impl<'a> Sieve<'a> {
                 let logp = (LARGE_PRIME_LOG + tidx) as u8;
                 unsafe {
                     let blen = *blens.get_unchecked(bidx) as usize;
-                    for &(boff, _) in t.get_unchecked(bidx * BUCKET_SIZE..bidx * BUCKET_SIZE + blen)
-                    {
+                    for &entry in t.get_unchecked(bidx * BUCKET_SIZE..bidx * BUCKET_SIZE + blen) {
+                        let (boff, _) = std::mem::transmute::<u16, (u8, u8)>(entry);
                         let off = base_off + boff as usize;
                         *blk.get_unchecked_mut(off) += logp;
+                    }
+                }
+            }
+        }
+        // Handle very large primes: each 32k block is 2 buckets.
+        // First half must be handled completely before the second half.
+        for bucket in 0..SieveTableLarge::BUCKETS_PER_BLOCK {
+            let bno = self.blk_no * SieveTableLarge::BUCKETS_PER_BLOCK + bucket;
+            for (tidx, t) in self.ltables.iter().enumerate() {
+                let logp = (VERY_LARGE_PRIME_LOG + tidx) as u8;
+                unsafe {
+                    for &entry in t.bucket_offsets(bno) {
+                        let (boff, _) = std::mem::transmute::<u32, (u16, u16)>(entry);
+                        *blk.get_unchecked_mut(boff as usize) += logp;
                     }
                 }
             }
@@ -536,14 +550,6 @@ impl<'a> Sieve<'a> {
             skipped += log;
         }
         skipped
-    }
-
-    fn prime_bucket_bounds(&self, pbucket: usize, logp: usize) -> (usize, usize) {
-        let idxs = &self.fbase.idx_by_log;
-        let base = idxs[logp];
-        let next = idxs[logp + 1];
-        let bsz = PRIME_BUCKET_SIZES[logp - LARGE_PRIME_LOG];
-        (base + pbucket * bsz, min(next, base + (pbucket + 1) * bsz))
     }
 
     // Slow method to determine whether a prime divides the sieve element
@@ -662,25 +668,61 @@ impl<'a> Sieve<'a> {
             let (b, boff) = SieveTable::bucket(base_off + r as usize);
             for (tidx, t) in self.tables.iter().enumerate() {
                 let logp = tidx + LARGE_PRIME_LOG;
+                // Bounds of this size class.
+                let idx1 = self.fbase.idx_by_log[logp];
+                let idx2 = self.fbase.idx_by_log[logp + 1];
                 let blen = t.blens[b] as usize;
-                for &(off, pbucket) in &t.entries[b * BUCKET_SIZE..b * BUCKET_SIZE + blen] {
+                for eidx in b * BUCKET_SIZE..b * BUCKET_SIZE + blen {
+                    let (off, pidx8) = unsafe { t.unchecked_entry(eidx) };
                     if boff as u8 == off {
                         // Walk candidate primes
-                        let (pmin, pmax) = self.prime_bucket_bounds(pbucket as usize, logp);
-                        for pidx in pmin..pmax {
-                            if self.is_factor(r as usize, pidx) {
-                                facs[j].push(pidx)
+                        for msb in idx1 >> 8..(idx2 >> 8) + 1 {
+                            let pidx = (msb << 8) + pidx8 as usize;
+                            if idx1 <= pidx && pidx < idx2 {
+                                // We may exceptionally have duplicates:
+                                // that's fine.
+                                if self.is_factor(r as usize, pidx) {
+                                    facs[j].push(pidx)
+                                }
                             }
                         }
                     }
                 }
                 // Look for offset in overflows (extremely uncommon)
-                for &(ooff, pbucket) in &t.overflows[..min(t.overflows.len(), t.n_overflows)] {
+                for &(ooff, pidx8) in &t.overflows[..min(t.overflows.len(), t.n_overflows)] {
                     if ooff == r {
-                        let (pmin, pmax) = self.prime_bucket_bounds(pbucket as usize, logp);
-                        for pidx in pmin..pmax {
-                            if self.is_factor(r as usize, pidx) {
-                                facs[j].push(pidx)
+                        // Walk candidate primes
+                        for msb in idx1 >> 8..(idx2 >> 8) + 1 {
+                            let pidx = (msb << 8) + pidx8 as usize;
+                            if idx1 <= pidx && pidx < idx2 {
+                                // We may exceptionally have duplicates:
+                                // that's fine.
+                                if self.is_factor(r as usize, pidx) {
+                                    facs[j].push(pidx)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Look for very large primes
+            for t in &self.ltables {
+                let entries = t.bucket_offsets(
+                    SieveTableLarge::BUCKETS_PER_BLOCK * self.blk_no
+                        + r as usize / SieveTableLarge::LBUCKET_WIDTH,
+                );
+                let overflows = &t.overflows;
+                for bucket in [entries, overflows] {
+                    for entry in bucket {
+                        let (boff, pidx16) =
+                            unsafe { std::mem::transmute::<u32, (u16, u16)>(*entry) };
+                        if boff == r {
+                            let mut pidx = pidx16 as usize;
+                            while pidx < self.fbase.len() {
+                                if self.is_factor(r as usize, pidx) {
+                                    facs[j].push(pidx)
+                                }
+                                pidx += 1 << 16;
                             }
                         }
                     }
@@ -697,12 +739,17 @@ const BUCKET_SIZE: usize = 32;
 // but MPQS params use huge intervals.
 const MAX_OVERFLOWS: usize = 64;
 
-// A SieveTable holds sieve offsets for a size class of primes
-// from the factor base.
-// A size class is an interval [2^k, 2^(k+1)] for k in 15..24
+/// A SieveTable holds sieve offsets for a size class of primes
+/// from the factor base.
+/// A size class is an interval [2^k, 2^(k+1)] for k in 15..19
 #[derive(Clone)]
 pub struct SieveTable {
-    entries: Vec<(u8, u8)>,
+    // An entry is a transmuted tuple (u8,u8):
+    // - a 8-bit offset, relative to a bucket of size BUCKET_WIDTH
+    // - 8 lowest bits of a prime index in the factor base
+    entries: Vec<u16>,
+    // Contiguous array of bucket lengths.
+    // This is meant to stay in cache while the table is filled.
     blens: Vec<u8>,
     overflows: [(u16, u8); 32],
     n_overflows: usize,
@@ -714,8 +761,8 @@ impl SieveTable {
 
     fn new(nblocks: usize) -> Self {
         SieveTable {
-            entries: vec![(0u8, 0u8); Self::N_ENTRIES * nblocks],
-            blens: vec![0u8; Self::N_BUCKETS * nblocks],
+            entries: vec![0; Self::N_ENTRIES * nblocks],
+            blens: vec![0; Self::N_BUCKETS * nblocks],
             overflows: [(0u16, 0u8); 32],
             n_overflows: 0,
         }
@@ -733,18 +780,23 @@ impl SieveTable {
     }
 
     #[inline]
+    unsafe fn unchecked_entry(&self, idx: usize) -> (u8, u8) {
+        std::mem::transmute(*self.entries.get_unchecked(idx))
+    }
+
+    #[inline]
     fn add(&mut self, offset: usize, pidx: u32) {
-        debug_assert!(pidx < 256);
         debug_assert!(offset < self.entries.len() * BLOCK_SIZE / Self::N_ENTRIES);
         let (b, bucket_off) = Self::bucket(offset);
         unsafe {
             let blen_p = self.blens.get_unchecked_mut(b);
             let mut blen = *blen_p;
             if blen < BUCKET_SIZE as u8 {
+                // Store only the 8 lowest bits of pidx.
+                let entry = std::mem::transmute((bucket_off as u8, (pidx & 0xff) as u8));
                 *self
                     .entries
-                    .get_unchecked_mut(b * BUCKET_SIZE + blen as usize) =
-                    (bucket_off as u8, pidx as u8);
+                    .get_unchecked_mut(b * BUCKET_SIZE + blen as usize) = entry;
                 blen += 1;
                 *blen_p = blen;
             } else {
@@ -763,6 +815,79 @@ impl SieveTable {
             // Extremely unlikely to ever happen.
             eprintln!("WARNING: max overflows reached {}", self.n_overflows);
         }
+    }
+}
+
+/// A SieveTableLarge holds sieve offsets for a size class of primes
+/// from the factor base.
+///
+/// They are stored in larger buckets (for intervals of size 16384 instead of 256).
+#[derive(Clone)]
+pub struct SieveTableLarge {
+    // Sieve hits will be organized by blocks to bring mild locality.
+    // Each element is a transmuted (u16,u16).
+    hits: Vec<u32>,
+    // Current length of each bucket.
+    lengths: [u32; Self::MAX_BUCKETS],
+    // Overflows: common to all buckets.
+    overflows: Vec<u32>,
+}
+
+impl SieveTableLarge {
+    // Allow many blocks: this is needed for MPQS.
+    const MAX_BUCKETS: usize = Self::BUCKETS_PER_BLOCK * 512;
+    // Size of interval slice covered by a bucket.
+    const LBUCKET_WIDTH: usize = 16384;
+    const BUCKETS_PER_BLOCK: usize = BLOCK_SIZE / Self::LBUCKET_WIDTH;
+    // Size of storage for a given bucket:
+    // since 1/16 is less than the expected hit density (0.0541 for size class 19)
+    // this is at least 3.2 st deviations above the average and should
+    // avoid getting too many overflows.
+    const LBUCKET_SIZE: usize = Self::LBUCKET_WIDTH / 16;
+
+    fn new(nblocks: usize) -> Self {
+        let nbuckets = nblocks * BLOCK_SIZE / Self::LBUCKET_WIDTH;
+        assert!(nbuckets < Self::MAX_BUCKETS);
+        SieveTableLarge {
+            hits: vec![0; (nbuckets + 1) * Self::LBUCKET_WIDTH],
+            lengths: [0; Self::MAX_BUCKETS],
+            overflows: vec![],
+        }
+    }
+
+    fn reset(&mut self) {
+        self.lengths.fill(0);
+        self.overflows.clear();
+    }
+
+    /// Stores an offset and a truncated prime index.
+    #[inline]
+    fn add(&mut self, offset: usize, pidx: usize) {
+        debug_assert!(pidx < 1 << 30);
+        let (blk, blkoff) = (offset / Self::LBUCKET_WIDTH, offset % BLOCK_SIZE);
+        unsafe {
+            let entry = std::mem::transmute((blkoff as u16, pidx as u16));
+            let l = *self.lengths.get_unchecked(blk) as usize;
+            if l < Self::LBUCKET_SIZE {
+                let idx = blk * Self::LBUCKET_SIZE + l;
+                *self.hits.get_unchecked_mut(idx) = entry;
+                *self.lengths.get_unchecked_mut(blk) = l as u32 + 1;
+            } else {
+                self.add_overflow(entry);
+            }
+        }
+    }
+
+    #[inline(never)]
+    fn add_overflow(&mut self, entry: u32) {
+        // This should only happen once for a billion interval.
+        // It may happen a couple of times over a large sieve.
+        self.overflows.push(entry)
+    }
+
+    fn bucket_offsets(&self, bidx: usize) -> &[u32] {
+        let len = self.lengths[bidx] as usize;
+        &self.hits[bidx * Self::LBUCKET_SIZE..bidx * Self::LBUCKET_SIZE + len as usize]
     }
 }
 
