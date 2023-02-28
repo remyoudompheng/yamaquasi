@@ -54,12 +54,16 @@ const DEBUG: bool = false;
 
 #[derive(Default)]
 pub struct Preferences {
-    pub fb_size: Option<u32>,
-    pub large_factor: Option<u64>,
-    pub use_double: Option<bool>,
+    // General parameters
     pub threads: Option<usize>,
     pub verbosity: Verbosity,
     pub should_abort: Option<Box<dyn Fn() -> bool + Sync>>,
+    // Quadratic sieve parameters
+    pub fb_size: Option<u32>,
+    pub interval_size: Option<u32>,
+    pub large_factor: Option<u64>,
+    pub use_double: Option<bool>,
+
     // Yes, storing state variables in a Preferences object
     // is quite awkward.
     pm1_done: AtomicBool,
@@ -150,10 +154,13 @@ impl FromStr for Verbosity {
 #[derive(Debug)]
 pub struct UnexpectedFactor(u64);
 
+#[derive(Debug)]
+pub struct FactoringFailure;
+
 /// Factorizes an integer into a product of factors.
-pub fn factor(n: Uint, alg: Algo, prefs: &Preferences) -> Vec<Uint> {
+pub fn factor(n: Uint, alg: Algo, prefs: &Preferences) -> Result<Vec<Uint>, FactoringFailure> {
     if n.is_zero() {
-        return vec![n];
+        return Ok(vec![n]);
     }
     let mut factors = vec![];
     if prefs.verbose(Verbosity::Info) {
@@ -192,9 +199,9 @@ pub fn factor(n: Uint, alg: Algo, prefs: &Preferences) -> Vec<Uint> {
     let tpool = tpool.as_ref();
     factor_impl(nred, alg, prefs, &mut factors, tpool);
 
-    check_factors(&n, &factors);
+    check_factors(&n, &factors)?;
     factors.sort();
-    factors
+    Ok(factors)
 }
 
 fn factor_impl(
@@ -487,12 +494,15 @@ fn factor_impl(
     }
 }
 
-fn check_factors(n: &Uint, factors: &[Uint]) {
+fn check_factors(n: &Uint, factors: &[Uint]) -> Result<(), FactoringFailure> {
     if let &[p] = &factors {
         assert_eq!(n, p);
-        assert!(pseudoprime(*p), "could not find any factor for {n}");
+        if !pseudoprime(*p) {
+            return Err(FactoringFailure);
+        }
     }
     assert_eq!(*n, factors.iter().product::<Uint>());
+    Ok(())
 }
 
 /// Primality test of u64 using a Miller test for small bases.
@@ -615,85 +625,90 @@ pub fn pseudoprime(p: Uint) -> bool {
 #[test]
 fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     let fs = factor(Uint::ZERO, Algo::Auto, &Preferences::default());
-    assert_eq!(fs, vec![Uint::ZERO]);
+    assert_eq!(fs.unwrap(), vec![Uint::ZERO]);
 
-    let fs = factor(Uint::ONE, Algo::Auto, &Preferences::default());
+    let fs = factor(Uint::ONE, Algo::Auto, &Preferences::default()).unwrap();
     assert_eq!(fs, vec![]);
 
     // semiprime
     eprintln!("=> test semiprime");
     let n = Uint::from_str("404385851501206046375042621")?;
-    factor(n, Algo::Auto, &Preferences::default());
+    factor(n, Algo::Auto, &Preferences::default()).unwrap();
 
     // small factor (2003 * 665199750163226410868760173)
     eprintln!("=> test small factor 1");
     let n = Uint::from_str("1332395099576942500970126626519")?;
-    factor(n, Algo::Auto, &Preferences::default());
+    factor(n, Algo::Auto, &Preferences::default()).unwrap();
 
     // 2 small factors (443 * 1151 * 172633679917074861804179395686166722361211)
     let n = Uint::from_str("88024704953957052509918444604606608564924960423")?;
-    factor(n, Algo::Auto, &Preferences::default());
+    factor(n, Algo::Auto, &Preferences::default()).unwrap();
 
     // Could trigger an infinite loop after failing to factor due to
     // 223 being in the factor base.
     // 223*28579484042221159639852413780078523
     eprintln!("=> small factor 3");
     let n = Uint::from_str("317546892790192732050746209")?;
-    factor(n, Algo::Siqs, &Preferences::default());
+    factor(n, Algo::Siqs, &Preferences::default()).unwrap();
 
     // All small factors until MAX_MULTIPLIER must be properly tested
     // to avoid QS failures.
     // 199 * 18011383943879611828742161
     eprintln!("=> small factor 199");
     let n = Uint::from_str("3584265404832042753919690039")?;
-    factor(n, Algo::Siqs, &Preferences::default());
+    factor(n, Algo::Siqs, &Preferences::default()).unwrap();
 
     // When n has a small factor, it can appear in relations, creating pairs
     // (x,y) such that x=±y but the factorization (x-y)(x+y) is still interesting.
     eprintln!("=> small factor 5047");
     let n = Uint::from_str("9416412050459436444341141867167")?;
-    factor(n, Algo::Siqs, &Preferences::default());
+    factor(n, Algo::Siqs, &Preferences::default()).unwrap();
 
     // perfect square (17819845476047^2)
     eprintln!("=> test square");
     let n = Uint::from_str("317546892790192732050746209")?;
-    factor(n, Algo::Auto, &Preferences::default());
+    factor(n, Algo::Auto, &Preferences::default()).unwrap();
     // square of a composite number
     // (211*499)^2 * 10271
     let n = Uint::from_str("113861979834191")?;
-    factor(n, Algo::Auto, &Preferences::default());
+    factor(n, Algo::Auto, &Preferences::default()).unwrap();
     // perfect cube
     eprintln!("=> test cube");
     let n = Uint::from_str("350521251909490182639506149")?;
-    factor(n, Algo::Auto, &Preferences::default());
+    factor(n, Algo::Auto, &Preferences::default()).unwrap();
     eprintln!("=> test 6th power");
     let n = Uint::from_str("1000018000135000540001215001458000729")?;
-    assert_eq!(factor(n, Algo::Auto, &Preferences::default()).len(), 6);
+    assert_eq!(
+        factor(n, Algo::Auto, &Preferences::default())
+            .unwrap()
+            .len(),
+        6
+    );
 
     // not squarefree (839322217^2 * 705079549)
     eprintln!("=> test not squarefree");
     let n = Uint::from_str("496701596915056959994534861")?;
-    factor(n, Algo::Auto, &Preferences::default());
+    factor(n, Algo::Auto, &Preferences::default()).unwrap();
 
     // Observed failure: n=981572983530105943
     // is 60-bit and unlucky for SQUFOF.
     eprintln!("=> unlucky SQUFOF");
     let n = Uint::from_digit(981572983530105943);
-    factor(n, Algo::Auto, &Preferences::default());
+    factor(n, Algo::Auto, &Preferences::default()).unwrap();
 
     // Basic classical QS sanity check.
     eprintln!("=> simple classical QS");
     let n = Uint::from_str("144145963608905891153").unwrap();
-    let fs = factor(n, Algo::Qs, &Preferences::default());
+    let fs = factor(n, Algo::Qs, &Preferences::default()).unwrap();
     assert_eq!(fs[0] * fs[1], n);
 
     // MPQS sanity check
     // n = 1 mod 4 for optimal multiplier
     let n = Uint::from_digit(2028822982549217551);
-    factor(n, Algo::Mpqs, &Preferences::default());
+    factor(n, Algo::Mpqs, &Preferences::default()).unwrap();
     // n = 3 mod 4 for optimal multiplier
     let n = Uint::from_digit(966218335873381319);
-    factor(n, Algo::Mpqs, &Preferences::default());
+    factor(n, Algo::Mpqs, &Preferences::default()).unwrap();
 
     Ok(())
 }
@@ -704,7 +719,7 @@ fn test_factor_qs_edgecases() -> Result<(), bnum::errors::ParseIntError> {
     // has only 16 out of the 48 smallest primes, so the smooth bound
     // must be high enough to collect more primes.
     let n = Uint::from_digit(325434172177);
-    let fs = factor(n, Algo::Qs, &Preferences::default());
+    let fs = factor(n, Algo::Qs, &Preferences::default()).unwrap();
     assert_eq!(fs[0] * fs[1], n);
 
     Ok(())
@@ -716,13 +731,13 @@ fn test_factor_mpqs_edgecases() -> Result<(), bnum::errors::ParseIntError> {
     let smalls: &[u64] = &[654949849, 2468912671, 20152052489];
     for &n in smalls {
         let n = Uint::from_digit(n);
-        let fs = factor(n, Algo::Mpqs, &Preferences::default());
+        let fs = factor(n, Algo::Mpqs, &Preferences::default()).unwrap();
         assert_eq!(fs[0] * fs[1], n);
     }
 
     // Multiplier=1, n mod 4 = 3
     let n = Uint::from_str("188568530916066130831")?;
-    let fs = factor(n, Algo::Mpqs, &Preferences::default());
+    let fs = factor(n, Algo::Mpqs, &Preferences::default()).unwrap();
     assert_eq!(fs[0] * fs[1], n);
 
     Ok(())
@@ -734,20 +749,20 @@ fn test_factor_siqs_edgecases() -> Result<(), bnum::errors::ParseIntError> {
     // Used to fail due to selecting 2 factors or too many As.
     eprintln!("=> SIQS 60-75 bits");
     let n = Uint::from_digit(1231055495188530589);
-    factor(n, Algo::Siqs, &Preferences::default());
+    factor(n, Algo::Siqs, &Preferences::default()).unwrap();
     let n = Uint::from_digit(1939847356913363213);
-    factor(n, Algo::Siqs, &Preferences::default());
+    factor(n, Algo::Siqs, &Preferences::default()).unwrap();
     let n = Uint::from_digit(9173516735614600627);
-    factor(n, Algo::Siqs, &Preferences::default());
+    factor(n, Algo::Siqs, &Preferences::default()).unwrap();
     let n = Uint::from_str("10847815350861015899809")?;
-    factor(n, Algo::Siqs, &Preferences::default());
+    factor(n, Algo::Siqs, &Preferences::default()).unwrap();
 
     // SIQS does not generate many relations (not #fbase + 64) but still enough.
     let n = Uint::from_digit(4954670127929);
-    factor(n, Algo::Siqs, &Preferences::default());
+    factor(n, Algo::Siqs, &Preferences::default()).unwrap();
     // SIQS generates enough relations but they are fewer than the factor base (ok).
     let n = Uint::from_str("495751324548272090616278443938858471242622233")?;
-    factor(n, Algo::Siqs, &Preferences::default());
+    factor(n, Algo::Siqs, &Preferences::default()).unwrap();
 
     // Numbers with small/sparse factor bases: they make it difficult to generate
     // optimal A values. Most examples are failures during random testing.
@@ -755,33 +770,33 @@ fn test_factor_siqs_edgecases() -> Result<(), bnum::errors::ParseIntError> {
 
     // Multiplier 1, factor base [2, 3, 7, 11, 19, 31, 59, 67]
     let n = Uint::from_digit(314534861617);
-    factor(n, Algo::Siqs, &Preferences::default());
+    factor(n, Algo::Siqs, &Preferences::default()).unwrap();
     // Another small number.
     let n = Uint::from_digit(157261665529);
-    factor(n, Algo::Siqs, &Preferences::default());
+    factor(n, Algo::Siqs, &Preferences::default()).unwrap();
     // Factor base [2, 3, 7, 13, 19, 79, 89, 107, 131, ...]
     let n = Uint::from_str("72231484786704818233")?;
-    factor(n, Algo::Siqs, &Preferences::default());
+    factor(n, Algo::Siqs, &Preferences::default()).unwrap();
     // 72 bit example, multiplier 1: factor base gap 47, 61, 103, 131, 137, 163, 223
     let n = Uint::from_str("212433504133480536121")?;
-    factor(n, Algo::Siqs, &Preferences::default());
+    factor(n, Algo::Siqs, &Preferences::default()).unwrap();
     // Factor base gap between 47 and 97:
     let n = Uint::from_str("232159658536337208497609")?;
-    factor(n, Algo::Siqs, &Preferences::default());
+    factor(n, Algo::Siqs, &Preferences::default()).unwrap();
     // 87-bit number, multiplier 43, factor base gap 79, 173, 223
     // Can create very suboptimal values of A.
     let n = Uint::from_str("145632526168873091762826187")?;
-    factor(n, Algo::Siqs, &Preferences::default());
+    factor(n, Algo::Siqs, &Preferences::default()).unwrap();
     // Large gap between 127 and 211: selection of A was stuck
     // because only 1 candidate is found.
     let n = Uint::from_str("774227958313673793204983642345821")?;
-    factor(n, Algo::Siqs, &Preferences::default());
+    factor(n, Algo::Siqs, &Preferences::default()).unwrap();
 
     // SIQS with 90-100 bit numbers: A needs 4 factors (5 is too many)
     let n = Uint::from_str("13819541643362998561057402169")?;
-    factor(n, Algo::Siqs, &Preferences::default());
+    factor(n, Algo::Siqs, &Preferences::default()).unwrap();
     let n = Uint::from_str("34084481733943226418420736441")?;
-    factor(n, Algo::Siqs, &Preferences::default());
+    factor(n, Algo::Siqs, &Preferences::default()).unwrap();
     Ok(())
 }
 
@@ -792,7 +807,7 @@ fn test_factor_ecm_edgecases() -> Result<(), bnum::errors::ParseIntError> {
     // This could cause an infinite loop or a crash.
 
     let n = Uint::from_str("149765065983515097066869381115702138825777596")?;
-    let fs = factor(n, Algo::Ecm, &Preferences::default());
+    let fs = factor(n, Algo::Ecm, &Preferences::default()).unwrap();
     assert_eq!(fs.len(), 18);
 
     // Products of small primes
@@ -803,14 +818,14 @@ fn test_factor_ecm_edgecases() -> Result<(), bnum::errors::ParseIntError> {
     ];
     for n in smalls {
         let n = Uint::from_digit(n);
-        let fs = factor(n, Algo::Ecm, &Preferences::default());
+        let fs = factor(n, Algo::Ecm, &Preferences::default()).unwrap();
         assert_eq!(fs.len(), 2);
         assert!(fs[0] * fs[1] == n);
     }
     let smalls = [1621 * 1709 * 1733, 1697 * 1787 * 1831];
     for n in smalls {
         let n = Uint::from_digit(n);
-        let fs = factor(n, Algo::Ecm, &Preferences::default());
+        let fs = factor(n, Algo::Ecm, &Preferences::default()).unwrap();
         assert_eq!(fs.len(), 3);
         assert!(fs[0] * fs[1] * fs[2] == n);
     }
@@ -823,13 +838,13 @@ fn test_factor_ecm_edgecases() -> Result<(), bnum::errors::ParseIntError> {
     // 6164159587123652872394951179302664763814309093309197470628088016151
     // As a consequence ECM must find all factors quickly "accidentally".
     let n = Uint::from_str("168472527175896339170265431590477670742294002583447818106088193178591923790722222786096568695941644944559115227634107731116901327")?;
-    let fs = factor(n, Algo::Ecm, &Preferences::default());
+    let fs = factor(n, Algo::Ecm, &Preferences::default()).unwrap();
     assert_eq!(fs.len(), 3);
     assert_eq!(fs[0] * fs[1] * fs[2], n);
 
     // Similarly for the small variant.
     let n = Uint::from_str("35095808598940323061")?;
-    let fs = factor(n, Algo::Ecm128, &Preferences::default());
+    let fs = factor(n, Algo::Ecm128, &Preferences::default()).unwrap();
     assert_eq!(fs.len(), 2);
     assert_eq!(fs[0] * fs[1], n);
 

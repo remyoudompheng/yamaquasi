@@ -60,7 +60,7 @@ pub fn siqs(
         }
         return Err(e);
     }
-    let mm = interval_size(&n);
+    let mm = prefs.interval_size.unwrap_or(interval_size(&n));
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Smoothness bound B1={}", fbase.bound());
         eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls(),);

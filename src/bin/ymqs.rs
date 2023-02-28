@@ -34,9 +34,8 @@ fn main() {
     const MAXBITS: u32 = 512;
     if n.bits() > MAXBITS {
         panic!(
-            "Number size ({} bits) exceeds {} bits limit",
+            "Number size ({} bits) exceeds {MAXBITS} bits limit",
             n.bits(),
-            MAXBITS
         )
     }
     let n = Uint::from_str(number).unwrap();
@@ -51,11 +50,11 @@ fn main() {
         eprintln!("Input number {}", n);
     }
     let alg = Algo::from_str(&mode).unwrap();
-    let factors = factor(n, alg, &prefs);
+    let factors = factor(n, alg, &prefs).unwrap();
     for f in factors {
         if !pseudoprime(f) && prefs.verbose(Verbosity::Info) {
-            eprintln!("composite factor: {} ({} bits)", f, f.bits());
+            eprintln!("composite factor: {f} ({} bits)", f.bits());
         }
-        println!("{}", f);
+        println!("{f}");
     }
 }

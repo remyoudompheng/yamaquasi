@@ -50,7 +50,7 @@ fn main() {
         let mut prefs = Preferences::default();
         prefs.verbosity = Verbosity::Silent;
         let alg = Algo::from_str(&mode).unwrap();
-        let pq = factor(n, alg, &prefs);
+        let pq = factor(n, alg, &prefs).unwrap();
         if pq.len() != 2 {
             eprintln!("ERROR failed to factor {n}={p}*{q}");
             std::process::exit(1);

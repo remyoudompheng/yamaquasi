@@ -24,8 +24,8 @@ fn pymqs(_: Python<'_>, m: &PyModule) -> PyResult<()> {
 
 #[pyfunction]
 #[pyo3(
-    signature = (n, /, algo = "auto", verbose = "silent", timeout = None, threads = None),
-    text_signature = "(n: int, /, algo: str, verbose: str, timeout=None, threads=None) -> List[int]",
+    signature = (n, /, algo = "auto", qs_fb_size = None, qs_interval_size = None, verbose = "silent", timeout = None, threads = None),
+    text_signature = "(n: int, /, algo: str, verbose: str, timeout=None, threads=None, qs_fb_size=None, qs_interval_size=None) -> List[int]",
 )]
 /// Factors an integer into prime factors. The result is a list
 /// whose product is the input argument.
@@ -37,10 +37,16 @@ fn pymqs(_: Python<'_>, m: &PyModule) -> PyResult<()> {
 ///
 /// Possible values for algo are:
 /// auto (default), pm1, ecm, qs, mpqs, siqs.
+///
+/// Additional parameters are available for the quadratic sieves:
+/// qs_fb_size: number of primes in the factor base
+/// qs_interval_size: size of sieve intervals (a multiple of 32768)
 fn factor(
     py: Python<'_>,
     n: &PyLong,
     algo: &str,
+    qs_fb_size: Option<u32>,
+    qs_interval_size: Option<u32>,
     verbose: &str,
     timeout: Option<f64>,
     threads: Option<usize>,
@@ -48,6 +54,8 @@ fn factor(
     let verbosity =
         Verbosity::from_str(verbose).map_err(|e| PyValueError::new_err(e.to_string()))?;
     let mut prefs = Preferences::default();
+    prefs.fb_size = qs_fb_size;
+    prefs.interval_size = qs_interval_size;
     prefs.threads = threads;
     prefs.verbosity = verbosity;
     // Handle interrupts.
@@ -85,7 +93,9 @@ fn factor(
             "Yamaquasi only accepts positive integers with at most 150 decimal digits"
         )));
     }
-    let factors = py.allow_threads(|| yamaquasi::factor(n, alg, &prefs));
+    let Ok(factors) = py.allow_threads(|| yamaquasi::factor(n, alg, &prefs))
+        else { return  Err(PyValueError::new_err(format!(
+            "failed to factor {n}"))) };
     if timeout.is_some()
         && Some(start.elapsed().as_secs_f64()) >= timeout
         && verbosity >= Verbosity::Info
