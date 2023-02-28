@@ -124,7 +124,6 @@ pub struct Sieve<'a> {
     pub idxskip: usize,
     // Factor base
     pub fbase: &'a FBase,
-    pub pfunc: &'a (dyn Fn(usize) -> SievePrime + Sync),
     // Small primes
     pub lo: Vec<u16>,      // cursor offsets
     pub lo_prev: Vec<u16>, // clone of lo before sieving block.
@@ -133,12 +132,6 @@ pub struct Sieve<'a> {
     // Cache for large prime hits
     pub tables: Vec<SieveTable>,
     pub ltables: Vec<SieveTableLarge>,
-}
-
-#[derive(Clone)]
-pub struct SievePrime {
-    pub p: u32,
-    pub offsets: [Option<u32>; 2],
 }
 
 /// A dummy structure used to recycle allocated resources between sieves.
@@ -152,16 +145,13 @@ impl<'a> Sieve<'a> {
     // Function f determines starting offsets for a given prime
     // and returns log(p). This allows reading log(p) from an
     // alterante memory location when relevant.
-    pub fn new<F>(
+    pub fn new(
         offset: i64,
         nblocks: usize,
         fbase: &'a FBase,
-        f: &'a F,
+        roots: [&[u32]; 2],
         recycled: Option<SieveRecycle>,
-    ) -> Self
-    where
-        F: Fn(usize) -> SievePrime + Sync,
-    {
+    ) -> Self {
         // Skip enough primes to skip ~half of operations
         let pskip = match fbase.len() {
             0..=1999 => 3,
@@ -209,27 +199,18 @@ impl<'a> Sieve<'a> {
 
         fbase.len();
         let interval_size = (nblocks * BLOCK_SIZE) as isize;
+        let [roots1, roots2] = roots;
         for log in 0..=maxlog {
             let idx1 = fbase.idx_by_log[log];
             let idx2 = fbase.idx_by_log[log + 1];
+            let primes = &fbase.primes;
+            assert!(idx2 <= roots1.len() && idx2 <= roots2.len() && idx2 <= primes.len());
             if log < LARGE_PRIME_LOG {
                 // First size class: primes smaller than block size.
                 for idx in idx1..idx2 {
-                    let SievePrime {
-                        p: _,
-                        offsets: [o1, o2],
-                    } = f(idx);
-                    // Small prime
-                    offs.push(if let Some(o1) = o1 {
-                        o1 as u16
-                    } else {
-                        OFFSET_NONE
-                    });
-                    offs.push(if let Some(o2) = o2 {
-                        o2 as u16
-                    } else {
-                        OFFSET_NONE
-                    });
+                    let (o1, o2) = (roots1[idx], roots2[idx]);
+                    offs.push(o1 as u16);
+                    offs.push(if o1 != o2 { o2 as u16 } else { OFFSET_NONE });
                     debug_assert!(offs.len() == 2 * idx + 2);
                 }
             } else if log < VERY_LARGE_PRIME_LOG {
@@ -238,16 +219,20 @@ impl<'a> Sieve<'a> {
                 let table = &mut tables[log - LARGE_PRIME_LOG];
                 for pidx in idx1..idx2 {
                     // Large prime: register them in hashmap
-                    let SievePrime {
-                        p,
-                        offsets: [o1, o2],
-                    } = f(pidx);
+                    // They cannot be factors of A in SIQS, so they must have 2 roots.
+                    let (o1, o2, p) = unsafe {
+                        (
+                            *roots1.get_unchecked(pidx) as isize,
+                            *roots2.get_unchecked(pidx) as isize,
+                            *primes.get_unchecked(pidx) as isize,
+                        )
+                    };
+                    debug_assert!(
+                        o1 != o2,
+                        "large primes must have 2 roots p={p} o1={o1} o2={o2}"
+                    );
                     let pidx = pidx as u32;
                     let mut kp: isize = 0;
-                    let [Some(o1), Some(o2)] = [o1, o2]
-                        else { unreachable!("large primes must have 2 roots") };
-                    let (o1, o2) = (o1 as isize, o2 as isize);
-                    let p = p as isize;
                     let rmax = max(o1, o2);
                     let m = interval_size - p - rmax;
                     while kp < m {
@@ -275,12 +260,17 @@ impl<'a> Sieve<'a> {
                 let table = &mut ltables[log - VERY_LARGE_PRIME_LOG];
                 for pidx in idx1..idx2 {
                     // Large prime: register them in hashmap
-                    let SievePrime {
-                        p,
-                        offsets: [o1, o2],
-                    } = f(pidx);
-                    let [Some(mut o1), Some(mut o2)] = [o1, o2]
-                        else { unreachable!("large primes must have 2 roots") };
+                    let (mut o1, mut o2, p) = unsafe {
+                        (
+                            *roots1.get_unchecked(pidx) as isize,
+                            *roots2.get_unchecked(pidx) as isize,
+                            *primes.get_unchecked(pidx) as isize,
+                        )
+                    };
+                    debug_assert!(
+                        o1 != o2,
+                        "large primes must have 2 roots p={p} o1={o1} o2={o2}"
+                    );
                     while (o1 as isize) < interval_size {
                         table.add(o1 as usize, pidx);
                         o1 += p;
@@ -309,7 +299,6 @@ impl<'a> Sieve<'a> {
             blk_no: 0,
             idxskip,
             fbase,
-            pfunc: f,
             lo: offs,
             lo_prev: vec![0u16; len],
             blk: [0u8; BLOCK_SIZE],
@@ -321,7 +310,7 @@ impl<'a> Sieve<'a> {
     // Recompute largehits/largeoffs for next blocks.
     // This is only for classic quadratic sieve where a single
     // polynomial is sieved over a huge interval.
-    pub fn rehash(&mut self) {
+    pub fn rehash(&mut self, roots: [&[u32]; 2]) {
         self.blk_no = 0;
         if self.nblocks == 0 {
             return;
@@ -332,6 +321,7 @@ impl<'a> Sieve<'a> {
         for t in &mut self.ltables {
             t.reset();
         }
+        let [roots1, roots2] = roots;
         for (pidx, &p) in self.fbase.primes.iter().enumerate() {
             if (p as usize) < BLOCK_SIZE {
                 continue; // Small prime
@@ -339,8 +329,8 @@ impl<'a> Sieve<'a> {
             let l = 32 - u32::leading_zeros(p) as usize;
             if l < VERY_LARGE_PRIME_LOG {
                 let table = &mut self.tables[l - LARGE_PRIME_LOG];
-                for o in (self.pfunc)(pidx).offsets {
-                    let Some(o) = o else { continue };
+                let (o1, o2) = (roots1[pidx], roots2[pidx]);
+                for o in [o1, o2] {
                     let mut off = o as usize;
                     loop {
                         if off >= self.nblocks * BLOCK_SIZE {
@@ -352,8 +342,8 @@ impl<'a> Sieve<'a> {
                 }
             } else {
                 let ltable = &mut self.ltables[l - VERY_LARGE_PRIME_LOG];
-                for o in (self.pfunc)(pidx).offsets {
-                    let Some(o) = o else { continue };
+                let (o1, o2) = (roots1[pidx], roots2[pidx]);
+                for o in [o1, o2] {
                     let mut off = o as usize;
                     loop {
                         if off >= self.nblocks * BLOCK_SIZE {
@@ -552,21 +542,23 @@ impl<'a> Sieve<'a> {
         skipped
     }
 
-    // Slow method to determine whether a prime divides the sieve element
-    // at given offset.
-    fn is_factor(&self, offset: usize, pidx: usize) -> bool {
-        let sp = (self.pfunc)(pidx);
-        let div = self.fbase.div(pidx);
-        let o = div
-            .divmod64(self.blk_no as u64 * BLOCK_SIZE as u64 + offset as u64)
-            .1;
-        sp.offsets.contains(&Some(o as u32))
-    }
-
     // Returns a list of block offsets and factors (as indices into the factor base).
     // The threshold is given for the "ends" of the interval.
     //
-    pub fn smooths(&self, threshold: u8, root: Option<u32>) -> (Vec<u16>, Vec<Vec<usize>>) {
+    pub fn smooths(
+        &self,
+        threshold: u8,
+        root: Option<u32>,
+        polyroots: [&[u32]; 2],
+    ) -> (Vec<u16>, Vec<Vec<usize>>) {
+        let [roots1, roots2] = polyroots;
+        let is_factor = |offset: usize, pidx: usize| -> bool {
+            let div = self.fbase.div(pidx);
+            let blkbase = (self.blk_no as u32).checked_mul(BLOCK_SIZE as u32).unwrap();
+            let o = div.div31.modu31(blkbase + offset as u32);
+            o == roots1[pidx] || o == roots2[pidx]
+        };
+
         // As smallest primes have been skipped, values in self.blk
         // are smaller than they should be: subtract an upper bound for
         // the missing part from the threshold.
@@ -681,7 +673,7 @@ impl<'a> Sieve<'a> {
                             if idx1 <= pidx && pidx < idx2 {
                                 // We may exceptionally have duplicates:
                                 // that's fine.
-                                if self.is_factor(r as usize, pidx) {
+                                if is_factor(r as usize, pidx) {
                                     facs[j].push(pidx)
                                 }
                             }
@@ -697,7 +689,7 @@ impl<'a> Sieve<'a> {
                             if idx1 <= pidx && pidx < idx2 {
                                 // We may exceptionally have duplicates:
                                 // that's fine.
-                                if self.is_factor(r as usize, pidx) {
+                                if is_factor(r as usize, pidx) {
                                     facs[j].push(pidx)
                                 }
                             }
@@ -719,7 +711,7 @@ impl<'a> Sieve<'a> {
                         if boff == r {
                             let mut pidx = pidx16 as usize;
                             while pidx < self.fbase.len() {
-                                if self.is_factor(r as usize, pidx) {
+                                if is_factor(r as usize, pidx) {
                                     facs[j].push(pidx)
                                 }
                                 pidx += 1 << 16;
@@ -805,7 +797,7 @@ impl SieveTable {
         }
     }
 
-    #[inline(never)]
+    #[cold]
     fn add_overflow(&mut self, offset: usize, pidx: u32) {
         if self.n_overflows < self.overflows.len() {
             self.overflows[self.n_overflows] = ((offset % BLOCK_SIZE) as u16, pidx as u8);
@@ -923,12 +915,12 @@ fn test_sieve_block() {
     let fb = fbase::FBase::new(n, 2566);
     let nsqrt = crate::arith::isqrt(n);
     let qs = qsieve::SieveQS::new(n, &fb, 1 << 30, false);
-    let mut s = qs.init_sieve_for_test();
+    let (mut s, [r1s, r2s]) = qs.init_sieve_for_test();
     s.sieve_block();
     let expect: &[u16] = &[
         314, 957, 1779, 2587, 5882, 7121, 13468, 16323, 22144, 23176, 32407,
     ];
-    let (idxs, facss) = s.smooths(70, None);
+    let (idxs, facss) = s.smooths(70, None, [&r1s[..], &r2s[..]]);
     eprintln!("sieve > 70 {:?}", idxs);
     let mut res = vec![];
     for (i, facs) in idxs.into_iter().zip(facss) {

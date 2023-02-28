@@ -250,7 +250,7 @@ impl Poly {
         div: &arith::Dividers,
         inv: &arith::Inverter,
         offset: i32,
-    ) -> sieve::SievePrime {
+    ) -> (u32, u32) {
         let off: u32 = div.div31.modi32(offset);
         let shift = |r: u32| -> u32 {
             if r < off {
@@ -261,9 +261,9 @@ impl Poly {
         };
 
         // Determine roots r1, r2 such that P(offset+r)==0 mod p.
-        let offsets = if p == 2 {
+        if p == 2 {
             // We don't really know what will happen.
-            [Some(0), Some(1)]
+            (0, 1)
         } else {
             // Transform roots as:
             // if n % 4 == 1 (b is odd), r -> (r - B) / 2A
@@ -281,23 +281,20 @@ impl Poly {
                 debug_assert!(self.c.is_negative());
                 let c = div.divmod_uint(&self.c.abs().to_bits()).1;
                 let r = shift(div.divmod64(c * binv).1 as u32);
-                [Some(r), None]
+                (r, r)
             } else {
                 let ainv = inv.invert(a as u32) as u64;
                 let r1 = shift(div.divmod64((p as u64 + r as u64 - b) * ainv).1 as u32);
-                [
-                    Some(r1),
+                (
+                    r1,
                     if r == 0 {
-                        None
+                        r1
                     } else {
-                        Some(shift(
-                            div.divmod64((2 * p as u64 - r as u64 - b) * ainv).1 as u32,
-                        ))
+                        shift(div.divmod64((2 * p as u64 - r as u64 - b) * ainv).1 as u32)
                     },
-                ]
+                )
             }
-        };
-        sieve::SievePrime { p, offsets }
+        }
     }
 }
 
@@ -513,22 +510,24 @@ fn mpqs_poly(s: &SieveMPQS, a: &Uint, r: &Uint) {
     let start_offset = -s.interval_size / 2;
     let end_offset = s.interval_size / 2;
     let fbase = s.fbase;
-    let mut roots: Vec<crate::sieve::SievePrime> = Vec::with_capacity(fbase.len());
+    let mut roots1 = vec![0; fbase.len()];
+    let mut roots2 = vec![0; fbase.len()];
     for i in 0..fbase.len() {
         let p = fbase.p(i);
         let r = fbase.r(i);
         let div = fbase.div(i);
         let inv = &s.inverters[i];
-        let rs = pol.prepare_prime(p, r, div, inv, start_offset as i32);
-        roots.push(rs);
+        let (r1, r2) = pol.prepare_prime(p, r, div, inv, start_offset as i32);
+        roots1[i] = r1;
+        roots2[i] = r2;
     }
-    let pfunc = move |pidx: usize| roots[pidx].clone();
-    let mut state = sieve::Sieve::new(start_offset, nblocks, fbase, &pfunc, None);
+    let roots12 = [&roots1[..], &roots2[..]];
+    let mut state = sieve::Sieve::new(start_offset, nblocks, fbase, roots12, None);
     if nblocks == 0 {
-        sieve_block_poly(s, &pol, &mut state);
+        sieve_block_poly(s, &pol, roots12, &mut state);
     }
     while state.offset < end_offset {
-        sieve_block_poly(s, &pol, &mut state);
+        sieve_block_poly(s, &pol, roots12, &mut state);
         state.next_block();
     }
 }
@@ -596,7 +595,7 @@ struct SieveMPQS<'a> {
 }
 
 // Sieve using a selected polynomial
-fn sieve_block_poly(s: &SieveMPQS, pol: &Poly, st: &mut sieve::Sieve) {
+fn sieve_block_poly(s: &SieveMPQS, pol: &Poly, roots: [&[u32]; 2], st: &mut sieve::Sieve) {
     st.sieve_block();
 
     let maxprime = s.fbase.bound() as u64;
@@ -616,7 +615,7 @@ fn sieve_block_poly(s: &SieveMPQS, pol: &Poly, st: &mut sieve::Sieve) {
     let target = s.n.bits() / 2 + (s.interval_size as u64 / 2).bits() - max_cofactor.bits();
     let n = &s.n;
     let root = s.interval_size * 7 / 20; // sqrt(2)/4
-    let (idxs, facss) = st.smooths(target as u8, Some(root as u32));
+    let (idxs, facss) = st.smooths(target as u8, Some(root as u32), roots);
     for (i, facs) in idxs.into_iter().zip(facss) {
         // Evaluate polynomial
         let (v, mut x) = pol.eval(st.offset + i as i64);

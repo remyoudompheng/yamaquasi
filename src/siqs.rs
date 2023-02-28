@@ -1100,19 +1100,9 @@ fn siqs_sieve_poly(
     // Construct initial state.
     let start_offset: i64 = -(mm as i64) / 2;
     let end_offset: i64 = (mm as i64) / 2;
-    let primes = &s.fbase.primes[..];
     let r1p = &pol.r1p[..];
     let r2p = &pol.r2p[..];
-    let pfunc = move |pidx| -> sieve::SievePrime {
-        unsafe {
-            let p = *primes.get_unchecked(pidx);
-            let r1 = *r1p.get_unchecked(pidx);
-            let r2 = *r2p.get_unchecked(pidx);
-            let offsets = [Some(r1), if r1 == r2 { None } else { Some(r2) }];
-            sieve::SievePrime { p, offsets }
-        }
-    };
-    let mut state = sieve::Sieve::new(start_offset, nblocks, s.fbase, &pfunc, rec);
+    let mut state = sieve::Sieve::new(start_offset, nblocks, s.fbase, [r1p, r2p], rec);
     if nblocks == 0 {
         sieve_block_poly(s, pol, a, &mut state);
     }
@@ -1202,7 +1192,7 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
     let target = s.n.bits() / 2 + msize.bits() - max_cofactor.bits();
 
     let n = s.n;
-    let (idx, facss) = st.smooths(target as u8, Some(pol.root));
+    let (idx, facss) = st.smooths(target as u8, Some(pol.root), [&pol.r1p, &pol.r2p]);
     for (i, facs) in idx.into_iter().zip(facss) {
         let (v, y) = pol.eval(st.offset + (i as i64));
         // xrel^2 = (Ax+B)^2 = A * v mod n

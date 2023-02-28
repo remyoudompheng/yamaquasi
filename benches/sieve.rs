@@ -119,17 +119,17 @@ fn main() {
             let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
             let fb = fbase::FBase::new(n, 2566);
             let qs = qsieve::SieveQS::new(n, &fb, 10_000_000, false);
-            let s = qs.init_sieve_for_test();
+            let (s, _) = qs.init_sieve_for_test();
             Bench::new("clone sieve structure (no-op)")
             .run_seeded(s, |s| {
-                let _ =  s.clone();
+                let _ = s.clone();
             })
         },
         {
             let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
             let fb = fbase::FBase::new(n, 2566);
             let qs = qsieve::SieveQS::new(n, &fb, 10_000_000, false);
-            let s = qs.init_sieve_for_test();
+            let s = qs.init_sieve_for_test().0;
             Bench::new("sieve 32k block with ~2500 primes")
             .run_seeded(s, |s| {
                 let mut s1 = s.clone();
@@ -142,7 +142,7 @@ fn main() {
             let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
             let fb = fbase::FBase::new(n, 10000);
             let qs = qsieve::SieveQS::new(n, &fb, 10_000_000, false);
-            let s = qs.init_sieve_for_test();
+            let s = qs.init_sieve_for_test().0;
             Bench::new("sieve 32k block with ~10000 primes")
             .run_seeded(s, |s| {
                 let mut s1 = s.clone();
@@ -155,7 +155,7 @@ fn main() {
             let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
             let fb = fbase::FBase::new(n, 50_000);
             let qs = qsieve::SieveQS::new(n, &fb, 10_000_000, false);
-            let s = qs.init_sieve_for_test();
+            let s = qs.init_sieve_for_test().0;
             Bench::new("sieve 32k block with ~50000 primes")
             .run_seeded(s, |s| {
                 let mut s1 = s.clone();
@@ -168,12 +168,12 @@ fn main() {
             let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
             let fb = fbase::FBase::new(n, 2566);
             let qs = qsieve::SieveQS::new(n, &fb, 10_000_000, false);
-            let s = qs.init_sieve_for_test();
+            let (s, [r1, r2]) = qs.init_sieve_for_test();
             Bench::new("sieve+factor 32k block with ~2500 primes")
             .run_seeded(s, |s| {
                 let mut s1 = s.clone();
                 s1.sieve_block();
-                let idxs = s1.smooths(70, None).0;
+                let idxs = s1.smooths(70, None, [&r1, &r2]).0;
                 assert!(10 <= idxs.len() && idxs.len() <= 20);
                 s1.next_block();
             })
@@ -182,12 +182,12 @@ fn main() {
             let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
             let fb = fbase::FBase::new(n, 10000);
             let qs = qsieve::SieveQS::new(n, &fb, 10_000_000, false);
-            let s = qs.init_sieve_for_test();
+            let (s, [r1, r2]) = qs.init_sieve_for_test();
             Bench::new("sieve+factor 32k block with ~10000 primes")
             .run_seeded(s, |s| {
                 let mut s1 = s.clone();
                 s1.sieve_block();
-                let idxs = s1.smooths(84, None).0;
+                let idxs = s1.smooths(84, None, [&r1, &r2]).0;
                 assert!(10 <= idxs.len() && idxs.len() <= 20);
                 s1.next_block();
             })
@@ -196,7 +196,7 @@ fn main() {
             let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
             let fb = fbase::FBase::new(n, 50000);
             let qs = qsieve::SieveQS::new(n, &fb, 10_000_000, false);
-            let s = qs.init_sieve_for_test();
+            let s = qs.init_sieve_for_test().0;
             Bench::new("sieve+factor 32k block with ~50000 primes")
             .run_seeded(s, |s| {
                 let mut s1 = s.clone();
