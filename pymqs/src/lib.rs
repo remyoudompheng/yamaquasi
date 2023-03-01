@@ -24,8 +24,10 @@ fn pymqs(_: Python<'_>, m: &PyModule) -> PyResult<()> {
 
 #[pyfunction]
 #[pyo3(
-    signature = (n, /, algo = "auto", qs_fb_size = None, qs_interval_size = None, verbose = "silent", timeout = None, threads = None),
-    text_signature = "(n: int, /, algo: str, verbose: str, timeout=None, threads=None, qs_fb_size=None, qs_interval_size=None) -> List[int]",
+    signature = (n, /, algo = "auto",
+                qs_fb_size = None, qs_interval_size = None, qs_use_double = None,
+                verbose = "silent", timeout = None, threads = None),
+    text_signature = "(n: int, /, algo: str, verbose: str, timeout=None, threads=None, qs_fb_size=None, qs_interval_size=None, qs_use_double=None) -> List[int]",
 )]
 /// Factors an integer into prime factors. The result is a list
 /// whose product is the input argument.
@@ -47,6 +49,7 @@ fn factor(
     algo: &str,
     qs_fb_size: Option<u32>,
     qs_interval_size: Option<u32>,
+    qs_use_double: Option<bool>,
     verbose: &str,
     timeout: Option<f64>,
     threads: Option<usize>,
@@ -56,6 +59,7 @@ fn factor(
     let mut prefs = Preferences::default();
     prefs.fb_size = qs_fb_size;
     prefs.interval_size = qs_interval_size;
+    prefs.use_double = qs_use_double;
     prefs.threads = threads;
     prefs.verbosity = verbosity;
     // Handle interrupts.

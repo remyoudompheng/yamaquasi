@@ -187,15 +187,20 @@ pub fn factor(n: Uint, alg: Algo, prefs: &Preferences) -> Result<Vec<Uint>, Fact
         eprintln!("Factoring {nred}");
     }
     // Create thread pool
-    let tpool: Option<rayon::ThreadPool> = prefs.threads.map(|t| {
-        if prefs.verbose(Verbosity::Verbose) {
-            eprintln!("Using a pool of {t} threads");
+    let tpool: Option<rayon::ThreadPool> = match prefs.threads {
+        None | Some(1) => None,
+        Some(t) => {
+            if prefs.verbose(Verbosity::Verbose) {
+                eprintln!("Using a pool of {t} threads");
+            }
+            Some(
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(t)
+                    .build()
+                    .expect("cannot create thread pool"),
+            )
         }
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(t)
-            .build()
-            .expect("cannot create thread pool")
-    });
+    };
     let tpool = tpool.as_ref();
     factor_impl(nred, alg, prefs, &mut factors, tpool);
 
