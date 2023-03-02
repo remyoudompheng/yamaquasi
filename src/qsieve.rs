@@ -43,21 +43,9 @@ pub fn qsieve(
     }
     let use_double = prefs.use_double.unwrap_or(n.bits() > 200);
 
-    // Choose factor base among twice the number of needed primes
-    // (n will be a quadratic residue for only half of them)
-    //
-    // Compared to MPQS, classical quadratic sieve uses a single huge interval
-    // so resulting numbers (2M sqrt(n)) can be larger by 10-20 bits.
-    // Choose factor base size as if n was larger (by a factor O(M^2)).
-    //
-    // 160-bit input => 20 bit penalty (interval size 300M-500M)
-    // 180-bit input => 22 bit penalty (interval size 1G-3G)
-    // 200-bit input => 25 bit penalty (interval size 3G-10G)
-    let shift = n.bits() / 8;
     let fb = prefs
         .fb_size
-        .unwrap_or(params::factor_base_size(&(n << shift)) / (if use_double { 2 } else { 1 }));
-    // When using double large primes, use a smaller factor base.
+        .unwrap_or(params::qs_fb_size(norig.bits(), use_double));
     let fbase = FBase::new(n, fb);
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Smoothness bound {}", fbase.bound());
@@ -65,12 +53,6 @@ pub fn qsieve(
     }
     // Naïve quadratic sieve with polynomial x²-n (x=-M..M)
     // Max value is X = sqrt(n) * M
-    // Smooth bound Y = exp(1/2 sqrt(log X log log X))
-    // If input number is 512 bits, generated values are less then 300 bits
-
-    // There are at most 10 prime factors => 8-bit precision is enough
-    // Blocks optimized to fit 512kB cache memory per core
-    // Work unit is 16 blocks
 
     // We run 2 sieves:
     // Forward: polynomial (R+x)^2 - N where r = isqrt(N)
@@ -86,11 +68,13 @@ pub fn qsieve(
     let maxlarge: u64 = fbase.bound() as u64 * prefs.large_factor.unwrap_or(large_prime_factor(&n));
     let qs = SieveQS::new(n, &fbase, maxlarge, use_double);
     if prefs.verbose(Verbosity::Info) {
-        eprintln!("Max large prime {}", qs.maxlarge);
+        let maxprime = fbase.bound() as u64;
+        let maxdouble = maxlarge * fbase.bound() as u64 * 2;
+        eprintln!("Max large prime B2={maxlarge} ({} B1)", maxlarge / maxprime);
         if use_double {
             eprintln!(
-                "Max double large prime {}",
-                maxlarge * fbase.bound() as u64 * 2
+                "Max double large prime {maxdouble} ({} B1^2)",
+                maxdouble / maxprime / maxprime
             );
         }
         if qs.only_odds {

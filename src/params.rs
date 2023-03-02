@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::cmp::min;
+
 use crate::Uint;
 
 pub fn factor_base_size(n: &Uint) -> u32 {
@@ -20,19 +22,69 @@ pub fn factor_base_size(n: &Uint) -> u32 {
     }
 }
 
-pub fn large_prime_factor(n: &Uint) -> u64 {
-    // Allow large cofactors up to FACTOR * largest prime
-    if n.bits() < 50 {
-        // Even larger cofactors for extremely small numbers
-        // 100 => 200
-        100 + 2 * n.bits() as u64
-    } else if n.bits() < 100 {
-        // 200..100
-        300 - 2 * n.bits() as u64
+/// Select a factor base size for the classical quadratic sieve.
+/// The bitsize argument refers to the size of the input integer
+/// without multiplier (because the multiplied integer should be more
+/// effective that the original integer: it should not use larger parameters).
+//
+/// Compared to MPQS, classical quadratic sieve uses a single huge interval
+/// so resulting numbers (2M sqrt(n)) can be larger by 10-20 bits.
+pub fn qs_fb_size(bitsize: u32, use_double: bool) -> u32 {
+    if bitsize <= 250 {
+        select_fb_size(bitsize, use_double, QS_FBSIZES)
     } else {
-        n.bits() as u64
+        // use old formula with a 40 bit penalty.
+        let rt = ((256 * (bitsize + 40)) as f64).sqrt() as u32;
+        let (a, b) = (rt / 12, rt % 12);
+        min(500_000, (12 + b) << (a - 10))
     }
 }
+
+fn select_fb_size(bitsize: u32, use_double: bool, table: &'static [(u32, u32, u32)]) -> u32 {
+    let idx = table.partition_point(|&(sz, _, _)| sz <= bitsize);
+    if idx == 0 {
+        16
+    } else if idx == table.len() {
+        // very large: return something less than 500000.
+        min(500000, 1400 * (bitsize - 200))
+    } else {
+        // linearly interpolate
+        let prev = table[idx - 1];
+        let next = table[idx];
+        let (fb_lo, fb_hi) = if use_double {
+            (prev.2, next.2)
+        } else {
+            (prev.1, next.1)
+        };
+        ((next.0 - bitsize) * fb_lo + (bitsize - prev.0) * fb_hi) / (next.0 - prev.0)
+    }
+}
+
+/// Preferred sizes for factor bases in classical quadratic sieve.
+const QS_FBSIZES: &'static [(u32, u32, u32)] = &[
+    // Bit size, Factor base (no double large prime), Factor base (with double large prime)
+    (16, 16, 16),
+    (70, 120, 60),
+    (80, 120, 60),
+    (90, 200, 90),
+    (100, 300, 120),
+    (110, 500, 200),
+    (120, 800, 300),
+    (130, 1200, 450),
+    (140, 2000, 650),
+    (150, 3200, 1000),
+    (160, 5500, 1500),
+    (170, 8000, 2500),
+    (180, 13000, 4000),
+    (190, 20000, 7000),
+    (200, 26000, 10000),
+    (210, 30000, 14000),
+    (220, 35000, 20000),
+    (230, 50000, 35000),
+    (240, 80000, 50000),
+    (250, 120000, 65000),
+    (260, 160000, 80000),
+];
 
 /// ECM/P-1 suitable parameters according to values of B2.
 /// d1: size of "giant steps", such that φ(d1) is small and close to 2^k
