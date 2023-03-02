@@ -337,7 +337,7 @@ fn test_rho_random() {
 }
 
 #[test]
-#[cfg(testlong)]
+#[ignore = "takes one hour"]
 fn test_rho_allprimes() {
     // Test Brent cycle finding convergence speed
     // for all primes below 2^29. This takes about 1 hour.

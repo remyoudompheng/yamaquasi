@@ -60,7 +60,7 @@ pub fn siqs(
         }
         return Err(e);
     }
-    let mm = prefs.interval_size.unwrap_or(interval_size(&n));
+    let mm = prefs.interval_size.unwrap_or(interval_size(&n, use_double));
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Smoothness bound B1={}", fbase.bound());
         eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls(),);
@@ -250,7 +250,7 @@ pub fn siqs_calibrate(n: Uint) {
     let use_double = n.bits() > 256;
     // This factor base is only to select A
     let fbase0 = FBase::new(*n, fb0);
-    let mm0 = interval_size(n);
+    let mm0 = interval_size(n, use_double);
     let blocks0 = mm0 as i64 / BLOCK_SIZE as i64;
 
     let nfacs = nfactors(n) as usize;
@@ -399,9 +399,9 @@ fn a_value_count(n: &Uint) -> usize {
         // Even one A value (2-4 polynomials) will give enough smooth values.
         0..=48 => 8,
         49..=71 => 12,
-        72..=129 => sz / 5,           // 14..25
-        130..=169 => sz - 60,         // 70..100
-        170..=199 => 50 * (sz - 168), // 100..1000
+        // We are using small intervals until 200 bits, many As are needed.
+        72..=150 => sz - 52,          // 20..100
+        151..=199 => 20 * (sz - 145), // 100..1000
         200.. => 100 * (sz - 190),    // 1000..5000 (sz=256).. 17000 (sz=360)
         _ => unreachable!("impossible"),
     }
@@ -442,26 +442,39 @@ fn a_tolerance_divisor(n: &Uint) -> usize {
 // Since B is bounded by 2^24 and we want cofactors to fit in u64,
 // B1*B2 must not exceed 2^16.
 
-fn interval_size(n: &Uint) -> u32 {
+fn interval_size(n: &Uint, use_double: bool) -> u32 {
     // Choose very small intervals since the cost of switching
-    // polynomials is very small (less than 1ms).
+    // polynomials is very small (usually less than 5% of CPU time).
     //
-    // Due to fixed costs being proportional to factor base size,
-    // choose interval size accordingly.
+    // Smaller intervals have multiple advantages:
+    // * many primes will not have any roots in the interval (saving memory I/O)
+    // * polynomials will have smaller values (increased smoothness probability)
+    // * less pressure on CPU caches
+    //
+    // Values were selected according to benchmarks, with a bias towards smaller
+    // values (which are better for multithreading: on a single core, larger
+    // intervals may be slightly faster but require more L3 cache that the typical
+    // available amount per core).
     let sz = n.bits();
     let nblocks = match sz {
-        // For small integers, A values are scarce, choose a large
-        // interval to avoid running out of values.
-        0..=48 => 3,
-        49..=130 => 2,
-        131..=160 => 3,
-        161..=190 => 4,
-        191..=250 => (sz - 141) / 10, // 5..10
-        251..=310 => (sz - 171) / 7,  // 11..19
-        311..=370 => (sz - 210) / 5,  // 20..32
-        _ => 33,
+        // For small integers, 1 block is 5-10% faster than 3 blocks.
+        0..=180 => 1,
+        // Grow linearly from 64k at sz=190 to 288k at sz=256
+        181..=255 => (sz - 161) / 10,
+        // Double large primes are used
+        256..=340 => {
+            if use_double {
+                // Grow linearly from 256k (8 blocks) at sz=260 to 512k (16 blocks) at sz=330
+                (sz - 176) / 10
+            } else {
+                // One additional block if double large primes are not used.
+                (sz - 176) / 10 + 1
+            }
+        }
+        // Don't grow too much because it may be harmful.
+        341.. => 13 + sz / 100,
     };
-    nblocks * sieve::BLOCK_SIZE as u32
+    nblocks * 32768
 }
 
 fn large_prime_factor(n: &Uint) -> u64 {

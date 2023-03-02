@@ -85,7 +85,7 @@ impl Preferences {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Algo {
     Auto,
     Rho,
