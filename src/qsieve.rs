@@ -13,6 +13,7 @@
 //! J. Gerver, Factoring Large Numbers with a Quadratic Sieve
 //! <https://www.jstor.org/stable/2007781>
 
+use std::cmp::min;
 use std::sync::RwLock;
 
 use bnum::cast::CastFrom;
@@ -55,9 +56,8 @@ pub fn qsieve(
     let shift = n.bits() / 8;
     let fb = prefs
         .fb_size
-        .unwrap_or(params::factor_base_size(&(n << shift)));
+        .unwrap_or(params::factor_base_size(&(n << shift)) / (if use_double { 2 } else { 1 }));
     // When using double large primes, use a smaller factor base.
-    let fb = if use_double { fb / 2 } else { fb };
     let fbase = FBase::new(n, fb);
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Smoothness bound {}", fbase.bound());
@@ -77,6 +77,9 @@ pub fn qsieve(
     // => roots are sqrt(N) - R
     // Backward: polynomial (R-1-x)^2 - N where r = isqrt(N)
     // => roots are sqrt(N) + R-1
+    //
+    // The sieve can be split into blocks: this is equivalent to using
+    // multiple polynomials (R+x+kB)^2 - N where B is the block size.
 
     let mut target = fbase.len() * 8 / 10;
 
@@ -94,6 +97,31 @@ pub fn qsieve(
             eprintln!("N is 1 mod 4, only odd numbers will be sieved");
         }
     }
+
+    // Precompute the amount by which roots must be offset after each large block.
+    let large_block_size = qs.nblocks() * BLOCK_SIZE;
+    let large_blksz_modp: Vec<u32> = (0..fbase.len())
+        .map(|pidx| {
+            let div = fbase.div(pidx);
+            div.div31.modi32(large_block_size as i32)
+        })
+        .collect();
+    // A vectorization-friendly way to shift roots for next block.
+    // On shifted interval x+B the roots are r-B mod p
+    let primes = &fbase.primes[..];
+    let next_lgblock = |roots1: &mut [u32], roots2: &mut [u32]| {
+        assert_eq!(roots1.len(), large_blksz_modp.len());
+        assert_eq!(roots2.len(), large_blksz_modp.len());
+        assert_eq!(roots2.len(), primes.len());
+        for i in 0..roots1.len() {
+            let o = large_blksz_modp[i];
+            let p = primes[i];
+            let (r1, r2) = (roots1[i].wrapping_sub(o), roots2[i].wrapping_sub(o));
+            roots1[i] = min(r1, r1.wrapping_add(p));
+            roots2[i] = min(r2, r2.wrapping_add(p));
+        }
+    };
+
     // These counters are actually not accessed concurrently.
     // Construct 2 initial states, forward and backwards.
     let mut roots_fwd1 = vec![0; fbase.len()];
@@ -101,10 +129,10 @@ pub fn qsieve(
     let mut roots_bck1 = vec![0; fbase.len()];
     let mut roots_bck2 = vec![0; fbase.len()];
     for pidx in 0..fbase.len() {
-        let (f1, f2) = qs.prepare_prime_fwd(pidx, 0);
+        let (f1, f2) = qs.prepare_prime_fwd(pidx);
         roots_fwd1[pidx] = f1;
         roots_fwd2[pidx] = f2;
-        let (b1, b2) = qs.prepare_prime_bck(pidx, 0);
+        let (b1, b2) = qs.prepare_prime_bck(pidx);
         roots_bck1[pidx] = b1;
         roots_bck2[pidx] = b2;
     }
@@ -124,44 +152,50 @@ pub fn qsieve(
         [&roots_bck1[..], &roots_bck2[..]],
         None,
     );
-    loop {
-        if let Some(pool) = tpool {
-            pool.install(|| {
-                rayon::join(
-                    || sieve_block(&qs, &mut s_fwd, [&roots_fwd1[..], &roots_fwd2[..]], false),
-                    || sieve_block(&qs, &mut s_bck, [&roots_bck1[..], &roots_bck2[..]], true),
-                )
-            });
-        } else {
-            sieve_block(&qs, &mut s_fwd, [&roots_fwd1[..], &roots_fwd2[..]], false);
-            sieve_block(&qs, &mut s_bck, [&roots_bck1[..], &roots_bck2[..]], true);
-        }
-
-        // Next block
-        s_fwd.next_block();
-        s_bck.next_block();
-        if s_fwd.blk_no == qs.nblocks() {
-            assert_eq!(s_bck.blk_no, qs.nblocks());
-            for pidx in 0..fbase.len() {
-                let (f1, f2) = qs.prepare_prime_fwd(pidx, s_fwd.offset);
-                roots_fwd1[pidx] = f1;
-                roots_fwd2[pidx] = f2;
-                let (b1, b2) = qs.prepare_prime_bck(pidx, s_bck.offset);
-                roots_bck1[pidx] = b1;
-                roots_bck2[pidx] = b2;
+    for large_blk_idx in 1.. {
+        // The unit of work is an entire large block (blocks * BLOCK_SIZE)
+        // The size of a large block should be similar to the SIQS interval size.
+        // Forward sieve
+        let mut do_sieve_fwd = || {
+            if s_fwd.blk_no == qs.nblocks() {
+                next_lgblock(&mut roots_fwd1, &mut roots_fwd2);
+                s_fwd.rehash([&roots_fwd1[..], &roots_fwd2[..]]);
             }
-            s_fwd.rehash([&roots_fwd1[..], &roots_fwd2[..]]);
-            s_bck.rehash([&roots_bck1[..], &roots_bck2[..]]);
+            for _ in 0..qs.nblocks() {
+                sieve_block(&qs, &mut s_fwd, [&roots_fwd1[..], &roots_fwd2[..]], false);
+                s_fwd.next_block();
+            }
+        };
+        // Backward sieve
+        let mut do_sieve_bck = || {
+            if s_bck.blk_no == qs.nblocks() {
+                next_lgblock(&mut roots_bck1, &mut roots_bck2);
+                s_bck.rehash([&roots_bck1[..], &roots_bck2[..]]);
+            }
+            for _ in 0..qs.nblocks() {
+                sieve_block(&qs, &mut s_bck, [&roots_bck1[..], &roots_bck2[..]], true);
+                s_bck.next_block();
+            }
+        };
+        if let Some(pool) = tpool {
+            pool.install(|| rayon::join(do_sieve_fwd, do_sieve_bck));
+            assert_eq!(s_fwd.blk_no, s_bck.blk_no);
+        } else {
+            do_sieve_fwd();
+            do_sieve_bck();
+            assert_eq!(s_fwd.blk_no, s_bck.blk_no);
         }
 
         let sieved = s_fwd.offset + s_bck.offset;
         let do_print = prefs.verbose(Verbosity::Info)
-            && if sieved > (5 << 30) {
-                sieved % (500 << 20) == 0
-            } else if sieved > (500 << 20) {
-                sieved % (50 << 20) == 0
+            && if n.bits() > 260 {
+                large_blk_idx % 1000 == 0
+            } else if n.bits() > 180 {
+                large_blk_idx % 500 == 0
+            } else if n.bits() > 150 {
+                large_blk_idx % 50 == 0
             } else {
-                sieved % (10 << 20) == 0
+                large_blk_idx % 10 == 0
             };
         let rels = qs.rels.read().unwrap();
         if do_print {
@@ -187,7 +221,7 @@ pub fn qsieve(
     }
     let sieved = s_fwd.offset + s_bck.offset;
     let mut rels = qs.rels.into_inner().unwrap();
-    if prefs.verbose(Verbosity::Verbose) {
+    if prefs.verbose(Verbosity::Info) {
         rels.log_progress(format!(
             "Sieved {:.1}M",
             (sieved as f64) / ((1 << 20) as f64)
@@ -272,22 +306,30 @@ impl<'a> SieveQS<'a> {
         }
     }
 
-    // Rehash large primes every xx blocks
+    // Size of large sieve blocks (requiring rehash).
+    // The cost of switching to the next large block is similar
+    // to SIQS so we can use small blocks if it improves cache locality,
+    // but there is no number-theoretical improvement doing so.
     fn nblocks(&self) -> usize {
-        // mpqs_interval_size / BLOCK_SIZE
-        let sz = self.n.bits();
+        // Note that QS factor bases are larger than SIQS.
+        let sz = self.n.bits() as usize;
         match sz {
-            0..=119 => 8,                // doesn't matter
-            120..=330 => 8 << (sz / 80), // 8..128
-            _ => 128,
+            0..=80 => 1,
+            81..=110 => 2,
+            111..=120 => 3,
+            // Grow number of blocks, since we know the interval
+            // is becoming quickly large.
+            121..=138 => sz - 118,
+            // We need to sieve several million integers:
+            // use a large but reasonable size.
+            _ => 20,
         }
     }
 
-    fn prepare_prime_fwd(&self, pidx: usize, offset: i64) -> (u32, u32) {
+    fn prepare_prime_fwd(&self, pidx: usize) -> (u32, u32) {
         // Return r such that nsqrt + r is a root of n.
-        let Prime { p, r, div } = self.fbase.prime(pidx);
+        let Prime { p, r, .. } = self.fbase.prime(pidx);
         let base = self.nsqrt_mods[pidx] as u64;
-        let off: u64 = div.modi64(offset);
         let mut s1 = 2 * p + r - base;
         let mut s2 = 2 * p - r - base;
         // If we are in "only odds" mode, the polynomial is
@@ -309,8 +351,6 @@ impl<'a> SieveQS<'a> {
                 s2 = (s2 + p) / 2;
             }
         }
-        s1 += p - off;
-        s2 += p - off;
         while s1 >= p {
             s1 -= p
         }
@@ -320,11 +360,10 @@ impl<'a> SieveQS<'a> {
         (s1 as u32, s2 as u32)
     }
 
-    fn prepare_prime_bck(&self, pidx: usize, offset: i64) -> (u32, u32) {
-        let Prime { p, r, div } = self.fbase.prime(pidx);
+    fn prepare_prime_bck(&self, pidx: usize) -> (u32, u32) {
+        let Prime { p, r, .. } = self.fbase.prime(pidx);
         // Return r such that nsqrt - 2(r + 1) is a root of n.
         let base = self.nsqrt_mods[pidx] as u64;
-        let off: u64 = div.modi64(offset);
         let mut s1 = 2 * p + base - r;
         let mut s2 = 2 * p + base + r;
         // If we are in "only odds" mode, the polynomial is
@@ -344,8 +383,8 @@ impl<'a> SieveQS<'a> {
                 s2 = (s2 + p) / 2;
             }
         }
-        s1 += p - off - 1;
-        s2 += p - off - 1;
+        s1 += p - 1;
+        s2 += p - 1;
         while s1 >= p {
             s1 -= p
         }
@@ -361,7 +400,7 @@ impl<'a> SieveQS<'a> {
         let mut roots_fwd1 = vec![0; fbase.len()];
         let mut roots_fwd2 = vec![0; fbase.len()];
         for pidx in 0..fbase.len() {
-            let (f1, f2) = self.prepare_prime_fwd(pidx, 0);
+            let (f1, f2) = self.prepare_prime_fwd(pidx);
             roots_fwd1[pidx] = f1;
             roots_fwd2[pidx] = f2;
         }
