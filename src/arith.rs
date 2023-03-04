@@ -178,7 +178,7 @@ fn mulmod<T: Num>(a: T, b: T, p: T) -> T {
 #[derive(Clone, Copy, Debug)]
 pub struct Dividers {
     // Multiplier for 64-bit division
-    div64: Divider64,
+    pub(crate) div64: Divider64,
     // Multiplier for 16-bit division
     // This is used for small primes during sieving.
     m16: u32,
@@ -262,7 +262,7 @@ pub struct Divider64 {
     p: u64,
     m64: u64,
     r64: u64,
-    s64: usize,
+    s64: u32,
 }
 
 impl Divider64 {
@@ -272,7 +272,7 @@ impl Divider64 {
         let sz = u128::BITS - u128::leading_zeros(m127);
         let m64 = (m127 >> (sz - 64)) as u64 + 1; // 64 bits
         let r64 = ((1_u128 << 64) % (p as u128)) as u64;
-        let s64 = 127 + 64 - sz as usize; // m64 >> s64 = m127 >> 127
+        let s64 = 127 + 64 - sz; // m64 >> s64 = m127 >> 127
 
         // Sanity check
         let m = (m64 - 1) >> (s64 - 64);
@@ -421,80 +421,106 @@ impl Divider31 {
 /// A precomputed structure to compute faster modular inverses
 /// via "Montgomery modular inverse".
 ///
-/// The implementation follows the presentation by Lórencz
-/// <https://doi.org/10.1007/3-540-36400-5_6>
-/// and is attributed to Kaliski.
+///
+/// Because this is a hot path of MPQS, the memory footprint
+/// of computing modular inverses modulo many bases must be kept small.
+///
+/// We precompute modular inverses of -2^k only for k a multiple of 8.
+/// We assume that p is at most 28 bits, so that p*p << 8 fits in u64.
 pub struct Inverter {
-    /// A fixed prime number assumed to be less than 30 bits.
-    pub p: u32,
-    // Precomputed 2^-k mod p
-    invpow2: [u32; 64],
-    // Barrett reduction parameters
-    m63: u64,
-    s63: usize,
+    // invpow2[k] is -2^(8k+8) mod p
+    invpow2: [u32; 8],
 }
 
 impl Inverter {
     pub fn new(p: u32) -> Inverter {
-        // Inverse powers of 2
-        let mut invpow2 = [0; 64];
+        if p == 2 {
+            // Return a summy value.
+            return Inverter { invpow2: [0; 8] };
+        }
+        debug_assert!(p >> 28 == 0);
+        // Inverse powers of 2 (-2^8..-2^64)
+        let mut invpow2 = [0; 8];
         let mut x: u32 = 1;
-        for k in 0..invpow2.len() {
-            invpow2[k] = x;
+        for k in 0..=8 * invpow2.len() {
+            if k >= 8 && k % 8 == 0 {
+                invpow2[k / 8 - 1] = p - x;
+            }
             if x % 2 == 0 {
                 x /= 2;
             } else {
                 x = (x + p) / 2;
             }
         }
-        // Barrett reduction parameters
-        let m127 = (1u128 << 127) / (p as u128) + 1;
-        let sz = m127.bits();
-        let m63 = (m127 >> (sz - 64)).low_u64() + 1; // 64 bits
-        let s63 = 127 + 64 - sz as usize; // m63 >> s63 = m127 >> 127
-        Inverter {
-            p,
-            invpow2,
-            m63,
-            s63,
-        }
+        Inverter { invpow2 }
     }
 
-    pub fn invert(&self, x: u32) -> u32 {
-        if self.p == 2 {
+    /// Computation of Montgomery "almost inverse",
+    /// using a precomputed inverse power of 2.
+    ///
+    /// It requires a companion Divider64 structure.
+    ///
+    /// The implementation follows the presentation by Lórencz
+    /// <https://doi.org/10.1007/3-540-36400-5_6>
+    /// and is attributed to Kaliski.
+    ///
+    /// See also Joppe W. Bos, Constant Time Modular Inversion
+    /// <https://www.joppebos.com/files/CTInversion.pdf>
+    /// <http://dx.doi.org/10.1007/s13389-014-0084-8>
+    pub fn invert(&self, x: u32, div: &Divider64) -> u32 {
+        if div.p == 2 {
             return x % 2;
         }
-        if x == 0 {
-            panic!("0 has no inverse");
-        }
-        let p = self.p as u64;
+        debug_assert!(div.p >> 28 == 0);
+        let p = div.p as u32;
+        assert!(x != 0, "0 has no inverse mod {p}");
         // Similar to binary GCD, with invariants:
         // rx = -u*2^k, sx = v*2^k
-        let (mut u, mut v) = (self.p, x);
+        let (mut u, mut v) = (p, x);
         let (mut r, mut s) = (0_u32, 1_u32);
         let mut k = 0_u32;
-        while v > 0 {
+        // Initially p is off and x might be even.
+        if v & 1 == 0 {
+            let vtz = v.trailing_zeros();
+            (v, r) = (v >> vtz, r << vtz);
+            k += vtz;
+        }
+        // Now both u and v are odd. At each loop iteration
+        // they will still be odd, and both r,s <= (1<<k).
+        loop {
             // Loop at most 2*p.bits() times
-            if u % 2 == 0 {
-                (u, s) = (u / 2, s * 2);
-            } else if v % 2 == 0 {
-                (v, r) = (v / 2, r * 2);
-            } else if u > v {
-                (u, r, s) = ((u - v) / 2, r + s, s * 2);
+            let diff = (u as i64) - (v as i64);
+            let dtz = diff.trailing_zeros();
+            debug_assert!(dtz > 0);
+            if diff > 0 {
+                // Combination of:
+                // (u, r, s) = ((u-v)/2, r+s, 2s)
+                // and (u, s) = (u >> dtz-1, s << dtz-1)
+                (u, r, s) = ((diff as u32) >> dtz, r + s, s << dtz);
+            } else if diff < 0 {
+                // Combination of:
+                // (v, r, s) = (v-u)/2, 2r, r+s)
+                // and (v, r) = (v >> dtz-1, r << dtz-1)
+                (v, r, s) = (((-diff) as u32) >> dtz, r << dtz, r + s);
             } else {
-                // v > u
-                (v, r, s) = ((v - u) / 2, r * 2, r + s);
+                // (v, r, s) = (v-u)/2, 2r, r+s)
+                r = 2 * r; // v, s are not used anymore.
+                k += 1;
+                break;
             }
-            k = k + 1;
-            debug_assert!(((r as u64) * (x as u64) + ((u as u64) << k)) % p == 0);
+            k = k + dtz;
+            debug_assert!(((r as u64) * (x as u64) + ((u as u64) << k)) % div.p == 0);
         }
         debug_assert!(u == 1);
-        // Now u = 1, rx = -2^k
-        // Divide by -2^k
-        let n = (r as u64) * (p - self.invpow2[k as usize] as u64);
-        let nm = n as u128 * self.m63 as u128;
-        let q = (nm >> self.s63) as u64;
-        (n - q * p) as u32
+        debug_assert!(r <= 2 * p);
+        // Now u = 1, rx = -2^k and r is smaller than 2p.
+        // (k is at most twice the bit size of p).
+        // Normalize k to a multiple of 8.
+        let powidx = k / 8;
+        // k + (8 - k % 8) == 8 * (k / 8) + 8
+        let r = (r as u64) << (8 - k % 8);
+        let n = r * self.invpow2[powidx as usize] as u64;
+        div.divmod64(n).1 as u32
     }
 }
 
@@ -553,12 +579,13 @@ mod tests {
     fn test_inv_mod_fast() {
         const PRIMES: &[u32] = &[2473, 63977, 2500363, 300 * 1024 + 1];
         for &p in PRIMES {
+            let div = Divider64::new(p as u64);
             let inv = Inverter::new(p);
             for k in 1..p / 2 {
                 if k > 50000 {
                     break;
                 }
-                let kinv = inv.invert(k);
+                let kinv = inv.invert(k, &div);
                 assert_eq!(
                     (k as u64 * kinv as u64) % (p as u64),
                     1,

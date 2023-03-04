@@ -283,13 +283,13 @@ impl Poly {
                 // For very small integers, we may select D inside the factor base.
                 // In this case the roots are the roots of Bx-abs(C) (C < 0)
                 let b = div.divmod_uint(&self.b).1;
-                let binv = inv.invert(b as u32) as u64;
+                let binv = inv.invert(b as u32, &div.div64) as u64;
                 debug_assert!(self.c.is_negative());
                 let c = div.divmod_uint(&self.c.abs().to_bits()).1;
                 let r = shift(div.divmod64(c * binv).1 as u32);
                 (r, r)
             } else {
-                let ainv = inv.invert(a as u32) as u64;
+                let ainv = inv.invert(a as u32, &div.div64) as u64;
                 let r1 = shift(div.divmod64((p as u64 + r as u64 - b) * ainv).1 as u32);
                 (
                     r1,
