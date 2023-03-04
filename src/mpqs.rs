@@ -132,6 +132,8 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
         prefs,
     };
 
+    // Recycled memory space (for single-threaded mode).
+    let mut wks = Workspace::default();
     loop {
         // Pop next polynomial.
         if polyidx == d_r_values.len() {
@@ -179,7 +181,6 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
         } else {
             // Sequential sieving
             let (a, r) = &d_r_values[polyidx];
-            let mut wks = Workspace::default();
             polyidx += 1;
             polys_done += 1;
             mpqs_poly(&s, a, r, &mut wks);
