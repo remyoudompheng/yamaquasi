@@ -47,7 +47,7 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
     }
     let mut target = fbase.len() * 8 / 10;
     let fb = fbase.len();
-    let mm = mpqs_interval_size(&n);
+    let mm = prefs.interval_size.unwrap_or(mpqs_interval_size(&n) as u32);
     if prefs.verbose(Verbosity::Info) {
         if mm > 2 << 20 {
             eprintln!("Sieving interval size {}M", mm >> 20);
@@ -127,7 +127,7 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
         inverters: &inverters,
         maxlarge,
         use_double,
-        interval_size: mm,
+        interval_size: mm as i64,
         rels: &rels,
         prefs,
     };

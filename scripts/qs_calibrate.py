@@ -1,4 +1,4 @@
-"""
+""" 
 Explore factor base sizes for optimal performance of the classical
 quadratic sieve.
 

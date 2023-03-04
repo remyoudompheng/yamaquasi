@@ -762,7 +762,7 @@ pub fn try_factor(n: &Uint, a: Uint, b: Uint) -> Option<(Uint, Uint)> {
             let p = gcd.to_bits();
             let q = n / p;
             assert!(p * q == *n);
-            assert!(p.bits() > 1 && q.bits() > 1);
+            assert!(p.bits() > 1 && q.bits() > 1, "a={a} b={b} n={n}");
             return Some((p, q));
         }
     }
