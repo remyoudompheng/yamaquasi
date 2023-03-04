@@ -87,7 +87,8 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
         33..=64 => 50 * 20 / 7 * d_target.bits(),
         65..=130 => 20 * 20 / 7 * d_target.bits(),
         // Enough for efficient parallelism
-        131.. => 100 * 20 / 7 * d_target.bits(),
+        131..=240 => 100 * 20 / 7 * d_target.bits(),
+        241.. => 200 * 20 / 7 * d_target.bits(),
     };
 
     // Start slightly before the ideal values to get a few nice polynomials.
@@ -162,21 +163,26 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
         }
         if let Some(pool) = tpool {
             // Parallel sieving: do all polynomials at once.
-            let v = pool.install(|| {
-                d_r_values[polyidx..]
-                    .par_iter()
-                    .map(|(a, r)| mpqs_poly(&s, a, r))
-                    .collect()
+            // We don't have many polynomials but optimistically assume
+            // that splitting in chunks will enable memory recycling
+            // while still being efficient for parallelism.
+            pool.install(|| {
+                d_r_values[polyidx..].par_chunks(8).for_each(|chunk| {
+                    let mut wks = Workspace::default();
+                    for (a, r) in chunk {
+                        mpqs_poly(&s, a, r, &mut wks);
+                    }
+                })
             });
             polys_done += (d_r_values.len() - polyidx) as u64;
             polyidx = d_r_values.len();
-            v
         } else {
             // Sequential sieving
             let (a, r) = &d_r_values[polyidx];
+            let mut wks = Workspace::default();
             polyidx += 1;
             polys_done += 1;
-            mpqs_poly(&s, a, r);
+            mpqs_poly(&s, a, r, &mut wks);
         }
         let rels = rels.read().unwrap();
         if rels.len() >= target {
@@ -488,8 +494,16 @@ fn test_select_poly() {
     // D=1302451 base 2 pseudoprime
 }
 
+/// A structure holding memory allocations for MPQS.
+#[derive(Default)]
+struct Workspace {
+    roots1: Vec<u32>,
+    roots2: Vec<u32>,
+    recycled: Option<sieve::SieveRecycle>,
+}
+
 /// Process a single MPQS unit of work, corresponding to a polynomial.
-fn mpqs_poly(s: &SieveMPQS, a: &Uint, r: &Uint) {
+fn mpqs_poly(s: &SieveMPQS, a: &Uint, r: &Uint, wks: &mut Workspace) {
     let n = &s.n;
     let pol = make_poly(n, a, r);
     let nblocks = s.interval_size as usize / BLOCK_SIZE;
@@ -510,8 +524,10 @@ fn mpqs_poly(s: &SieveMPQS, a: &Uint, r: &Uint) {
     let start_offset = -s.interval_size / 2;
     let end_offset = s.interval_size / 2;
     let fbase = s.fbase;
-    let mut roots1 = vec![0; fbase.len()];
-    let mut roots2 = vec![0; fbase.len()];
+    wks.roots1.resize(fbase.len(), 0);
+    wks.roots2.resize(fbase.len(), 0);
+    let roots1 = &mut wks.roots1[..];
+    let roots2 = &mut wks.roots2[..];
     for i in 0..fbase.len() {
         let p = fbase.p(i);
         let r = fbase.r(i);
@@ -521,8 +537,8 @@ fn mpqs_poly(s: &SieveMPQS, a: &Uint, r: &Uint) {
         roots1[i] = r1;
         roots2[i] = r2;
     }
-    let roots12 = [&roots1[..], &roots2[..]];
-    let mut state = sieve::Sieve::new(start_offset, nblocks, fbase, roots12, None);
+    let roots12 = [roots1.as_ref(), roots2.as_ref()];
+    let mut state = sieve::Sieve::new(start_offset, nblocks, fbase, roots12, wks.recycled.take());
     if nblocks == 0 {
         sieve_block_poly(s, &pol, roots12, &mut state);
     }
@@ -530,6 +546,7 @@ fn mpqs_poly(s: &SieveMPQS, a: &Uint, r: &Uint) {
         sieve_block_poly(s, &pol, roots12, &mut state);
         state.next_block();
     }
+    wks.recycled = Some(state.recycle());
 }
 
 // MPQS can use the same factor bases as SIQS but since the polynomial
