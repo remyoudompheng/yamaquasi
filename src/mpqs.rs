@@ -279,7 +279,8 @@ impl Poly {
         dinv: u32,
         offset: i32,
     ) -> (u32, u32) {
-        let off: u32 = div.div31.modi32(offset);
+        // Could be precomputed/handled as 32-bit.
+        let off: u32 = div.modi64(offset as i64) as u32;
         let shift = |r: u32| -> u32 {
             if r < off {
                 r + p - off
@@ -301,13 +302,13 @@ impl Poly {
                 // For very small integers, we may select D inside the factor base.
                 // In this case the roots are the roots of Bx-abs(C) (C < 0)
                 let b = div.mod_uint(&self.b);
-                let binv = inv.invert(b as u32, &div.div64) as u64;
+                let binv = inv.invert(b as u32, &div) as u64;
                 debug_assert!(self.c.is_negative());
                 let c = div.mod_uint(&self.c.abs().to_bits());
                 let r = shift(div.divmod64(c * binv).1 as u32);
                 (r, r)
             } else {
-                let d2inv = div.divmod64(dinv as u64 * dinv as u64).1;
+                let d2inv = div.modu63(dinv as u64 * dinv as u64);
                 let (ainv, b) = if self.b.bit(0) {
                     // We need 1/2D^2
                     (
@@ -321,8 +322,8 @@ impl Poly {
                 } else {
                     (d2inv, div.mod_uint(&self.bb))
                 };
-                let r1 = shift(div.divmod64((p as u64 + r as u64 - b) * ainv).1 as u32);
-                let r2 = shift(div.divmod64((2 * p as u64 - r as u64 - b) * ainv).1 as u32);
+                let r1 = shift(div.modu63((p as u64 + r as u64 - b) * ainv) as u32);
+                let r2 = shift(div.modu63((2 * p as u64 - r as u64 - b) * ainv) as u32);
                 (r1, r2)
             }
         }
@@ -543,37 +544,41 @@ impl Workspace {
             let inv = &s.inverters[i];
             // Compute cumulative products (excluding zeros).
             let mut prod = 1;
-            for j in 0..ds.len() {
-                let dm = div.div64.mod_u128(ds[j]);
-                dmod[j] = dm;
-                if dm != 0 {
-                    prod = div.divmod64(prod * dm).1;
+            unsafe {
+                // This is a hot spot, skip bound checks.
+                for j in 0..ds.len() {
+                    let dm = div.mod_u128(*ds.get_unchecked(j));
+                    *dmod.get_unchecked_mut(j) = dm;
+                    if dm != 0 {
+                        prod = div.modu63(prod * dm);
+                    }
+                    *prods.get_unchecked_mut(j) = prod;
                 }
-                prods[j] = prod;
-            }
-            let invprod = inv.invert(prod as u32, &div.div64);
-            // 1/d[i] = product(j < i, d[j]) * product(j > i, d[j]) * invprod
-            let mut prodrev = invprod as u64;
-            for j in 0..ds.len() {
-                let jrev = ds.len() - 1 - j;
-                let dm = dmod[jrev];
-                if dm == 0 {
-                    self.dinv_modp[jrev][i] = 0;
-                    continue;
+                let invprod = inv.invert(prod as u32, &div);
+                // 1/d[i] = product(j < i, d[j]) * product(j > i, d[j]) * invprod
+                let mut prodrev = invprod as u64;
+                for j in 0..ds.len() {
+                    let jrev = ds.len() - 1 - j;
+                    let dm = *dmod.get_unchecked(jrev);
+                    let out = self.dinv_modp.get_unchecked_mut(jrev).get_unchecked_mut(i);
+                    if dm == 0 {
+                        *out = 0;
+                        continue;
+                    }
+                    if jrev > 0 {
+                        // prodrev = product(j > i, d[j]) * invprod
+                        *out = div.modu63(prodrev * *prods.get_unchecked(jrev - 1)) as u32;
+                        prodrev = div.modu63(prodrev * dm);
+                    } else {
+                        *out = prodrev as u32;
+                    };
+                    debug_assert!(
+                        div.modu63(*out as u64 * dm) == 1,
+                        "dmod={dmod:?} p={} j={jrev} d={dm} dinv={}",
+                        s.fbase.p(i),
+                        *out
+                    );
                 }
-                if jrev > 0 {
-                    // prodrev = product(j > i, d[j]) * invprod
-                    self.dinv_modp[jrev][i] = div.divmod64(prodrev * prods[jrev - 1]).1 as u32;
-                    prodrev = div.divmod64(prodrev * dm).1;
-                } else {
-                    self.dinv_modp[jrev][i] = prodrev as u32;
-                };
-                debug_assert!(
-                    div.divmod64(self.dinv_modp[jrev][i] as u64 * dm).1 == 1,
-                    "dmod={dmod:?} p={} j={jrev} d={dm} dinv={}",
-                    div.div31.p,
-                    self.dinv_modp[jrev][i]
-                );
             }
         }
     }

@@ -256,7 +256,8 @@ fn expected_smooth_magnitude(
     let mut res: f64 = 0.0;
     for ((pidx, &p), div) in SMALL_PRIMES.iter().enumerate().zip(&SMALL_PRIMES_DIVIDERS) {
         // Compute kn mod p.
-        let np = div.div31.modu31(k * nmodp[pidx] as u32);
+        debug_assert!(k as u64 * nmodp[pidx] < (1 << 16));
+        let np = div.modu16(k as u16 * nmodp[pidx] as u16);
         // Compute the average valuation of p (usually proportional to number of roots)
         let valp = if p == 2 {
             // The average valuation of 2 in x^2-n follows special rules:

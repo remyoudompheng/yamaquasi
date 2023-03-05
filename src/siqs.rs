@@ -859,7 +859,7 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase, start_offset: i64
         let r0 = pdiv.mod_uint(&root0);
         let r0_over_a = pdiv.divmod64(r0 * ainv[pidx] as u64).1 as i32;
         let val = -r0_over_a - rp[pidx] as i32 - start_offset as i32;
-        root0_mod_p.push(pdiv.div31.modi32(val) as u32);
+        root0_mod_p.push(pdiv.modi64(val as i64) as u32);
     }
     A {
         a: *a,
@@ -1052,7 +1052,7 @@ fn _finish_polynomial(s: &SieveSIQS, a: &A, pol: &mut Poly) {
             else { unreachable!("no inverse of b={bp} mod p={p}") };
         let r = div.divmod64(cp * binv).1 as u32;
         let off = s.offset_modp[pidx];
-        let r = div.div31.modu31(r + p - off);
+        let r = if r >= off { r - off } else { r + p - off };
         pol.r1p[pidx] = r;
         pol.r2p[pidx] = r;
     }

@@ -145,16 +145,27 @@ fn mulmod<T: Num>(a: T, b: T, p: T) -> T {
 
 /// A precomputed structure to divide by a static prime number
 /// via Barrett reduction. This is used for primes from the factor base.
+/// In particular, it is always assumed that p is smaller than 2^24.
+///
+/// Since the factor base is large, this structure should ideally remain small.
+/// The current size of the structure is 24 bytes.
 #[derive(Clone, Copy, Debug)]
 pub struct Dividers {
-    // Multiplier for 64-bit division
-    pub(crate) div64: Divider64,
-    // Multiplier for 16-bit division
-    // This is used for small primes during sieving.
+    // Fields must be carefully packed to reduce memory usage.
+    p: u32,
+    /// The value of 2^64 mod p. It fits on 32 bits.
+    r64: u32,
+    /// The multiplier for 63-bit division.
+    m64: u64,
+    /// The shift for 63-bit division.
+    /// It is such that x/p = (x * m64) >> (s64+64) so it applies
+    /// to the high multiplication result.
+    s64: u16,
+    /// The shift for 16-bit division.
+    s16: u16,
+    /// The multiplier for 16-bit division (a 17-bit integer).
+    /// This is used for small primes during sieving.
     m16: u32,
-    s16: usize,
-    // Multiplier for 31-bit division
-    pub div31: Divider31,
 }
 
 impl Dividers {
@@ -167,113 +178,92 @@ impl Dividers {
     // to obtain correct results. We use 32-bit/64-bit mantissas
     // and thus need to correct the result in the case of u64.
     pub const fn new(p: u32) -> Self {
+        assert!(p >> 30 == 0);
         if p == 2 {
             return Dividers {
-                div64: Divider64 {
-                    p: 2,
-                    m64: 1,
-                    r64: 0,
-                    s64: 1,
-                },
+                p: 2,
+                m64: 1 << 63,
+                r64: 0,
+                s64: 0,
                 m16: 1,
                 s16: 1,
-                div31: Divider31 {
-                    p: 2,
-                    m31: 1,
-                    s31: 1,
-                },
             };
         }
-        // Compute 2^k / p rounded up
-        let m64 = (1u64 << 63) / p as u64;
-        let sz = 64 - u64::leading_zeros(m64);
-        // For 16 bits we can use the exact 17-bit multiplier
-        let m16 = (m64 >> (sz - 17)) as u32 + 1; // 17 bits
-        let s16 = 63 + 17 - sz as usize; // m16 >> s16 = m128 >> 128
-        Dividers {
-            div64: Divider64::new(p as u64),
-            m16,
-            s16,
-            div31: Divider31::new(p),
-        }
-    }
-
-    pub fn modu16(&self, n: u16) -> u16 {
-        if self.div64.p == 2 {
-            return n & 1;
-        }
-        let nm = (n as u64) * (self.m16 as u64);
-        let q = (nm >> self.s16) as u16;
-        n - q * self.div64.p as u16
-    }
-
-    #[inline]
-    pub fn divmod64(&self, n: u64) -> (u64, u64) {
-        self.div64.divmod64(n)
-    }
-
-    pub fn modi64(&self, n: i64) -> u64 {
-        self.div64.modi64(n)
-    }
-
-    pub fn divmod_uint<const N: usize>(&self, n: &BUint<N>) -> (BUint<N>, u64) {
-        self.div64.divmod_uint(n)
-    }
-
-    pub fn mod_uint<const N: usize>(&self, n: &BUint<N>) -> u64 {
-        self.div64.mod_uint(n)
-    }
-}
-
-// Constants for Barrett reduction division by a constant prime.
-// The 64-bit multiplier can only exactly divide 63-bit integers.
-#[derive(Clone, Copy, Debug)]
-pub struct Divider64 {
-    p: u64,
-    m64: u64,
-    r64: u64,
-    s64: u32,
-}
-
-impl Divider64 {
-    pub const fn new(p: u64) -> Self {
         // Compute 2^127 / p
         let m127 = (1_u128 << 127) / p as u128;
         let sz = u128::BITS - u128::leading_zeros(m127);
         let m64 = (m127 >> (sz - 64)) as u64 + 1; // 64 bits
-        let r64 = ((1_u128 << 64) % (p as u128)) as u64;
-        let s64 = 127 + 64 - sz; // m64 >> s64 = m127 >> 127
 
+        // Compute 2^64 % p == (2^64 - 1) % p + 1
+        let r64 = (u64::MAX % p as u64) + 1;
+        let s64 = 127 - sz; // m64 >> (64+s64) = m127 >> 127
+        debug_assert!(s64 < 64);
         // Sanity check
-        let m = (m64 - 1) >> (s64 - 64);
-        let mp = (!m.wrapping_mul(p)).wrapping_add(1);
+        let m = (m64 - 1) >> s64;
+        let mp = (!m.wrapping_mul(p as u64)).wrapping_add(1);
         if mp != r64 {
             panic!("incorrect divider");
         }
-        Divider64 { p, m64, r64, s64 }
+
+        // For 16 bits we can use the exact 17-bit multiplier
+        let m16 = (m127 >> (sz - 17)) as u32 + 1; // 17 bits
+        let s16 = 127 + 17 - sz; // m16 >> s16 = m128 >> 128
+        Dividers {
+            p,
+            m64,
+            r64: r64 as u32,
+            s64: s64 as u16,
+            m16,
+            s16: s16 as u16,
+        }
+    }
+
+    pub fn modu16(&self, n: u16) -> u16 {
+        if self.p == 2 {
+            return n & 1;
+        }
+        let nm = (n as u64) * (self.m16 as u64);
+        let q = (nm >> self.s16) as u16;
+        n - q * self.p as u16
     }
 
     #[inline]
     pub fn divmod64(&self, n: u64) -> (u64, u64) {
+        let p = self.p as u64;
         let nm = (n as u128) * (self.m64 as u128);
-        let q = (nm >> self.s64) as u64;
-        let qp = q * self.p;
+        let himul = (nm >> 64) as u64;
+        let q = himul >> self.s64;
+        let qp = q * p;
         if qp > n {
-            (q - 1, self.p - (qp - n))
+            (q - 1, p - (qp - n))
         } else {
             (q, n - qp)
         }
     }
 
+    /// Returns the remainder n % p in the case where the MSB of n is not set.
+    ///
+    /// It is faster than the 64-bit modulo because the precomputed multiplier
+    /// gives an exact result.
+    #[inline]
+    pub fn modu63(&self, n: u64) -> u64 {
+        debug_assert!(n >> 63 == 0);
+        let p = self.p as u64;
+        let nm = (n as u128) * (self.m64 as u128);
+        let himul = (nm >> 64) as u64;
+        let q = himul >> self.s64;
+        n - q * p
+    }
+
     pub fn modi64(&self, n: i64) -> u64 {
         if n < 0 {
-            let m = self.divmod64((-n) as u64).1;
+            let m = self.divmod64(n.unsigned_abs()).1;
             if m == 0 {
                 return 0;
             }
-            self.p - m
+            self.p as u64 - m
         } else {
-            self.divmod64(n as u64).1
+            self.modu63(n as u64)
         }
     }
 
@@ -296,12 +286,12 @@ impl Divider64 {
         // Replace the 2^64 by r64, which removes at least 32 bits.
         let pr = n1 as u128 * self.r64 as u128 + n0 as u128;
         // Again with the top word of pr
-        let hi = (pr >> 64) as u64 * self.r64;
+        let hi = (pr >> 64) as u64 * self.r64 as u64;
         let lo = pr as u64;
         let (mut nred, c) = lo.overflowing_add(hi);
         if c {
             // Cannot overflow, hi < p^2
-            nred += self.r64;
+            nred += self.r64 as u64;
         }
         self.divmod64(nred).1
     }
@@ -323,11 +313,11 @@ impl Divider64 {
                 // pr is kess than p*2^64
                 let pr = pol as u128 * self.r64 as u128 + nd[N - i] as u128;
                 // Reduce the top word of pr
-                let hi = (pr >> 64) as u64 * self.r64;
+                let hi = (pr >> 64) as u64 * self.r64 as u64;
                 let lo = pr as u64;
                 let (mut res, c) = lo.overflowing_add(hi);
                 if c {
-                    res += self.r64;
+                    res += self.r64 as u64;
                 }
                 pol = res
             }
@@ -340,7 +330,8 @@ impl Divider64 {
         let mut carry: u64 = 0;
         // self.m64 = ceil(2^k / p) >> s == ceil(2^(k-s) / p)
         // Compute the actual quotient of 2^64 by p.
-        let m64 = (self.m64 - 1) >> (self.s64 - 64);
+        let r64 = self.r64 as u64;
+        let m64 = (self.m64 - 1) >> self.s64;
         for i in 0..N {
             let i = N - 1 - i;
             let d = digits[i];
@@ -348,10 +339,10 @@ impl Divider64 {
                 continue;
             }
             let (mut q, r) = self.divmod64(d);
-            debug_assert!(q == d / self.p);
+            debug_assert!(q == d / self.p as u64);
             if carry != 0 {
                 q += carry * m64;
-                let (cq, cr) = self.divmod64(carry * self.r64 + r);
+                let (cq, cr) = self.divmod64(carry * r64 + r);
                 q += cq;
                 carry = cr;
             } else {
@@ -381,51 +372,6 @@ where
         }
     }
     None
-}
-
-/// A divider for 31-bit integers.
-/// It uses a 32-bit mantissa.
-#[derive(Clone, Copy, Debug)]
-pub struct Divider31 {
-    pub p: u32,
-    pub m31: u32,
-    pub s31: u32,
-}
-
-impl Divider31 {
-    pub const fn new(p: u32) -> Self {
-        let m64 = (1u64 << 63) / p as u64;
-        let sz = 64 - u64::leading_zeros(m64);
-        let m31 = (m64 >> (sz - 32)) as u32 + 1; // 32 bits
-        let s31 = 63 + 32 - sz; // m31 >> s31 = m63 >> 63
-        Divider31 { p, m31, s31 }
-    }
-
-    #[inline]
-    pub fn modi32(&self, n: i32) -> u32 {
-        if n < 0 {
-            let m = self.modu31((-n) as u32);
-            if m == 0 {
-                return 0;
-            }
-            self.p - m
-        } else {
-            self.modu31(n as u32)
-        }
-    }
-
-    #[inline]
-    pub fn divu31(&self, n: u32) -> u32 {
-        let nm = (n as u64) * (self.m31 as u64);
-        (nm >> self.s31) as u32
-    }
-
-    #[inline]
-    pub fn modu31(&self, n: u32) -> u32 {
-        let nm = (n as u64) * (self.m31 as u64);
-        let q = (nm >> self.s31) as u32;
-        n - q * self.p
-    }
 }
 
 /// A precomputed structure to compute faster modular inverses
@@ -477,7 +423,7 @@ impl Inverter {
     /// See also Joppe W. Bos, Constant Time Modular Inversion
     /// <https://www.joppebos.com/files/CTInversion.pdf>
     /// <http://dx.doi.org/10.1007/s13389-014-0084-8>
-    pub fn invert(&self, x: u32, div: &Divider64) -> u32 {
+    pub fn invert(&self, x: u32, div: &Dividers) -> u32 {
         if div.p == 2 {
             return x % 2;
         }
@@ -518,7 +464,7 @@ impl Inverter {
                 // and (v, r) = (v >> dtz-1, r << dtz-1)
                 (v, r, s) = (((-diff) as u32) >> dtz, r << dtz, r + s);
             }
-            debug_assert!(((r as u64) * (x as u64) + ((u as u64) << k)) % div.p == 0);
+            debug_assert!(((r as u64) * (x as u64) + ((u as u64) << k)) % div.p as u64 == 0);
         }
         debug_assert!(u == 1);
         debug_assert!(r <= 2 * p);
@@ -589,7 +535,7 @@ mod tests {
     fn test_inv_mod_fast() {
         const PRIMES: &[u32] = &[2473, 63977, 2500363, 300 * 1024 + 1];
         for &p in PRIMES {
-            let div = Divider64::new(p as u64);
+            let div = Dividers::new(p);
             let inv = Inverter::new(p);
             for k in 1..p / 2 {
                 if k > 50000 {
@@ -629,16 +575,11 @@ mod tests {
 
     #[test]
     fn test_dividers() {
-        const M32: u32 = 100_000_000;
         const M64: u64 = 100_000_000_000_000_000;
         use crate::fbase::primes;
         let ps = primes(2000);
         for p in ps {
             let d = Dividers::new(p);
-            for n in M32..M32 + std::cmp::max(1000, 2 * p) {
-                let n = n as u32;
-                assert_eq!(n % p, d.div31.modu31(n as u32));
-            }
             let p = p as u64;
             for n in M64..M64 + std::cmp::max(1000, 2 * p) {
                 assert_eq!((n / p, n % p), d.divmod64(n));
@@ -649,6 +590,19 @@ mod tests {
                 assert_eq!(p + (signed % p), d.modi64(signed) as i64);
             } else {
                 assert_eq!(d.modi64(signed), 0);
+            }
+
+            let p = p as u64;
+            // Test the most negative i64.
+            assert_eq!(d.modi64(i64::MIN), (p - (1 << 63) % p) % p);
+
+            // Random full sized ints.
+            let mut n: u64 = 3;
+            for _ in 0..1000 {
+                n = n.wrapping_mul(3);
+                let n63 = n >> 1;
+                assert_eq!(d.modu63(n63), n63 % p);
+                assert_eq!(d.divmod64(n), (n / p, n % p));
             }
         }
     }
@@ -681,7 +635,7 @@ mod tests {
         let mut n: u128 = 3;
         for _ in 0..1000 {
             n = n.wrapping_mul(3);
-            assert_eq!(d.div64.mod_u128(n), (n % 274177) as u64);
+            assert_eq!(d.mod_u128(n), (n % 274177) as u64);
         }
     }
 

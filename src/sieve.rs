@@ -555,7 +555,7 @@ impl<'a> Sieve<'a> {
         let is_factor = |offset: usize, pidx: usize| -> bool {
             let div = self.fbase.div(pidx);
             let blkbase = (self.blk_no as u32).checked_mul(BLOCK_SIZE as u32).unwrap();
-            let o = div.div31.modu31(blkbase + offset as u32);
+            let o = div.modi64(blkbase as i64 + offset as i64) as u32;
             o == roots1[pidx] || o == roots2[pidx]
         };
 

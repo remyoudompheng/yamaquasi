@@ -87,7 +87,7 @@ pub fn qsieve(
     let large_blksz_modp: Vec<u32> = (0..fbase.len())
         .map(|pidx| {
             let div = fbase.div(pidx);
-            div.div31.modi32(large_block_size as i32)
+            div.modi64(large_block_size as i64) as u32
         })
         .collect();
     // A vectorization-friendly way to shift roots for next block.
