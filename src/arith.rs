@@ -1,4 +1,4 @@
-// Copyright 2022 Rémy Oudompheng. All rights reserved.
+// Copyright 2022,2023 Rémy Oudompheng. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -42,24 +42,6 @@ impl Num for u64 {
     }
     fn low_u64(&self) -> u64 {
         *self
-    }
-}
-
-impl Num for u128 {
-    fn bits(&self) -> u32 {
-        u128::BITS - u128::leading_zeros(*self)
-    }
-
-    fn to_u64(&self) -> Option<u64> {
-        if *self >= (1 << 64) {
-            None
-        } else {
-            Some(*self as u64)
-        }
-    }
-
-    fn low_u64(&self) -> u64 {
-        *self as u64
     }
 }
 
