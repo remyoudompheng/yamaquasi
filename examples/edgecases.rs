@@ -31,6 +31,19 @@ const EXAMPLES: &[&str] = &[
     // A number with best multiplier 1 but a poor factor base:
     // 2, 3, 11, 13, 17, 79, 89, 101, 127, 131
     "145188395687209308974668110093663098558233257760297",
+    // Old MPQS failures in polynomial selection. They were related to non
+    // prime candidates for D (usually φ(D) is very smooth and we can find
+    // modular square roots unexpectedly).
+    // However depending on interval size the same D may not appear again.
+
+    // D=1064363 is composite and close to sqrt(sqrt(5n/2)/32768)
+    "545739830203115604058837931639003",
+    // D=4255903 composite (3n^(D+1)/4 is a valid square root)
+    // and close to sqrt(sqrt(3n/2)/65536)
+    "936196470328602335308479219639141053",
+    // D=1302451 is composite and a base 2 pseudoprime
+    // It is close to sqrt(sqrt(6n/2)/32768) and 6n^(D+1)/4 is a valid square root
+    "1026830418586472562456155798159521",
 ];
 
 fn factor_examples() {

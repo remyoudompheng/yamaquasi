@@ -97,7 +97,7 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
         polybase -= min(polybase / 10, polystride.into());
     }
 
-    let mut d_r_values = sieve_for_polys(&fbase, &n, polybase, polystride as usize);
+    let mut d_r_values = sieve_for_polys(&n, polybase, polystride as usize);
     let mut polyidx = 0;
     let mut polys_done: u64 = 0;
     if prefs.verbose(Verbosity::Verbose) {
@@ -155,7 +155,7 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
                 ));
             }
             polybase += polystride as u128;
-            d_r_values = sieve_for_polys(&fbase, &n, polybase, polystride as usize);
+            d_r_values = sieve_for_polys(&n, polybase, polystride as usize);
             polyidx = 0;
             if prefs.verbose(Verbosity::Verbose) {
                 eprintln!(
@@ -311,8 +311,10 @@ impl Poly {
     }
 }
 
+/// Find appropriate pseudoprime D such that A=D² is a good polynomial coefficient.
+/// The goal is to be able to compute a modular square root of n mod D.
 #[doc(hidden)]
-pub fn sieve_for_polys(fb: &FBase, n: &Uint, bmin: u128, width: usize) -> Vec<(Uint, Uint)> {
+pub fn sieve_for_polys(n: &Uint, bmin: u128, width: usize) -> Vec<(Uint, Uint)> {
     let mut composites = vec![false; width];
     for &p in &fbase::SMALL_PRIMES {
         let off = bmin % p as u128;
@@ -337,25 +339,21 @@ pub fn sieve_for_polys(fb: &FBase, n: &Uint, bmin: u128, width: usize) -> Vec<(U
             let p256 = U256::cast_from(p);
             let nmodp = U256::cast_from(n % Uint::from(p));
             let r = pow_mod(nmodp, U256::from((p + 1) / 4), p256);
+            if let Err(gcd) = inv_mod(&nmodp, &p256) {
+                // FIXME: use this factor to answer.
+                eprintln!("WARNING: unexpectedly found a factor of N!");
+                eprintln!("D={p} gcd(D,n)={gcd}");
+                continue 'nextsieve;
+            }
             if (r * r) % p256 == nmodp {
-                // Beware, D may (exceptionally) not be prime.
-                // Perform trial division by the factor base.
-                for idx in 0..fb.len() {
-                    // If it is a member of the factor base, it is prime.
-                    if p == fb.p(idx) as u128 {
-                        break;
-                    }
-                    if fb.div(idx).mod_uint(&p256) == 0 {
-                        continue 'nextsieve;
-                    }
-                }
-                if r.is_zero() {
-                    // FIXME: use this factor to answer.
-                    eprintln!("WARNING: unexpectedly found a factor of N!");
-                    eprintln!("D={}", p);
-                    continue 'nextsieve;
-                }
+                // Beware, D may (exceptionally) not be prime, but this is fine
+                // as long as we found a square root of n.
+                // It usually happens for small n (100-120 bits), with low probability.
+                // It can also be a member of the factor base, which is also fine.
                 result.push((p.into(), Uint::cast_from(r)));
+                if crate::DEBUG && !crate::pseudoprime(p.into()) {
+                    eprintln!("D={p} is not prime");
+                }
             }
         }
     }
@@ -435,11 +433,10 @@ fn test_select_poly() {
         "104567211693678450173299212092863908236097914668062065364632502155864426186497",
     )
     .unwrap();
-    let fb = fbase::FBase::new(n, 1000);
     let mlog: u32 = 24;
     let polybase: Uint = isqrt(n >> 1) >> mlog;
     let polybase = u128::cast_from(isqrt(polybase));
-    let (d, r) = sieve_for_polys(&fb, &n, polybase, 512)[0];
+    let (d, r) = sieve_for_polys(&n, polybase, 512)[0];
     let pol = make_poly(&n, &d, &r);
     let &Poly { a, b, d, .. } = &pol;
     let (a, b, d) = (Uint::cast_from(a), Uint::cast_from(b), Uint::cast_from(d));
@@ -474,7 +471,7 @@ fn test_select_poly() {
     let mlog: u32 = 16;
     let polybase: Uint = isqrt(n << 1) >> mlog;
     let polybase = u128::cast_from(isqrt(polybase));
-    let (d, r) = sieve_for_polys(&fb, &n, polybase, 512)[0];
+    let (d, r) = sieve_for_polys(&n, polybase, 512)[0];
     let Poly { a, b, d, .. } = make_poly(&n, &d, &r);
     let (a, b, _) = (Uint::cast_from(a), Uint::cast_from(b), Uint::cast_from(d));
 
@@ -491,14 +488,6 @@ fn test_select_poly() {
     eprintln!("max(P) = {pmax}");
     assert_eq!(c >> (sz - 12), target >> (sz - 12));
     assert_eq!(pmax >> (sz - 12), target >> (sz - 12));
-
-    // Sample failures in polynomial selection:
-    // n=5*545739830203115604058837931639003
-    // D=1064363 composite
-    // n=3*936196470328602335308479219639141053
-    // D=4255903 composite (n^(D+1)/4 is a valid square root)
-    // n=6*1026830418586472562456155798159521
-    // D=1302451 base 2 pseudoprime
 }
 
 /// A structure holding memory allocations for MPQS.
