@@ -185,6 +185,9 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
             polys_done += 1;
             mpqs_poly(&s, a, r, &mut wks);
         }
+        if prefs.abort() {
+            return vec![];
+        }
         let rels = rels.read().unwrap();
         if rels.len() >= target {
             let gap = rels.gap(s.fbase);

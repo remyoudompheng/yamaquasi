@@ -169,7 +169,9 @@ pub fn qsieve(
             do_sieve_bck();
             assert_eq!(s_fwd.blk_no, s_bck.blk_no);
         }
-
+        if prefs.abort() {
+            return vec![];
+        }
         let sieved = s_fwd.offset + s_bck.offset;
         let do_print = prefs.verbose(Verbosity::Info)
             && if n.bits() > 260 {
