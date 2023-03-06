@@ -148,7 +148,7 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
                 }
                 break;
             }
-            if prefs.verbose(Verbosity::Verbose) {
+            if prefs.verbose(Verbosity::Info) {
                 rels.log_progress(format!(
                     "Sieved {}M {polys_done} polys",
                     (polys_done * s.interval_size as u64) >> 20,
@@ -157,7 +157,7 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
             polybase += polystride as u128;
             d_r_values = sieve_for_polys(&fbase, &n, polybase, polystride as usize);
             polyidx = 0;
-            if prefs.verbose(Verbosity::Info) {
+            if prefs.verbose(Verbosity::Verbose) {
                 eprintln!(
                     "Generated {} polynomials D={}..{} optimal={d_target}",
                     d_r_values.len(),
