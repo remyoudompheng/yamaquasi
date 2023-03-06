@@ -97,9 +97,7 @@ fn factor(
             "Yamaquasi only accepts positive integers with at most 150 decimal digits"
         )));
     }
-    let Ok(factors) = py.allow_threads(|| yamaquasi::factor(n, alg, &prefs))
-        else { return  Err(PyValueError::new_err(format!(
-            "failed to factor {n}"))) };
+    let result = py.allow_threads(|| yamaquasi::factor(n, alg, &prefs));
     if timeout.is_some()
         && Some(start.elapsed().as_secs_f64()) >= timeout
         && verbosity >= Verbosity::Info
@@ -111,6 +109,9 @@ fn factor(
     if interrupted.load(Ordering::Relaxed) {
         return Err(PyKeyboardInterrupt::new_err(()));
     }
+    let Ok(factors) = result else {
+        return Err(PyValueError::new_err(format!("failed to factor {n}")))
+    };
     let l = PyList::empty(py);
     for f in factors {
         // Use string for conversion.
