@@ -287,12 +287,51 @@ impl Divider64 {
         (BUint::from_digits(digits), rem)
     }
 
+    pub fn mod_u128(&self, n: u128) -> u64 {
+        let (n0, n1) = (n as u64, (n >> 64) as u64);
+        if n1 == 0 {
+            return self.divmod64(n0).1;
+        }
+        // n = n0 + n1 * 2^64
+        // Reduce the second term: hi < (p-1)^2
+        let hi = self.r64 * self.divmod64(n1).1;
+        let (mut nred, c) = n0.overflowing_add(hi);
+        if c {
+            // nred < p^2
+            nred += self.r64;
+        }
+        self.divmod64(nred).1
+    }
+
     pub fn mod_uint<const N: usize>(&self, n: &BUint<N>) -> u64 {
         if self.p == 2 {
             return n.low_u64() & 1;
         }
-        let mut digits = n.digits().clone();
-        self.divmod_uint_inplace(&mut digits)
+        // We don't need the quotient so don't use divmod_uint_inplace.
+        let nd = n.digits();
+        let Some(last) = nd.iter().rposition(|&digit| digit != 0)
+            else { return 0 };
+        // Evaluate nd as a polynomial ND(r64) modulo p.
+        // This costs 4(N-2)+1 multiplications.
+        let mut pol = nd[0] as u128;
+        if last >= 1 {
+            pol += self.r64 as u128 * nd[1] as u128;
+        }
+        let mut rpow = self.r64;
+        for i in 2..=last {
+            rpow = self.divmod64(rpow * self.r64).1;
+            pol += rpow as u128 * nd[i] as u128;
+        }
+        // Now pol is an integer smaller than p*N*2^64 < 2^96.
+        // We need 3 more multiplications to reduce it mod p.
+        debug_assert!(pol >> 96 == 0);
+        let hi = (pol >> 64) as u64 * self.r64;
+        let lo = pol as u64;
+        let (mut res, c) = lo.overflowing_add(hi);
+        if c {
+            res += self.r64;
+        }
+        self.divmod64(res).1
     }
 
     #[inline]
@@ -489,9 +528,7 @@ impl Inverter {
         debug_assert!(powidx < self.invpow2.len());
         // k + (8 - k % 8) == 8 * (k / 8) + 8
         let r = (r as u64) << (8 - k % 8);
-        let n = unsafe {
-            r * *self.invpow2.get_unchecked(powidx) as u64
-        };
+        let n = unsafe { r * *self.invpow2.get_unchecked(powidx) as u64 };
         div.divmod64(n).1 as u32
     }
 }
@@ -634,6 +671,16 @@ mod tests {
                 let n = ((12345 * i) & 0xffff) as u16;
                 assert_eq!(n % (p as u16), d.modu16(n));
             }
+        }
+    }
+
+    #[test]
+    fn test_dividers_u128() {
+        let d = Dividers::new(274177);
+        let mut n: u128 = 3;
+        for _ in 0..1000 {
+            n = n.wrapping_mul(3);
+            assert_eq!(d.div64.mod_u128(n), (n % 274177) as u64);
         }
     }
 

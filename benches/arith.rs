@@ -124,7 +124,7 @@ brunch::benches! {
         let d = arith::Dividers::new(65537);
         Bench::new("1000x mod const(u256, 65537)")
         .with_samples(50_000)
-        .run_seeded((&n, &d), |(n, d)| for _ in 0..1000 { d.divmod_uint(n).1; })
+        .run_seeded((&n, &d), |(n, d)| for _ in 0..1000 { d.mod_uint(n); })
     },
     // Primality test
     {

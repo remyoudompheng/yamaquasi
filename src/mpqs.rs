@@ -239,7 +239,7 @@ pub struct Poly {
     c: I256,
     // (ax+bb)/d is the modular square root of ax^2+bx+c
     bb: Uint,
-    pub d: U256,
+    pub d: u128,
     dinv: Uint,
 }
 
@@ -281,31 +281,27 @@ impl Poly {
             // Transform roots as:
             // if n % 4 == 1 (b is odd), r -> (r - B) / 2A
             // if n % 4 != 1 (b is even), r -> (r - B/2) / A
+            // A=D^2 so it is faster to reduce D rather than A.
+            let dmodp = div.div64.mod_u128(self.d);
             let (a, b) = if self.b.bit(0) {
-                (2 * div.divmod_uint(&self.a).1, div.divmod_uint(&self.b).1)
+                (div.divmod64(2 * dmodp * dmodp).1, div.mod_uint(&self.b))
             } else {
-                (div.divmod_uint(&self.a).1, div.divmod_uint(&self.bb).1)
+                (div.divmod64(dmodp * dmodp).1, div.mod_uint(&self.bb))
             };
             if a == 0 {
                 // For very small integers, we may select D inside the factor base.
                 // In this case the roots are the roots of Bx-abs(C) (C < 0)
-                let b = div.divmod_uint(&self.b).1;
+                let b = div.mod_uint(&self.b);
                 let binv = inv.invert(b as u32, &div.div64) as u64;
                 debug_assert!(self.c.is_negative());
-                let c = div.divmod_uint(&self.c.abs().to_bits()).1;
+                let c = div.mod_uint(&self.c.abs().to_bits());
                 let r = shift(div.divmod64(c * binv).1 as u32);
                 (r, r)
             } else {
                 let ainv = inv.invert(a as u32, &div.div64) as u64;
                 let r1 = shift(div.divmod64((p as u64 + r as u64 - b) * ainv).1 as u32);
-                (
-                    r1,
-                    if r == 0 {
-                        r1
-                    } else {
-                        shift(div.divmod64((2 * p as u64 - r as u64 - b) * ainv).1 as u32)
-                    },
-                )
+                let r2 = shift(div.divmod64((2 * p as u64 - r as u64 - b) * ainv).1 as u32);
+                (r1, r2)
             }
         }
     }
@@ -400,7 +396,7 @@ pub fn make_poly(n: &Uint, d: &Uint, r: &Uint) -> Poly {
             b: U256::cast_from(b),
             c: I256::cast_from(c),
             bb: (n + b) >> 1,
-            d: U256::cast_from(*d),
+            d: u128::cast_from(*d),
 
             dinv,
         }
@@ -416,7 +412,7 @@ pub fn make_poly(n: &Uint, d: &Uint, r: &Uint) -> Poly {
             b: U256::cast_from(b << 1),
             c: I256::cast_from(c),
             bb: b,
-            d: U256::cast_from(*d),
+            d: u128::cast_from(*d),
 
             dinv,
         }
