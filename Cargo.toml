@@ -1,6 +1,7 @@
 [package]
 name = "yamaquasi"
 version = "0.1.0"
+rust-version = "1.65"
 edition = "2021"
 description = "A toy implementation of multiple polynomial quadratic sieve"
 license = "BSD3"
