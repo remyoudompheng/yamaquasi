@@ -478,7 +478,7 @@ pub fn cofactor(
             factors.push((pp as i64, exp));
         }
     }
-    let cofactor = cofactor.to_u64()?;
+    let cofactor: u64 = cofactor.try_into().ok()?;
     if cofactor > maxlarge * maxlarge {
         // Too large
         return None;

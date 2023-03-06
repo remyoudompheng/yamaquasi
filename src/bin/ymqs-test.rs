@@ -13,7 +13,7 @@ use std::time::Instant;
 use bnum::cast::CastFrom;
 use rand::{self, Rng};
 
-use yamaquasi::arith::{Num, U256};
+use yamaquasi::arith::U256;
 use yamaquasi::fbase;
 use yamaquasi::Uint;
 use yamaquasi::{factor, isprime64, pseudoprime, Algo, Preferences, Verbosity};
@@ -92,7 +92,7 @@ fn nextprime(fb: &fbase::FBase, base: U256) -> U256 {
         let p = base + U256::from(i as u64);
         for pidx in 0..fb.len() {
             if fb.div(pidx).mod_uint(&p) == 0 {
-                if Some(fb.p(pidx) as u64) == p.to_u64() {
+                if Ok(fb.p(pidx) as u64) == p.try_into() {
                     return p;
                 }
                 continue 'nextcandidate;

@@ -474,7 +474,6 @@ fn test_montgomery64() {
 
 #[test]
 fn test_montgomery() {
-    use crate::arith::Num;
     use std::str::FromStr;
 
     let n = Uint::from_str("2953951639731214343967989360202131868064542471002037986749").unwrap();
@@ -500,9 +499,9 @@ fn test_montgomery() {
     .unwrap();
     let zn = ZmodN::new(n);
     let x = zn.from_int(Uint::from(551_u64));
-    assert_eq!(zn.to_int(x).to_u64(), Some(551));
+    assert_eq!(zn.to_int(x).try_into().ok(), Some(551_u64));
     let y = zn.from_int(Uint::from(901_u64));
-    assert_eq!(zn.to_int(y).to_u64(), Some(901));
+    assert_eq!(zn.to_int(y).try_into().ok(), Some(901_u64));
     assert_eq!(
         zn.to_int(zn.inv(y).unwrap()),
         Uint::from_str(

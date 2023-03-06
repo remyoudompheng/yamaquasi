@@ -739,7 +739,7 @@ pub fn select_a(f: &Factors, want: usize, v: Verbosity) -> Vec<Uint> {
                 product *= U256::from(f.factors[g as usize].p);
             }
         }
-        let t = (f.target / product).to_u64().unwrap();
+        let t: u64 = (f.target / product).try_into().unwrap();
         let idx = (0usize..fb)
             .filter(|g| mask & (1 << g) == 0)
             .min_by_key(|&idx| (f.factors[idx].p as i64 - t as i64).abs())

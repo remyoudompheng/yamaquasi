@@ -10,7 +10,7 @@ use std::str::FromStr;
 
 pub use num_integer::sqrt as isqrt;
 use num_integer::{Integer, Roots};
-use num_traits::{One, Pow, ToPrimitive};
+use num_traits::{One, Pow};
 
 pub use bnum::types::{I1024, I256, U1024, U256, U512};
 use bnum::{BInt, BUint};
@@ -28,7 +28,6 @@ pub trait Num:
 {
     fn bits(&self) -> u32;
 
-    fn to_u64(&self) -> Option<u64>;
     fn low_u64(&self) -> u64;
 }
 
@@ -37,9 +36,6 @@ impl Num for u64 {
         u64::BITS - u64::leading_zeros(*self)
     }
 
-    fn to_u64(&self) -> Option<u64> {
-        Some(*self)
-    }
     fn low_u64(&self) -> u64 {
         *self
     }
@@ -50,10 +46,6 @@ impl<const N: usize> Num for BInt<N> {
         Self::bits(self)
     }
 
-    fn to_u64(&self) -> Option<u64> {
-        ToPrimitive::to_u64(self)
-    }
-
     fn low_u64(&self) -> u64 {
         self.to_bits().digits()[0]
     }
@@ -62,10 +54,6 @@ impl<const N: usize> Num for BInt<N> {
 impl<const N: usize> Num for BUint<N> {
     fn bits(&self) -> u32 {
         Self::bits(self)
-    }
-
-    fn to_u64(&self) -> Option<u64> {
-        ToPrimitive::to_u64(self)
     }
 
     fn low_u64(&self) -> u64 {

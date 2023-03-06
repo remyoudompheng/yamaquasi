@@ -468,7 +468,7 @@ fn factor_impl(
             residue /= gcd;
             !split
         });
-        assert_eq!(residue.to_u64(), Some(1));
+        assert!(residue.is_one());
         let mut residue = d;
         for f in splits {
             let gcd: Uint = Integer::gcd(&f, &residue);
@@ -587,7 +587,7 @@ pub fn isprime64(p: u64) -> bool {
 pub fn pseudoprime(p: Uint) -> bool {
     // Montgomery arithmetic is only for odd numbers.
     if !p.bit(0) {
-        return p.to_u64() == Some(2);
+        return p.try_into() == Ok(2_u64);
     }
     if p.bits() <= 64 {
         return isprime64(p.low_u64());
@@ -860,6 +860,7 @@ fn test_factor_ecm_edgecases() -> Result<(), bnum::errors::ParseIntError> {
 fn test_pseudoprime() {
     assert!(!pseudoprime(1_u64.into()));
     assert!(pseudoprime(2_u64.into()));
+    assert!(!pseudoprime(4_u64.into()));
     assert!(pseudoprime(17_u64.into()));
     // Large prime
     assert!(pseudoprime(Uint::from_str("1515019151549030796823931666316891543876480618160148234227332522965297454091879022905608234715852754566536639937").unwrap()));
