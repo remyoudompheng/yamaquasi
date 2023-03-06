@@ -455,9 +455,9 @@ impl Inverter {
         }
         debug_assert!(div.p >> 28 == 0);
         let p = div.p as u32;
-        assert!(x != 0, "0 has no inverse mod {p}");
+        assert!(x != 0);
         // Similar to binary GCD, with invariants:
-        // rx = -u*2^k, sx = v*2^k
+        // rx = -u*2^k, sx = v*2^k, gcd(u,v)=gcd(x,p)=1
         let (mut u, mut v) = (p, x);
         let (mut r, mut s) = (0_u32, 1_u32);
         let mut k = 0_u32;
@@ -472,25 +472,24 @@ impl Inverter {
         loop {
             // Loop at most 2*p.bits() times
             let diff = (u as i64) - (v as i64);
+            if diff == 0 {
+                // Now u=v so they are necessarily 1.
+                break;
+            }
             let dtz = diff.trailing_zeros();
+            k = k + dtz;
             debug_assert!(dtz > 0);
             if diff > 0 {
                 // Combination of:
                 // (u, r, s) = ((u-v)/2, r+s, 2s)
                 // and (u, s) = (u >> dtz-1, s << dtz-1)
                 (u, r, s) = ((diff as u32) >> dtz, r + s, s << dtz);
-            } else if diff < 0 {
+            } else {
                 // Combination of:
                 // (v, r, s) = (v-u)/2, 2r, r+s)
                 // and (v, r) = (v >> dtz-1, r << dtz-1)
                 (v, r, s) = (((-diff) as u32) >> dtz, r << dtz, r + s);
-            } else {
-                // (v, r, s) = (v-u)/2, 2r, r+s)
-                r = 2 * r; // v, s are not used anymore.
-                k += 1;
-                break;
             }
-            k = k + dtz;
             debug_assert!(((r as u64) * (x as u64) + ((u as u64) << k)) % div.p == 0);
         }
         debug_assert!(u == 1);
@@ -498,10 +497,13 @@ impl Inverter {
         // Now u = 1, rx = -2^k and r is smaller than 2p.
         // (k is at most twice the bit size of p).
         // Normalize k to a multiple of 8.
-        let powidx = k / 8;
+        let powidx = k as usize / 8;
+        debug_assert!(powidx < self.invpow2.len());
         // k + (8 - k % 8) == 8 * (k / 8) + 8
         let r = (r as u64) << (8 - k % 8);
-        let n = r * self.invpow2[powidx as usize] as u64;
+        let n = unsafe {
+            r * *self.invpow2.get_unchecked(powidx) as u64
+        };
         div.divmod64(n).1 as u32
     }
 }
