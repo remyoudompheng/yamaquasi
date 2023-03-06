@@ -820,14 +820,12 @@ pub struct SieveTableLarge {
     // Each element is a transmuted (u16,u16).
     hits: Vec<u32>,
     // Current length of each bucket.
-    lengths: [u32; Self::MAX_BUCKETS],
+    lengths: Vec<u32>,
     // Overflows: common to all buckets.
     overflows: Vec<u32>,
 }
 
 impl SieveTableLarge {
-    // Allow many blocks: this is needed for MPQS.
-    const MAX_BUCKETS: usize = Self::BUCKETS_PER_BLOCK * 512;
     // Size of interval slice covered by a bucket.
     const LBUCKET_WIDTH: usize = 16384;
     const BUCKETS_PER_BLOCK: usize = BLOCK_SIZE / Self::LBUCKET_WIDTH;
@@ -839,15 +837,16 @@ impl SieveTableLarge {
 
     fn new(nblocks: usize) -> Self {
         let nbuckets = nblocks * BLOCK_SIZE / Self::LBUCKET_WIDTH;
-        assert!(nbuckets < Self::MAX_BUCKETS);
         SieveTableLarge {
             hits: vec![0; (nbuckets + 1) * Self::LBUCKET_WIDTH],
-            lengths: [0; Self::MAX_BUCKETS],
+            lengths: vec![0; nbuckets + 1],
             overflows: vec![],
         }
     }
 
     fn reset(&mut self) {
+        // It is not necessary to write to self.hits,
+        // it is a very large array so it is too costly.
         self.lengths.fill(0);
         self.overflows.clear();
     }

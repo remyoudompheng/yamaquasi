@@ -31,7 +31,7 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
     // In particular the D values chosen for polynomials cannot exceed 128 bits.
     if n.bits() > 448 {
         if prefs.verbose(Verbosity::Info) {
-            eprintln!("Number {n} too large for classical quadratic sieve!");
+            eprintln!("Number {n} too large for quadratic sieve!");
         }
         return vec![];
     }
@@ -108,7 +108,10 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
             d_r_values.last().unwrap().0
         );
     }
-    let maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(&n));
+    let mut maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(&n));
+    if maxlarge > u32::MAX as u64 {
+        maxlarge = u32::MAX as u64;
+    }
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Max large prime {maxlarge}");
         if use_double {
