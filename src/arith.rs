@@ -293,11 +293,14 @@ impl Divider64 {
             return self.divmod64(n0).1;
         }
         // n = n0 + n1 * 2^64
-        // Reduce the second term: hi < (p-1)^2
-        let hi = self.r64 * self.divmod64(n1).1;
-        let (mut nred, c) = n0.overflowing_add(hi);
+        // Replace the 2^64 by r64, which removes at least 32 bits.
+        let pr = n1 as u128 * self.r64 as u128 + n0 as u128;
+        // Again with the top word of pr
+        let hi = (pr >> 64) as u64 * self.r64;
+        let lo = pr as u64;
+        let (mut nred, c) = lo.overflowing_add(hi);
         if c {
-            // nred < p^2
+            // Cannot overflow, hi < p^2
             nred += self.r64;
         }
         self.divmod64(nred).1
@@ -309,29 +312,27 @@ impl Divider64 {
         }
         // We don't need the quotient so don't use divmod_uint_inplace.
         let nd = n.digits();
-        let Some(last) = nd.iter().rposition(|&digit| digit != 0)
-            else { return 0 };
-        // Evaluate nd as a polynomial ND(r64) modulo p.
-        // This costs 4(N-2)+1 multiplications.
-        let mut pol = nd[0] as u128;
-        if last >= 1 {
-            pol += self.r64 as u128 * nd[1] as u128;
+        // Evaluate nd as a polynomial ND(r64) modulo p using Hörner rule.
+        // At each step, reduce to a 64-bit number.
+        // This costs 2(N-1) multiplications.
+        let mut pol: u64 = nd[N - 1];
+        for i in 2..=N {
+            if pol == 0 {
+                pol = nd[N - i]
+            } else {
+                // pr is kess than p*2^64
+                let pr = pol as u128 * self.r64 as u128 + nd[N - i] as u128;
+                // Reduce the top word of pr
+                let hi = (pr >> 64) as u64 * self.r64;
+                let lo = pr as u64;
+                let (mut res, c) = lo.overflowing_add(hi);
+                if c {
+                    res += self.r64;
+                }
+                pol = res
+            }
         }
-        let mut rpow = self.r64;
-        for i in 2..=last {
-            rpow = self.divmod64(rpow * self.r64).1;
-            pol += rpow as u128 * nd[i] as u128;
-        }
-        // Now pol is an integer smaller than p*N*2^64 < 2^96.
-        // We need 3 more multiplications to reduce it mod p.
-        debug_assert!(pol >> 96 == 0);
-        let hi = (pol >> 64) as u64 * self.r64;
-        let lo = pol as u64;
-        let (mut res, c) = lo.overflowing_add(hi);
-        if c {
-            res += self.r64;
-        }
-        self.divmod64(res).1
+        self.divmod64(pol).1
     }
 
     #[inline]
