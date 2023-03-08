@@ -1,7 +1,7 @@
 use bnum::cast::CastFrom;
 use brunch::Bench;
 use std::str::FromStr;
-use yamaquasi::arith::{self, isqrt};
+use yamaquasi::arith::isqrt;
 use yamaquasi::{fbase, mpqs, qsieve, siqs};
 use yamaquasi::{Uint, Verbosity};
 
@@ -60,25 +60,6 @@ fn main() {
             .run_seeded(n, |n| {
                 let v = mpqs::sieve_for_polys(&n, polybase, width);
                 assert!(90 < v.len() && v.len() < 110);
-            })
-        },
-        // Prepare primes
-        {
-            let n = Uint::from_str(PQ256).unwrap();
-            let fb = fbase::FBase::new(n, 5000);
-            let inverters: Vec<_> = (0..fb.len())
-                .map(|idx| arith::Inverter::new(fb.p(idx)))
-                .collect();
-            let polybase: Uint = isqrt(isqrt(n));
-            let polybase = u128::cast_from(isqrt(polybase));
-            let (d, r) = &mpqs::sieve_for_polys(&n, polybase, 1000)[0];
-            let pol = mpqs::make_poly(&n, &d, &r);
-            Bench::new("prepare 5000 primes for MPQS poly (n: 256 bit)")
-            .run_seeded((&pol, &fb), |(pol, fb)| {
-                (0..fb.len()).map(|pidx| {
-                    let fbase::Prime { p, r, div } = fb.prime(pidx);
-                    pol.prepare_prime(p as u32, r as u32, div, &inverters[pidx], 12345)
-                }).collect::<Vec<_>>()
             })
         },
         // SIQS primitives

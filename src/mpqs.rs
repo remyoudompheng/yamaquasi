@@ -174,8 +174,9 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
             pool.install(|| {
                 d_r_values[polyidx..].par_chunks(8).for_each(|chunk| {
                     let mut wks = Workspace::default();
-                    for (a, r) in chunk {
-                        mpqs_poly(&s, a, r, &mut wks);
+                    wks.batch_inversion(&s, chunk.iter().map(|&(d, _)| d).collect());
+                    for (idx, (d, r)) in chunk.iter().enumerate() {
+                        mpqs_poly(&s, idx, *d, r, &mut wks);
                     }
                 })
             });
@@ -183,10 +184,22 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
             polyidx = d_r_values.len();
         } else {
             // Sequential sieving
-            let (a, r) = &d_r_values[polyidx];
+            let (d, r) = &d_r_values[polyidx];
+            if polyidx % 16 == 0 {
+                // Batch inversion for 16 next polynomials.
+                // Keep small batches to avoid excessive memory footprint.
+                let batchend = min(d_r_values.len(), polyidx + 16);
+                wks.batch_inversion(
+                    &s,
+                    d_r_values[polyidx..batchend]
+                        .iter()
+                        .map(|&(d, _)| d)
+                        .collect(),
+                );
+            }
+            mpqs_poly(&s, polyidx % 16, *d, r, &mut wks);
             polyidx += 1;
             polys_done += 1;
-            mpqs_poly(&s, a, r, &mut wks);
         }
         if prefs.abort() {
             return vec![];
@@ -262,6 +275,8 @@ impl Poly {
         r: u32,
         div: &arith::Dividers,
         inv: &arith::Inverter,
+        // The modular inverse of self.d mod p.
+        dinv: u32,
         offset: i32,
     ) -> (u32, u32) {
         let off: u32 = div.div31.modi32(offset);
@@ -282,13 +297,7 @@ impl Poly {
             // if n % 4 == 1 (b is odd), r -> (r - B) / 2A
             // if n % 4 != 1 (b is even), r -> (r - B/2) / A
             // A=D^2 so it is faster to reduce D rather than A.
-            let dmodp = div.div64.mod_u128(self.d);
-            let (a, b) = if self.b.bit(0) {
-                (div.divmod64(2 * dmodp * dmodp).1, div.mod_uint(&self.b))
-            } else {
-                (div.divmod64(dmodp * dmodp).1, div.mod_uint(&self.bb))
-            };
-            if a == 0 {
+            if dinv == 0 {
                 // For very small integers, we may select D inside the factor base.
                 // In this case the roots are the roots of Bx-abs(C) (C < 0)
                 let b = div.mod_uint(&self.b);
@@ -298,7 +307,20 @@ impl Poly {
                 let r = shift(div.divmod64(c * binv).1 as u32);
                 (r, r)
             } else {
-                let ainv = inv.invert(a as u32, &div.div64) as u64;
+                let d2inv = div.divmod64(dinv as u64 * dinv as u64).1;
+                let (ainv, b) = if self.b.bit(0) {
+                    // We need 1/2D^2
+                    (
+                        if d2inv & 1 == 0 {
+                            d2inv >> 1
+                        } else {
+                            (d2inv + p as u64) >> 1
+                        },
+                        div.mod_uint(&self.b),
+                    )
+                } else {
+                    (d2inv, div.mod_uint(&self.bb))
+                };
                 let r1 = shift(div.divmod64((p as u64 + r as u64 - b) * ainv).1 as u32);
                 let r2 = shift(div.divmod64((2 * p as u64 - r as u64 - b) * ainv).1 as u32);
                 (r1, r2)
@@ -310,7 +332,7 @@ impl Poly {
 /// Find appropriate pseudoprime D such that A=D² is a good polynomial coefficient.
 /// The goal is to be able to compute a modular square root of n mod D.
 #[doc(hidden)]
-pub fn sieve_for_polys(n: &Uint, bmin: u128, width: usize) -> Vec<(Uint, Uint)> {
+pub fn sieve_for_polys(n: &Uint, bmin: u128, width: usize) -> Vec<(u128, Uint)> {
     let mut composites = vec![false; width];
     for &p in &fbase::SMALL_PRIMES {
         let off = bmin % p as u128;
@@ -346,7 +368,7 @@ pub fn sieve_for_polys(n: &Uint, bmin: u128, width: usize) -> Vec<(Uint, Uint)> 
                 // as long as we found a square root of n.
                 // It usually happens for small n (100-120 bits), with low probability.
                 // It can also be a member of the factor base, which is also fine.
-                result.push((p.into(), Uint::cast_from(r)));
+                result.push((p, Uint::cast_from(r)));
                 if crate::DEBUG && !crate::pseudoprime(p.into()) {
                     eprintln!("D={p} is not prime");
                 }
@@ -358,7 +380,9 @@ pub fn sieve_for_polys(n: &Uint, bmin: u128, width: usize) -> Vec<(Uint, Uint)> 
 
 /// Construct a MPQS polynomial from modulus N, a prime D and a modular square root D.
 #[doc(hidden)]
-pub fn make_poly(n: &Uint, d: &Uint, r: &Uint) -> Poly {
+pub fn make_poly(n: &Uint, d: u128, r: &Uint) -> Poly {
+    let d128 = d;
+    let d = Uint::cast_from(d);
     debug_assert!((r * r) % d == n % d);
     // Lift square root mod D^2
     // Since D*D < N, computations can be done using the same integer width.
@@ -396,7 +420,7 @@ pub fn make_poly(n: &Uint, d: &Uint, r: &Uint) -> Poly {
             b: U256::cast_from(b),
             c: I256::cast_from(c),
             bb: (n + b) >> 1,
-            d: u128::cast_from(*d),
+            d: d128,
 
             dinv,
         }
@@ -412,7 +436,7 @@ pub fn make_poly(n: &Uint, d: &Uint, r: &Uint) -> Poly {
             b: U256::cast_from(b << 1),
             c: I256::cast_from(c),
             bb: b,
-            d: u128::cast_from(*d),
+            d: d128,
 
             dinv,
         }
@@ -433,7 +457,7 @@ fn test_select_poly() {
     let polybase: Uint = isqrt(n >> 1) >> mlog;
     let polybase = u128::cast_from(isqrt(polybase));
     let (d, r) = sieve_for_polys(&n, polybase, 512)[0];
-    let pol = make_poly(&n, &d, &r);
+    let pol = make_poly(&n, d, &r);
     let &Poly { a, b, d, .. } = &pol;
     let (a, b, d) = (Uint::cast_from(a), Uint::cast_from(b), Uint::cast_from(d));
     // D = 3 mod 4
@@ -468,7 +492,7 @@ fn test_select_poly() {
     let polybase: Uint = isqrt(n << 1) >> mlog;
     let polybase = u128::cast_from(isqrt(polybase));
     let (d, r) = sieve_for_polys(&n, polybase, 512)[0];
-    let Poly { a, b, d, .. } = make_poly(&n, &d, &r);
+    let Poly { a, b, d, .. } = make_poly(&n, d, &r);
     let (a, b, _) = (Uint::cast_from(a), Uint::cast_from(b), Uint::cast_from(d));
 
     let target: Uint = isqrt(n << 1) << (mlog - 1);
@@ -492,12 +516,75 @@ struct Workspace {
     roots1: Vec<u32>,
     roots2: Vec<u32>,
     recycled: Option<sieve::SieveRecycle>,
+    /// Precomputed inverses of D modulo the factor base.
+    /// This is done for several D's at a time to benefit
+    /// from batch inversion.
+    /// If D is divisible by p, the value is zero.
+    dinv_modp: Vec<Box<[u32]>>,
+}
+
+impl Workspace {
+    fn batch_inversion(&mut self, s: &SieveMPQS, ds: Vec<u128>) {
+        assert!(!ds.is_empty());
+        let len = s.fbase.len();
+        for i in 0..ds.len() {
+            if i >= self.dinv_modp.len() {
+                self.dinv_modp.push(vec![0; len].into_boxed_slice());
+            } else {
+                assert!(self.dinv_modp[i].len() == len);
+            }
+        }
+        let mut prods = vec![0; ds.len()];
+        let mut dmod = vec![0; ds.len()];
+        for i in 0..len {
+            // The overhead of batch inversion is rather large
+            // (3 modular multiplications and vector allocations)
+            let div = s.fbase.div(i);
+            let inv = &s.inverters[i];
+            // Compute cumulative products (excluding zeros).
+            let mut prod = 1;
+            for j in 0..ds.len() {
+                let dm = div.div64.mod_u128(ds[j]);
+                dmod[j] = dm;
+                if dm != 0 {
+                    prod = div.divmod64(prod * dm).1;
+                }
+                prods[j] = prod;
+            }
+            let invprod = inv.invert(prod as u32, &div.div64);
+            // 1/d[i] = product(j < i, d[j]) * product(j > i, d[j]) * invprod
+            let mut prodrev = invprod as u64;
+            for j in 0..ds.len() {
+                let jrev = ds.len() - 1 - j;
+                let dm = dmod[jrev];
+                if dm == 0 {
+                    self.dinv_modp[jrev][i] = 0;
+                    continue;
+                }
+                if jrev > 0 {
+                    // prodrev = product(j > i, d[j]) * invprod
+                    self.dinv_modp[jrev][i] = div.divmod64(prodrev * prods[jrev - 1]).1 as u32;
+                    prodrev = div.divmod64(prodrev * dm).1;
+                } else {
+                    self.dinv_modp[jrev][i] = prodrev as u32;
+                };
+                debug_assert!(
+                    div.divmod64(self.dinv_modp[jrev][i] as u64 * dm).1 == 1,
+                    "dmod={dmod:?} p={} j={jrev} d={dm} dinv={}",
+                    div.div31.p,
+                    self.dinv_modp[jrev][i]
+                );
+            }
+        }
+    }
 }
 
 /// Process a single MPQS unit of work, corresponding to a polynomial.
-fn mpqs_poly(s: &SieveMPQS, a: &Uint, r: &Uint, wks: &mut Workspace) {
+///
+/// The idx is the location of the precomputed inverses of D.
+fn mpqs_poly(s: &SieveMPQS, idx: usize, d: u128, r: &Uint, wks: &mut Workspace) {
     let n = &s.n;
-    let pol = make_poly(n, a, r);
+    let pol = make_poly(n, d, r);
     let nblocks = s.interval_size as usize / BLOCK_SIZE;
     if s.prefs.verbose(Verbosity::Debug) {
         let pmin = pol.eval(0).0;
@@ -520,12 +607,14 @@ fn mpqs_poly(s: &SieveMPQS, a: &Uint, r: &Uint, wks: &mut Workspace) {
     wks.roots2.resize(fbase.len(), 0);
     let roots1 = &mut wks.roots1[..];
     let roots2 = &mut wks.roots2[..];
+    let dinvs = wks.dinv_modp[idx].as_ref();
     for i in 0..fbase.len() {
         let p = fbase.p(i);
         let r = fbase.r(i);
         let div = fbase.div(i);
         let inv = &s.inverters[i];
-        let (r1, r2) = pol.prepare_prime(p, r, div, inv, start_offset as i32);
+        let dinv = dinvs[i];
+        let (r1, r2) = pol.prepare_prime(p, r, div, inv, dinv, start_offset as i32);
         roots1[i] = r1;
         roots2[i] = r2;
     }
