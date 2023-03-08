@@ -49,11 +49,7 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
     let fb = fbase.len();
     let mm = prefs.interval_size.unwrap_or(mpqs_interval_size(&n) as u32);
     if prefs.verbose(Verbosity::Info) {
-        if mm > 2 << 20 {
-            eprintln!("Sieving interval size {}M", mm >> 20);
-        } else {
-            eprintln!("Sieving interval size {}k", mm >> 10);
-        }
+        eprintln!("Sieving interval size {}k", mm >> 10);
     }
 
     // Precompute starting point for polynomials
@@ -652,20 +648,22 @@ fn fb_size(n: &Uint, use_double: bool) -> u32 {
     sz
 }
 
+/// Interval size used during MPQS.
 fn mpqs_interval_size(n: &Uint) -> i64 {
     let sz = n.bits();
     let nblocks = match sz {
         0..=100 => 1,
-        // The cost of switching polynomials grows very fast, and it needs to be a small ratio
-        // of CPU cost for optimal efficiency.
-        // So the interval size needs to grow along with factor base size.
-        //
-        // For 200 bits n, we need at least 30 blocks.
-        // For 240 bits n, we need at least 50 blocks
-        // For 320 bits n, we need at least 300 blocks
-        101..=128 => sz / 30,           // 3..4
-        129..=256 => (sz * sz) / 1000,  // 16..64
-        257.. => (sz * sz) / 100 - 550, // 75..500
+        // The cost of switching polynomials grows with the factor base,
+        // but small intervals have a higher probability to yield smooth numbers.
+        // A good balance is obtained when the CPU cost of polynomial roots is
+        // between 10% and 30%.
+        101..=129 => 1,
+        130..=189 => 2 + (sz - 130) / 10, // 64k + 32k every 10 bits
+        190..=219 => 8 + 8 * (sz - 190) / 30, // 256k..512k
+        220..=259 => 16 + 2 * (sz - 220) / 10, // 512k..768k (transition to double large primes)
+        260..=289 => 24 + 8 * (sz - 260) / 10, // 768k then 8 blocks every 10 bits.
+        290..=319 => 48 + 16 * (sz - 290) / 10, // 1536k, then 16 blocks every 10 bits.
+        320.. => 96 + 32 * (sz - 320) / 10, // 3M, then 32 blocks every 10 bits.
     };
     nblocks as i64 * sieve::BLOCK_SIZE as i64
 }
