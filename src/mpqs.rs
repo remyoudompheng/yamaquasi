@@ -9,6 +9,7 @@
 //! Math. Comp. 48, 1987, <https://doi.org/10.1090/S0025-5718-1987-0866119-8>
 
 use std::cmp::{max, min};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::RwLock;
 
 use bnum::cast::CastFrom;
@@ -49,12 +50,17 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
         eprintln!("Smoothness bound {}", fbase.bound());
         eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls());
     }
-    let mut target = fbase.len() * 8 / 10;
     let fb = fbase.len();
     let mm = prefs.interval_size.unwrap_or(mpqs_interval_size(&n) as u32);
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Sieving interval size {}k", mm >> 10);
     }
+
+    // Precompute inverters: preparation of polynomials is almost entirely spent
+    // in modular inversion.
+    let inverters: Vec<_> = (0..fb)
+        .map(|idx| arith::Inverter::new(fbase.p(idx)))
+        .collect();
 
     // Precompute starting point for polynomials
     // See [Silverman, Section 3]
@@ -67,14 +73,6 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
     };
     let d_target = max(Uint::from_digit(3), isqrt(a_target));
     assert!(d_target.bits() < 127);
-    let maxprime = fbase.bound() as u64;
-
-    // Precompute inverters: preparation of polynomials is almost entirely spent
-    // in modular inversion.
-    let inverters: Vec<_> = (0..fb)
-        .map(|idx| arith::Inverter::new(fbase.p(idx)))
-        .collect();
-
     // Generate multiple polynomials at a time.
     // For small numbers (90-140 bits) usually less than
     // a hundred polynomials will provide enough relations.
@@ -83,31 +81,23 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
     let polystride = match n.bits() {
         // Interval size is larger than sqrt(n)
         0..=32 => 200,
-        // Small integer, process enough number at a time.
-        33..=64 => 50 * 20 / 7 * d_target.bits(),
-        65..=130 => 20 * 20 / 7 * d_target.bits(),
-        // Enough for efficient parallelism
-        131..=240 => 100 * 20 / 7 * d_target.bits(),
-        241.. => 200 * 20 / 7 * d_target.bits(),
+        // Arrange so that each block contains at least a prime p=4k+3
+        // hoping that we don't hit a huge prime gap.
+        33..=256 => 50 * 20 / 7 * d_target.bits(),
+        257.. => 200 * 20 / 7 * d_target.bits(),
     };
 
     // Start slightly before the ideal values to get a few nice polynomials.
-    let mut polybase = u128::cast_from(d_target);
+    let d_target = u128::cast_from(d_target);
+    let mut polybase = d_target;
     if polybase >= 20 {
         polybase -= min(polybase / 10, polystride.into());
     }
+    // Polynomials will be processed in blocks of size polystride
+    // (50 primes on average). In multi-threaded mode, threads will process
+    // blocks in a round-robin fashion.
 
-    let mut d_r_values = sieve_for_polys(&n, polybase, polystride as usize);
-    let mut polyidx = 0;
-    let mut polys_done: u64 = 0;
-    if prefs.verbose(Verbosity::Verbose) {
-        eprintln!(
-            "Generated {} polynomials D={}..{} optimal={d_target}",
-            d_r_values.len(),
-            d_r_values[0].0,
-            d_r_values.last().unwrap().0
-        );
-    }
+    let maxprime = fbase.bound() as u64;
     let mut maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(&n));
     if maxlarge > u32::MAX as u64 {
         maxlarge = u32::MAX as u64;
@@ -136,103 +126,78 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
         maxlarge,
         use_double,
         interval_size: mm as i64,
+        d_target,
         rels: &rels,
         prefs,
+        polys_done: AtomicUsize::new(0),
+        target: AtomicUsize::new(fb * 8 / 10),
+        done: AtomicBool::new(false),
     };
 
-    // Recycled memory space (for single-threaded mode).
-    let mut wks = Workspace::default();
-    loop {
-        // Pop next polynomial.
-        if polyidx == d_r_values.len() {
-            let rels = rels.read().unwrap();
-            let gap = rels.gap(s.fbase);
-            if gap == 0 {
-                if prefs.verbose(Verbosity::Info) {
-                    eprintln!("Found enough relations");
+    fn process_poly_block(s: &SieveMPQS, wks: &mut Workspace, dbase: u128, dstride: usize) {
+        let d_r_values = sieve_for_polys(&s.n, dbase, dstride);
+        if s.prefs.verbose(Verbosity::Verbose) {
+            eprintln!(
+                "Generated {} polynomials D={}..{} optimal={}",
+                d_r_values.len(),
+                d_r_values[0].0,
+                d_r_values.last().unwrap().0,
+                s.d_target
+            );
+        }
+        for chunk in d_r_values.chunks(16) {
+            wks.batch_inversion(&s, chunk.iter().map(|&(d, _)| d).collect());
+            for (idx, (d, r)) in chunk.iter().enumerate() {
+                mpqs_poly(&s, idx, *d, r, wks);
+                if s.finished() {
+                    return;
                 }
+            }
+        }
+        if s.prefs.verbose(Verbosity::Info) {
+            let polys_done = s.polys_done.load(Ordering::SeqCst) as u64;
+            s.rels.read().unwrap().log_progress(format!(
+                "Sieved {}M {polys_done} polys",
+                (polys_done * s.interval_size as u64) >> 20,
+            ));
+        }
+    }
+
+    if let Some(pool) = tpool {
+        // FIXME: We shouldn't have such a value: iterate and stop when finished.
+        let maxblocks = if n.bits() < 256 { 100_000 } else { 1_000_000 };
+        pool.install(|| {
+            (0..maxblocks).into_par_iter().for_each(|blkno| {
+                if s.finished() || prefs.abort() {
+                    return;
+                }
+                let dbase = polybase + blkno as u128 * polystride as u128;
+                // Workspace is reused during the entire block.
+                let mut wks = Workspace::default();
+                process_poly_block(&s, &mut wks, dbase, polystride as usize);
+            })
+        })
+    } else {
+        let mut wks = Workspace::default();
+        for blkno in 0.. {
+            let dbase = polybase + blkno as u128 * polystride as u128;
+            process_poly_block(&s, &mut wks, dbase, polystride as usize);
+            if prefs.abort() || s.finished() {
                 break;
-            }
-            if prefs.verbose(Verbosity::Info) {
-                rels.log_progress(format!(
-                    "Sieved {}M {polys_done} polys",
-                    (polys_done * s.interval_size as u64) >> 20,
-                ));
-            }
-            polybase += polystride as u128;
-            d_r_values = sieve_for_polys(&n, polybase, polystride as usize);
-            polyidx = 0;
-            if prefs.verbose(Verbosity::Verbose) {
-                eprintln!(
-                    "Generated {} polynomials D={}..{} optimal={d_target}",
-                    d_r_values.len(),
-                    d_r_values[0].0,
-                    d_r_values.last().unwrap().0
-                );
-            }
-        }
-        if let Some(pool) = tpool {
-            // Parallel sieving: do all polynomials at once.
-            // We don't have many polynomials but optimistically assume
-            // that splitting in chunks will enable memory recycling
-            // while still being efficient for parallelism.
-            pool.install(|| {
-                d_r_values[polyidx..].par_chunks(8).for_each(|chunk| {
-                    let mut wks = Workspace::default();
-                    wks.batch_inversion(&s, chunk.iter().map(|&(d, _)| d).collect());
-                    for (idx, (d, r)) in chunk.iter().enumerate() {
-                        mpqs_poly(&s, idx, *d, r, &mut wks);
-                    }
-                })
-            });
-            polys_done += (d_r_values.len() - polyidx) as u64;
-            polyidx = d_r_values.len();
-        } else {
-            // Sequential sieving
-            let (d, r) = &d_r_values[polyidx];
-            if polyidx % 16 == 0 {
-                // Batch inversion for 16 next polynomials.
-                // Keep small batches to avoid excessive memory footprint.
-                let batchend = min(d_r_values.len(), polyidx + 16);
-                wks.batch_inversion(
-                    &s,
-                    d_r_values[polyidx..batchend]
-                        .iter()
-                        .map(|&(d, _)| d)
-                        .collect(),
-                );
-            }
-            mpqs_poly(&s, polyidx % 16, *d, r, &mut wks);
-            polyidx += 1;
-            polys_done += 1;
-        }
-        if prefs.abort() {
-            return vec![];
-        }
-        let rels = rels.read().unwrap();
-        if rels.len() >= target {
-            let gap = rels.gap(s.fbase);
-            if gap == 0 {
-                if prefs.verbose(Verbosity::Info) {
-                    eprintln!("Found enough relations");
-                }
-                break;
-            } else {
-                if prefs.verbose(Verbosity::Info) {
-                    eprintln!("Need {} additional relations", gap);
-                }
-                target += gap + std::cmp::min(10, fb / 4);
             }
         }
     }
+    if prefs.abort() {
+        return vec![];
+    }
+    let polys_done = s.polys_done.load(Ordering::SeqCst) as u64;
+    let mut rels = rels.into_inner().unwrap();
     if prefs.verbose(Verbosity::Info) {
-        let r = rels.read().unwrap();
-        r.log_progress(format!(
+        rels.log_progress(format!(
             "Sieved {}M {polys_done} polys",
-            (polys_done * s.interval_size as u64) >> 20
+            (polys_done * mm as u64) >> 20
         ));
     }
-    let mut rels = rels.into_inner().unwrap();
     if rels.len() > fbase.len() + relations::MIN_KERNEL_SIZE {
         rels.truncate(fbase.len() + relations::MIN_KERNEL_SIZE)
     }
@@ -637,6 +602,7 @@ fn mpqs_poly(s: &SieveMPQS, idx: usize, d: u128, r: &Uint, wks: &mut Workspace) 
         sieve_block_poly(s, &pol, roots12, &mut state);
         state.next_block();
     }
+    s.polys_done.fetch_add(1, Ordering::SeqCst);
     wks.recycled = Some(state.recycle());
 }
 
@@ -694,8 +660,42 @@ struct SieveMPQS<'a> {
     maxlarge: u64,
     use_double: bool,
     interval_size: i64,
+    d_target: u128,
     rels: &'a RwLock<RelationSet>,
     prefs: &'a Preferences,
+    polys_done: AtomicUsize,
+    target: AtomicUsize,
+    done: AtomicBool,
+}
+
+impl SieveMPQS<'_> {
+    fn finished(&self) -> bool {
+        // The relaxed memory ordering is fine, it's okay to do
+        // some extra work if threads don't fully synchronize.
+        if self.done.load(Ordering::Relaxed) {
+            return true;
+        }
+        let relcount = { self.rels.read().unwrap().len() };
+        if relcount >= self.target.load(Ordering::Relaxed) {
+            let gap = { self.rels.read().unwrap().gap(self.fbase) };
+            if gap == 0 {
+                if self.prefs.verbose(Verbosity::Info) {
+                    eprintln!("Found enough relations");
+                }
+                self.done.store(true, Ordering::Relaxed);
+                return true;
+            } else {
+                if self.prefs.verbose(Verbosity::Info) {
+                    eprintln!("Need {} additional relations", gap);
+                }
+                self.target.store(
+                    relcount + gap + std::cmp::min(10, self.fbase.len() / 4),
+                    Ordering::Relaxed,
+                );
+            }
+        }
+        false
+    }
 }
 
 // Sieve using a selected polynomial
