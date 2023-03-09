@@ -26,7 +26,7 @@ pub fn factor_base_size(n: &Uint) -> u32 {
 /// The bitsize argument refers to the size of the input integer
 /// without multiplier (because the multiplied integer should be more
 /// effective that the original integer: it should not use larger parameters).
-//
+///
 /// Compared to MPQS, classical quadratic sieve uses a single huge interval
 /// so resulting numbers (2M sqrt(n)) can be larger by 10-20 bits.
 pub fn qs_fb_size(bitsize: u32, use_double: bool) -> u32 {
@@ -37,6 +37,15 @@ pub fn qs_fb_size(bitsize: u32, use_double: bool) -> u32 {
         let rt = ((256 * (bitsize + 40)) as f64).sqrt() as u32;
         let (a, b) = (rt / 12, rt % 12);
         min(500_000, (12 + b) << (a - 10))
+    }
+}
+
+pub fn mpqs_fb_size(bitsize: u32, use_double: bool) -> u32 {
+    if bitsize < 390 {
+        select_fb_size(bitsize, use_double, MPQS_FBSIZES)
+    } else {
+        // maximal factor base size
+        500_000
     }
 }
 
@@ -84,6 +93,45 @@ const QS_FBSIZES: &'static [(u32, u32, u32)] = &[
     (240, 80000, 50000),
     (250, 120000, 65000),
     (260, 160000, 80000),
+];
+
+/// Preferred sizes for factor bases in MPQS.
+/// The polynomial roots computation is costly so smaller factor bases (compared to SIQS).
+const MPQS_FBSIZES: &'static [(u32, u32, u32)] = &[
+    // Bit size, Factor base (no double large prime), Factor base (with double large prime)
+    (16, 16, 16),
+    (70, 100, 60),
+    (80, 130, 70),
+    (90, 160, 90),
+    (100, 200, 120),
+    (110, 300, 150),
+    (120, 400, 200),
+    (130, 550, 250),
+    (140, 750, 300),
+    (150, 1000, 380),
+    (160, 1400, 500),
+    (170, 2000, 800),
+    (180, 3000, 1300),
+    (190, 5000, 2000),
+    (200, 8000, 3000),
+    (210, 11000, 4500),
+    (220, 15000, 7000),
+    (230, 20000, 10000),
+    (240, 26000, 14000),
+    (250, 35000, 18000),
+    (260, 40000, 23000),
+    (270, 48000, 30000),
+    (280, 60000, 40000),
+    (290, 75000, 55000),
+    (300, 90000, 75000),
+    (310, 110000, 90000),
+    (320, 140000, 110000),
+    (330, 200000, 130000),
+    (340, 260000, 170000),
+    (350, 330000, 220000),
+    (360, 400000, 280000),
+    // Maximal factor base size
+    (390, 500000, 500000),
 ];
 
 /// ECM/P-1 suitable parameters according to values of B2.

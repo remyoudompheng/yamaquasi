@@ -26,35 +26,37 @@ import pymqs
 
 SIZES = [
     # Bit length, Factor base size, FB size for 2x large prime, Samples
-    (70, 100, 80, 600),
-    (80, 130, 100, 400),
-    (90, 160, 120, 400),
-    (100, 200, 150, 100),
-    (110, 300, 200, 80),
-    (120, 400, 250, 40),
-    (130, 450, 300, 40),
-    (140, 800, 360, 20),
-    (150, 1000, 480, 10),
-    (160, 1200, 500, 10),
-    (170, 1800, 800, 10),
-    (180, 3000, 1800, 8),
-    (190, 5000, 2000, 7),
-    (200, 8000, 3000, 6),
-    (210, 14000, 4500, 5),
-    (220, 17000, 7000, 4),
-    (230, 20000, 10000, 4),
-    (240, 25000, 15000, 4),
-    (250, 35000, 18000, 4),
+    (70, 100, 60, 500),
+    (80, 130, 70, 500),
+    (90, 160, 90, 500),
+    (100, 200, 120, 500),
+    (110, 300, 150, 500),
+    (120, 400, 200, 500),
+    (130, 550, 250, 400),
+    (140, 750, 300, 300),
+    (150, 1000, 380, 200),
+    (160, 1400, 500, 150),
+    (170, 2000, 800, 100),
+    (180, 3000, 1300, 60),
+    (190, 5000, 2000, 40),
+    (200, 8000, 3000, 25),
+    (210, 11000, 4500, 15),
+    (220, 15000, 7000, 10),
+    (230, 20000, 10000, 8),
     # Double large primes activated by default
+    (240, 26000, 14000, 6),
+    (250, 35000, 18000, 4),
     (260, 40000, 23000, 4),
-    (270, 50000, 30000, 4),
+    (270, 48000, 30000, 4),
     (280, 60000, 40000, 3),
-    (290, 75000, 50000, 3),
-    (300, 90000, 60000, 3),
-    (310, 110000, 80000, 3),
-    # Extrapolated
-    (330, 300000, 130000, 3),
-    (360, 500000, 280000, 3),
+    (290, 75000, 55000, 3),
+    (300, 90000, 75000, 3),
+    (310, 110000, 90000, 3),
+    (320, 140000, 110000, 3),
+    (330, 200000, 130000, 3),
+    (340, 260000, 170000, 3),
+    (350, 330000, 220000, 3),
+    (360, 400000, 280000, 3),
 ]
 
 
@@ -63,15 +65,15 @@ def get_prime(bits):
 
 
 for sz, fb1, fb2, count in SIZES:
-    use_double = sz >= 256
+    # Generate fixed numbers for the various factor base size
+    # (otherwise the comparison does not make sense)
+    ns = [get_prime(sz // 2) * get_prime(sz // 2) for _ in range(count)]
+    use_double = sz > 224
     fb0 = fb2 if use_double else fb1
     print(
         f"Bit length {sz} default factor base size {fb0} (double large prime = {use_double})"
     )
     step = int(fb0 * sqrt(log(fb0)) / 25)
-    # Generate fixed numbers for the various factor base size
-    # (otherwise the comparison does not make sense)
-    ns = [get_prime(sz // 2) * get_prime(sz // 2) for _ in range(count)]
     for fb in (fb0 - 2 * step, fb0 - step, fb0, fb0 + step, fb0 + 2 * step):
         # Add threads to speedup large numbers.
         if sz < 225:

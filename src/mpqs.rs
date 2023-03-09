@@ -36,10 +36,14 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
         return vec![];
     }
 
-    let use_double = prefs.use_double.unwrap_or(n.bits() > 256);
+    // Use double large primes sooner than SIQS:
+    // it allows smaller factor bases, speeding up roots computation.
+    let use_double = prefs.use_double.unwrap_or(n.bits() > 224);
     // Choose factor base. Sieve twice the number of primes
     // (n will be a quadratic residue for only half of them)
-    let fb = prefs.fb_size.unwrap_or(fb_size(&n, use_double));
+    let fb = prefs
+        .fb_size
+        .unwrap_or(params::mpqs_fb_size(norig.bits(), use_double));
     let fbase = FBase::new(n, fb);
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Smoothness bound {}", fbase.bound());
@@ -108,12 +112,17 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
     if maxlarge > u32::MAX as u64 {
         maxlarge = u32::MAX as u64;
     }
+    if use_double && maxlarge < 2 * maxprime {
+        // Double large prime implies large prime
+        maxlarge = 2 * maxprime
+    }
     if prefs.verbose(Verbosity::Info) {
-        eprintln!("Max large prime {maxlarge}");
+        eprintln!("Max large prime B2={maxlarge} ({} B1)", maxlarge / maxprime);
         if use_double {
+            let maxdouble = maxprime * maxprime * double_large_factor(&n);
             eprintln!(
-                "Max double large prime {}",
-                maxlarge * fbase.bound() as u64 * 2
+                "Max double large prime {maxdouble} ({} B1²)",
+                maxdouble / maxprime / maxprime
             );
         }
     }
@@ -631,23 +640,6 @@ fn mpqs_poly(s: &SieveMPQS, idx: usize, d: u128, r: &Uint, wks: &mut Workspace) 
     wks.recycled = Some(state.recycle());
 }
 
-// MPQS can use the same factor bases as SIQS but since the polynomial
-// initalization cost is higher, we can include a penalty for the larger
-// intervals.
-fn fb_size(n: &Uint, use_double: bool) -> u32 {
-    // When using type 2 polynomials, values will be twice smaller
-    // as if the size of n was down by 2 bits.
-    let nshift = if n.low_u64() % 8 == 1 { n >> 2 } else { *n };
-    let penalty = n.bits() / 32;
-    let mut sz = params::factor_base_size(&(nshift << penalty));
-    // Reduce factor base size when using large double primes
-    // since they will cover the large prime space.
-    if use_double {
-        sz /= 2;
-    }
-    sz
-}
-
 /// Interval size used during MPQS.
 fn mpqs_interval_size(n: &Uint) -> i64 {
     let sz = n.bits();
@@ -684,6 +676,17 @@ fn large_prime_factor(n: &Uint) -> u64 {
     }
 }
 
+// Parameter such that double large primes are bounded by D*B1^2
+// where B1 is the factor base bound.
+fn double_large_factor(n: &Uint) -> u64 {
+    let sz = n.bits() as u64;
+    match sz {
+        0..=128 => 2,
+        129..=255 => 2 + (sz - 128) / 2,
+        256.. => sz - 192,
+    }
+}
+
 struct SieveMPQS<'a> {
     n: Uint,
     fbase: &'a FBase,
@@ -705,7 +708,7 @@ fn sieve_block_poly(s: &SieveMPQS, pol: &Poly, roots: [&[u32]; 2], st: &mut siev
     let max_cofactor: u64 = if s.use_double {
         // We don't want double large prime to reach maxlarge^2
         // See siqs.rs
-        maxlarge * maxprime * 2
+        maxprime * maxprime * double_large_factor(&s.n)
     } else if maxlarge > maxprime {
         // Use the large prime variation
         maxlarge
