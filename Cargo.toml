@@ -11,15 +11,15 @@ license = "BSD3"
 [dependencies]
 arguments = "0.7"
 bitvec_simd = "0.20"
-bnum = { version = "0.3", features = ["numtraits"] }
+bnum = { version = "0.8", features = ["numtraits"] }
 num-integer = "0.1"
-num-traits = "*"
+num-traits = "0.2"
 rand = "0.8"
-rayon = "1.6"
+rayon = "1.7"
 wide = "0.7"
 
 [dev-dependencies]
-brunch = "0.3"
+brunch = "0.5"
 
 [profile.release]
 debug = 2
