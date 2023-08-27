@@ -1,4 +1,4 @@
-// Copyright 2022 Rémy Oudompheng. All rights reserved.
+// Copyright 2022, 2023 Rémy Oudompheng. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -53,7 +53,7 @@ pub fn siqs(
     // Choose factor base. Sieve twice the number of primes
     // (n will be a quadratic residue for only half of them)
     let fb = prefs.fb_size.unwrap_or(fb_size(&n, use_double));
-    let fbase = FBase::new(n, fb);
+    let fbase = FBase::new(Int::cast_from(n), fb);
     if let Err(e) = fbase.check_divisors() {
         if prefs.verbose(Verbosity::Info) {
             eprintln!("Unexpected divisor {} in factor base", e.0);
@@ -69,7 +69,8 @@ pub fn siqs(
 
     // Generate all values of A now.
     let nfacs = nfactors(&n) as usize;
-    let factors = select_siqs_factors(&fbase, &n, nfacs, mm as usize, prefs.verbosity);
+    let nint = Int::cast_from(n);
+    let factors = select_siqs_factors(&fbase, &nint, nfacs, mm as usize, prefs.verbosity);
     let a_ints = select_a(&factors, a_value_count(&n), prefs.verbosity);
     let polys_per_a = 1 << (nfacs - 1);
     if prefs.verbose(Verbosity::Info) {
@@ -103,7 +104,14 @@ pub fn siqs(
         }
     }
 
-    let s = SieveSIQS::new(&n, &fbase, maxlarge, maxdouble, mm as usize, prefs);
+    let s = SieveSIQS::new(
+        Int::cast_from(n),
+        &fbase,
+        maxlarge,
+        maxdouble,
+        mm as usize,
+        prefs,
+    );
 
     // When using multiple threads, each thread will sieve a different A
     // to avoid breaking parallelism during 'prepare_a'.
@@ -249,7 +257,7 @@ pub fn siqs_calibrate(n: Uint) {
     let lf0 = large_prime_factor(n);
     let use_double = n.bits() > 256;
     // This factor base is only to select A
-    let fbase0 = FBase::new(*n, fb0);
+    let fbase0 = FBase::new(Int::cast_from(*n), fb0);
     let mm0 = interval_size(n, use_double);
     let blocks0 = mm0 as i64 / BLOCK_SIZE as i64;
 
@@ -273,7 +281,8 @@ pub fn siqs_calibrate(n: Uint) {
         if blks > 0 {
             // FIXME: functions have their own parameters.
             let mm = BLOCK_SIZE * (blks as usize);
-            let factors = select_siqs_factors(&fbase0, n, nfacs, mm, prefs.verbosity);
+            let factors =
+                select_siqs_factors(&fbase0, &Int::cast_from(*n), nfacs, mm, prefs.verbosity);
             let a_ints = select_a(&factors, a_value_count(n), prefs.verbosity);
             let a0 = a_ints[0];
             let polys_per_a = 1 << (nfacs - 1);
@@ -286,7 +295,7 @@ pub fn siqs_calibrate(n: Uint) {
             } else {
                 0
             };
-            let s = SieveSIQS::new(n, &fbase0, 0, maxdouble, mm, &prefs);
+            let s = SieveSIQS::new(Int::cast_from(*n), &fbase0, 0, maxdouble, mm, &prefs);
             let pol = Poly::first(&s, a);
             eprintln!("min(P) ~ {}", pol.eval(0).0);
             eprintln!("max(P) ~ {}", pol.eval(mm as i64 / 2).0);
@@ -300,7 +309,7 @@ pub fn siqs_calibrate(n: Uint) {
     for fb in [4 * fb0 / 5, fb0, 5 * fb0 / 4] {
         // Print separator: results have different meanings
         eprintln!("===");
-        let fbase = FBase::new(*n, fb);
+        let fbase = FBase::new(Int::cast_from(*n), fb);
         for lf in [lf0] {
             for use_double in [false, true] {
                 for (idx, &mm) in mms.iter().enumerate() {
@@ -314,7 +323,8 @@ pub fn siqs_calibrate(n: Uint) {
                         0
                     };
                     let df = maxdouble / maxprime / maxprime;
-                    let s = SieveSIQS::new(n, &fbase, maxlarge, maxdouble, mm, &prefs);
+                    let s =
+                        SieveSIQS::new(Int::cast_from(*n), &fbase, maxlarge, maxdouble, mm, &prefs);
                     // Measure metrics
                     let t0 = std::time::Instant::now();
                     let a = &prepare_a(factors, &aint, &fbase, -(mm as i64) / 2);
@@ -523,7 +533,7 @@ fn double_large_factor(n: &Uint) -> u64 {
 // Polynomial selection
 
 pub struct Factors<'a> {
-    pub n: &'a Uint,
+    pub n: Int,
     pub target: U256,
     pub nfacs: usize,
     // A sorted list of factors
@@ -532,7 +542,7 @@ pub struct Factors<'a> {
     pub inverses: Vec<Vec<u32>>,
 }
 
-fn polytype(n: &Uint) -> PolyType {
+fn polytype(n: &Int) -> PolyType {
     // Make sure to not use unoptimized BUint.mod
     if n.low_u64() % 4 == 1 {
         PolyType::Type2
@@ -548,7 +558,7 @@ fn polytype(n: &Uint) -> PolyType {
 /// values close to the target.
 pub fn select_siqs_factors<'a>(
     fb: &'a FBase,
-    n: &'a Uint,
+    n: &Int,
     nfacs: usize,
     mm: usize,
     v: Verbosity,
@@ -557,14 +567,15 @@ pub fn select_siqs_factors<'a>(
     // Note that if N=1 mod 4, the target can be sqrt(N/2)/M
     // giving smaller numbers.
     // Don't go below 2000 for extremely small numbers.
+    let nabs = n.unsigned_abs();
     let target = max(
         Uint::from(2000u64),
         if polytype(n) == PolyType::Type2 {
             // Type 2
-            arith::isqrt(n >> 1) / Uint::from(mm as u64 / 2)
+            arith::isqrt(nabs >> 1) / Uint::from(mm as u64 / 2)
         } else {
             // Type 1
-            arith::isqrt(n << 1) / Uint::from(mm as u64 / 2)
+            arith::isqrt(nabs << 1) / Uint::from(mm as u64 / 2)
         },
     );
     let idx = fb
@@ -583,7 +594,7 @@ pub fn select_siqs_factors<'a>(
     // Make sure that selected factors don't divide n.
     // Also never take the first prime (usually 2).
     let selection: Vec<Prime> = selected_idx
-        .filter(|&i| i > 0 && i < fb.len() && fb.div(i).mod_uint(n) != 0)
+        .filter(|&i| i > 0 && i < fb.len() && fb.div(i).mod_uint(&nabs) != 0)
         .map(|i| fb.prime(i))
         .collect();
     // Precompute inverses
@@ -602,7 +613,7 @@ pub fn select_siqs_factors<'a>(
     }
     assert!(target.bits() < 256);
     Factors {
-        n,
+        n: *n,
         target: U256::cast_from(target),
         nfacs,
         factors: selection.into_iter().collect(),
@@ -665,7 +676,7 @@ pub fn select_a(f: &Factors, want: usize, v: Verbosity) -> Vec<Uint> {
     //
     // We are going to select ~2^W best products of W primes among 2W
 
-    let mut div = a_tolerance_divisor(f.n);
+    let mut div = a_tolerance_divisor(&f.n.unsigned_abs());
     assert!(div >= 3);
     let mut amin = f.target - f.target / div as u64;
     let mut amax = f.target + f.target / div as u64;
@@ -794,7 +805,7 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase, start_offset: i64
     // Compute modular inverses of A or 1 for prime factors of A.
     let mut ainv = vec![];
     let mut factors_idx = vec![];
-    let a2a = if polytype(f.n) == PolyType::Type1 {
+    let a2a = if polytype(&f.n) == PolyType::Type1 {
         U256::cast_from(*a)
     } else {
         U256::cast_from(*a) << 1
@@ -851,7 +862,7 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase, start_offset: i64
         }
         deltas_mod_p.push(deltas);
     }
-    debug_assert!((root0 * root0) % a == f.n % a);
+    debug_assert!((Int::cast_from(root0 * root0) - f.n) % Int::cast_from(*a) == Int::ZERO);
     // Compute root0 - rp[i] - start_offset
     let mut root0_mod_p = Vec::with_capacity(fbase.len());
     for pidx in 0..fbase.len() {
@@ -890,32 +901,30 @@ pub struct Poly {
     // Precomputed roots
     r1p: Box<[u32]>,
     r2p: Box<[u32]>,
-    n: Uint,
+    n: Int,
 }
 
 impl Poly {
     // Returns v, y such that:
     // P(x) = v
-    // y^2 = A P(x) mod n
-    // For type 1, y = Ax + B
-    // For type 2, y = (Ax + B/2)
+    // y^2 = 4 A P(x) mod n
+    // For type 1, y = 2 Ax + 2 B = P'(x)
+    // For type 2, y = 2 A x + B = P'(x)
     //
     // v is always small (candidate to be smooth)
-    // y can be large (due to halving modulo n)
-    fn eval(&self, x: i64) -> (I256, Int) {
+    fn eval(&self, x: i64) -> (I256, I256) {
         let x = I256::from(x);
         if self.kind == PolyType::Type1 {
             // Evaluate polynomial Ax^2 + 2Bx+ C
             let ax_b = self.a * x + self.b;
             let v = (ax_b + self.b) * x + self.c;
-            (v, Int::cast_from(ax_b))
+            (v, ax_b << 1)
         } else {
             // Evaluate polynomial Ax^2 + Bx+ C
             let ax = self.a * x;
             let v = (ax + self.b) * x + self.c;
             // Build ax + (n+b)//2 (b is odd)
-            let b_half = (Int::cast_from(self.b) + Int::cast_from(self.n)) >> 1;
-            let y = Int::cast_from(ax) + b_half;
+            let y = (ax << 1) + self.b;
             (v, y)
         }
     }
@@ -927,7 +936,7 @@ impl Poly {
         for i in 0..a.factors.len() {
             b += a.roots[i][0];
         }
-        let typ = polytype(s.n);
+        let typ = polytype(&s.n);
         if typ == PolyType::Type2 {
             assert!(b.bit(0));
         }
@@ -953,7 +962,7 @@ impl Poly {
             root: 0,
             r1p: r1p.into_boxed_slice(),
             r2p: r2p.into_boxed_slice(),
-            n: *s.n,
+            n: s.n,
         };
         _finish_polynomial(s, a, &mut pol);
         pol
@@ -1019,11 +1028,11 @@ fn _finish_polynomial(s: &SieveSIQS, a: &A, pol: &mut Poly) {
     assert!(pol.b.is_positive());
     let b = Uint::cast_from(pol.b);
     let c = if polytype == PolyType::Type1 {
-        debug_assert!((b * b) % a.a == n % a.a);
-        (Int::cast_from(b * b) - Int::from_bits(n)) / Int::from_bits(a.a)
+        debug_assert!(((Int::cast_from(b * b) - n) % Int::cast_from(a.a)).is_zero());
+        (Int::cast_from(b * b) - n) / Int::from_bits(a.a)
     } else {
-        debug_assert!((b * b) % (a.a << 2) == n % (a.a << 2));
-        (Int::cast_from(b * b) - Int::from_bits(n)) / Int::from_bits(a.a << 2)
+        debug_assert!(((Int::cast_from(b * b) - n) % Int::cast_from(a.a << 2)).is_zero());
+        (Int::cast_from(b * b) - n) / Int::from_bits(a.a << 2)
     };
 
     // Manually repair roots modulo 2 for Type 2
@@ -1127,7 +1136,7 @@ fn siqs_sieve_poly(
 }
 
 pub struct SieveSIQS<'a> {
-    pub n: &'a Uint,
+    pub n: Int,
     nsqrt: Uint,
     pub interval_size: usize,
     pub fbase: &'a FBase,
@@ -1146,7 +1155,7 @@ pub struct SieveSIQS<'a> {
 
 impl<'a> SieveSIQS<'a> {
     pub fn new(
-        n: &'a Uint,
+        n: Int,
         fb: &'a FBase,
         maxlarge: u64,
         maxdouble: u64,
@@ -1161,12 +1170,17 @@ impl<'a> SieveSIQS<'a> {
             offsets[idx] = off;
         }
         let fb_size = fb.len();
+        let nabs = n.unsigned_abs();
         SieveSIQS {
-            n,
-            nsqrt: arith::isqrt(*n),
+            n: n.clone(),
+            nsqrt: if n.is_positive() {
+                arith::isqrt(nabs)
+            } else {
+                Uint::ZERO
+            },
             interval_size,
             fbase: fb,
-            rels: RwLock::new(RelationSet::new(*n, fb_size, maxlarge)),
+            rels: RwLock::new(RelationSet::new(nabs, fb_size, maxlarge)),
             maxlarge,
             maxdouble,
             offset_modp: offsets,
@@ -1204,10 +1218,16 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
     };
     let target = s.n.bits() / 2 + msize.bits() - max_cofactor.bits();
 
-    let n = s.n;
+    let n = s.n.unsigned_abs();
     let (idx, facss) = st.smooths(target as u8, Some(pol.root), [&pol.r1p, &pol.r2p]);
     for (i, facs) in idx.into_iter().zip(facss) {
+        // P'(x)^2 - 4AP(x) = N
         let (v, y) = pol.eval(st.offset + (i as i64));
+        let y: Int = if y.bit(0) {
+            (Int::cast_from(y) + s.n) >> 1u32
+        } else {
+            Int::cast_from(y) >> 1u32
+        };
         // xrel^2 = (Ax+B)^2 = A * v mod n
         // v is never divisible by A
         let Some(((p, q), mut factors)) = fbase::cofactor(
@@ -1225,7 +1245,7 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
             }
         }
         let mut x = y.abs().to_bits();
-        if &x > n {
+        if &x > &n {
             x %= n; // should not happen?
         }
         if s.prefs.verbose(Verbosity::Debug) {
@@ -1242,7 +1262,7 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
             factors,
             cyclelen: 1,
         };
-        debug_assert!(rel.verify(s.n));
+        debug_assert!(rel.verify(&n));
         s.rels.write().unwrap().add(rel, pq);
     }
 }
@@ -1273,9 +1293,15 @@ fn test_poly_a() {
         let want = if want > 50 { want / 20 } else { want };
 
         let fb_size = params::factor_base_size(n);
-        let fb = fbase::FBase::new(*n, fb_size);
+        let fb = fbase::FBase::new(Int::cast_from(*n), fb_size);
 
-        let facs = select_siqs_factors(&fb, n, nfacs as usize, 256 << 10, Verbosity::Info);
+        let facs = select_siqs_factors(
+            &fb,
+            &Int::cast_from(*n),
+            nfacs as usize,
+            256 << 10,
+            Verbosity::Info,
+        );
         let target = Uint::cast_from(facs.target);
 
         let a_vals = select_a(&facs, want, Verbosity::Info);
@@ -1329,13 +1355,13 @@ fn test_poly_prepare() {
 
     const N240: &str = "1563849171863495214507949103370077342033765608728382665100245282240408041";
     let n = Uint::from_str(N240).unwrap();
-    let fb = fbase::FBase::new(n, 10000);
+    let fb = fbase::FBase::new(Int::cast_from(n), 10000);
     let mm = 1_usize << 20;
     let prefs = Preferences::default();
-    let s = SieveSIQS::new(&n, &fb, fb.bound() as u64, 0, mm, &prefs);
+    let s = SieveSIQS::new(Int::cast_from(n), &fb, fb.bound() as u64, 0, mm, &prefs);
     // Prepare A values
     // Only test 10 A values and 35 polynomials per A.
-    let f = select_siqs_factors(&fb, &n, 9, mm, prefs.verbosity);
+    let f = select_siqs_factors(&fb, &Int::cast_from(n), 9, mm, prefs.verbosity);
     let start_offset = -(mm as i64) / 2;
     let a_ints = select_a(&f, 10, prefs.verbosity);
     for a_int in &a_ints {
@@ -1373,7 +1399,12 @@ fn test_poly_prepare() {
             // Check that (Ax+B)^2 - n = A(Ax^2+2Bx+C)
             for x in [1u64, 100, 50000] {
                 let (v, y) = pol.eval(x as i64);
-                let u = Int::cast_from(y) * Int::cast_from(y);
+                let y: Int = if y.bit(0) {
+                    (Int::cast_from(y) + Int::cast_from(n)) >> 1u32
+                } else {
+                    Int::cast_from(y) >> 1u32
+                };
+                let u = y * y;
                 let v = Int::cast_from(v);
                 if pol.kind == PolyType::Type1 {
                     assert_eq!(u, pa * v);

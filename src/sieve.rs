@@ -911,7 +911,7 @@ fn test_sieve_block() {
     use std::str::FromStr;
 
     let n = Uint::from_str("176056248311966088405511077755578022771").unwrap();
-    let fb = fbase::FBase::new(n, 2566);
+    let fb = fbase::FBase::new(Int::cast_from(n), 2566);
     let nsqrt = crate::arith::isqrt(n);
     let qs = qsieve::SieveQS::new(n, &fb, 1 << 30, false);
     let (mut s, [r1s, r2s]) = qs.init_sieve_for_test();

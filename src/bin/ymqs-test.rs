@@ -15,8 +15,8 @@ use rand::{self, Rng};
 
 use yamaquasi::arith::U256;
 use yamaquasi::fbase;
-use yamaquasi::Uint;
 use yamaquasi::{factor, isprime64, pseudoprime, Algo, Preferences, Verbosity};
+use yamaquasi::{Int, Uint};
 
 fn main() {
     let arg = arguments::parse(std::env::args()).unwrap();
@@ -32,7 +32,7 @@ fn main() {
     let mode = arg.get::<String>("mode").unwrap_or("auto".into());
     let bits = arg.get::<u32>("bits").unwrap_or(64);
     // Prepare a factor base for trial division
-    let fbase = fbase::FBase::new(Uint::from(0u64), 2 * bits);
+    let fbase = fbase::FBase::new(Int::ZERO, 2 * bits);
     let mut rng = rand::thread_rng();
     let mut i = 0;
     let t0 = Instant::now();

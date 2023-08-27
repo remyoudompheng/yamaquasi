@@ -45,7 +45,7 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
     let fb = prefs
         .fb_size
         .unwrap_or(params::mpqs_fb_size(norig.bits(), use_double));
-    let fbase = FBase::new(n, fb);
+    let fbase = FBase::new(Int::cast_from(n), fb);
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Smoothness bound {}", fbase.bound());
         eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls());

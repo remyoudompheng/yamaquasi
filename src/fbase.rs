@@ -10,7 +10,7 @@ use std::cmp::{max, min};
 use crate::arith::{self, Num, I256};
 use crate::arith_montgomery;
 use crate::pollard_rho;
-use crate::{Uint, UnexpectedFactor};
+use crate::{Int, Uint, UnexpectedFactor};
 
 /// A factor base consisting of 24-bit primes related to an input number N,
 /// along with useful precomputed data.
@@ -32,7 +32,7 @@ impl FBase {
     // Resolution of reverse index.
     const REVIDX_STEP: usize = 128;
 
-    pub fn new(n: Uint, size: u32) -> Self {
+    pub fn new(n: Int, size: u32) -> Self {
         // We may be very unlucky and not get enough primes, because we keep
         // only those having n as a quadratic residue. So take a few extra primes.
         let ps = primes(2 * size + 32);
@@ -381,7 +381,9 @@ impl PrimeSieve {
     }
 }
 
-fn prepare_factor_base(nk: &Uint, primes: &[u32]) -> Vec<(u64, u64, arith::Dividers)> {
+fn prepare_factor_base(nk: &Int, primes: &[u32]) -> Vec<(u64, u64, arith::Dividers)> {
+    let nk_abs = nk.unsigned_abs();
+    let neg = nk.is_negative();
     primes
         .iter()
         .filter_map(|&p| {
@@ -390,7 +392,11 @@ fn prepare_factor_base(nk: &Uint, primes: &[u32]) -> Vec<(u64, u64, arith::Divid
                 return None;
             }
             let div = arith::Dividers::new(p);
-            let nk: u64 = div.mod_uint(nk);
+            let nk: u64 = if neg {
+                p as u64 - div.mod_uint(&nk_abs)
+            } else {
+                div.mod_uint(&nk_abs)
+            };
             let r = arith::sqrt_mod(nk, p as u64)?;
             Some((p as u64, r, div))
         })

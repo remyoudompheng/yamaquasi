@@ -1,3 +1,4 @@
+use bnum::cast::CastFrom;
 use brunch::Bench;
 use num_integer::Integer;
 use std::str::FromStr;
@@ -7,7 +8,7 @@ use yamaquasi::arith::{self, isqrt, sqrt_mod, U1024, U256, U512};
 use yamaquasi::arith_gcd::inv_mod;
 use yamaquasi::arith_montgomery::ZmodN;
 use yamaquasi::{fbase, relations};
-use yamaquasi::{pseudoprime, Uint};
+use yamaquasi::{pseudoprime, Int, Uint};
 
 const N256: &str = "23374454829417248628572084580131596971714744792262629806178559231363799527559";
 const N1024: &str = "151952459753478002695019426760010155060843495222227274132379609296400121039669231304773230812180118038110720749720126892606028066428592635259881846540972318178085451540072789829262653604582400850027888747669577446006250152212830539247245081046528476394714357280530544575057923657219245807858740056085355550029";
@@ -148,7 +149,7 @@ brunch::benches! {
         let xs: Vec<Uint> = (0..3000_u64)
             .map(|i| ((Uint::from(i) * seed + Uint::from(i * i)) * seed ) % n).collect();
         // Generate many factors
-        let fb = fbase::FBase::new(n, 3000);
+        let fb = fbase::FBase::new(Int::cast_from(n), 3000);
         let mut facs = vec![];
         for (idx, &f) in fb.primes.iter().enumerate() {
             let exp = 2 * ((13 * idx) % 16);
@@ -165,7 +166,7 @@ brunch::benches! {
         let xs: Vec<Uint> = (0..10000_u64)
             .map(|i| ((Uint::from(i) * seed + Uint::from(i * i)) * seed ) % n).collect();
         // Generate many factors
-        let fb = fbase::FBase::new(n, 10000);
+        let fb = fbase::FBase::new(Int::cast_from(n), 10000);
         let mut facs = vec![];
         for (idx, &f) in fb.primes.iter().enumerate() {
             let exp = 2 * ((13 * idx) % 24);
