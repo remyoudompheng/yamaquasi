@@ -926,8 +926,11 @@ fn test_sieve_block() {
         let ii = Uint::from(i as u64);
         let x = Int::from_bits((nsqrt + ii) * (nsqrt + ii) - n);
         assert!(x.abs().bits() < 255);
-        let Some(((p, q), _)) = fbase::cofactor(&fb, &I256::cast_from(x), &facs[..], 1_000_000, false)
-            else { continue };
+        let Some(((p, q), _)) =
+            fbase::cofactor(&fb, &I256::cast_from(x), &facs[..], 1_000_000, false)
+        else {
+            continue;
+        };
         if p == 1 && q == 1 {
             res.push(i);
         }

@@ -1727,6 +1727,8 @@ fn test_suyama11() {
     let zn = ZmodN::new(Uint::from_digit(311 * 3259));
     let s = Suyama11::new(&zn).unwrap();
     // 14G is at infinity modulo 311 so 15G is undefined.
-    let Err(err) = s.element(31) else { panic!("expected error") };
+    let Err(err) = s.element(31) else {
+        panic!("expected error")
+    };
     assert!(err.0 == Uint::from_digit(311) || err.0 == Uint::from_digit(3259));
 }

@@ -824,24 +824,27 @@ fn test_pm1_uint() {
     )
     .unwrap();
     let n = p128 * p256;
-    let Some((p, q)) = pm1_impl(&n, 30000, 1e6, v)
-        else { panic!("failed Pollard P-1") };
+    let Some((p, q)) = pm1_impl(&n, 30000, 1e6, v) else {
+        panic!("failed Pollard P-1")
+    };
     assert_eq!(p, vec![p128]);
     assert_eq!(q, p256);
 
     // p-1 = 2*59*35509
     // Checks that blocks of primes are properly iterated (35509 is in the first block).
     let n = Uint::from_digit(2 * 59 * 35509 + 1) * p256;
-    let Some((ps, q)) = pm1_impl(&n, 200, 40e3, v)
-        else { panic!("failed Pollard P-1") };
+    let Some((ps, q)) = pm1_impl(&n, 200, 40e3, v) else {
+        panic!("failed Pollard P-1")
+    };
     assert_eq!(ps, vec![Uint::from_digit(2 * 59 * 35509 + 1)]);
     assert_eq!(q, p256);
 
     // 2^3 * 3 * 7 * 11 * 31 * 131 * 1109 * 1699 * 8317 * 5984903
     let p = Uint::from_str("703855808397033138741049").unwrap();
     let n = p * p256;
-    let Some((ps, q)) = pm1_impl(&n, 30000, 18e6, v)
-        else { panic!("failed Pollard P-1") };
+    let Some((ps, q)) = pm1_impl(&n, 30000, 18e6, v) else {
+        panic!("failed Pollard P-1")
+    };
     assert_eq!(ps, vec![p]);
     assert_eq!(q, p256);
 
@@ -849,16 +852,18 @@ fn test_pm1_uint() {
     // 13195979 % 9240 = 1259 is small, positive
     let p = Uint::from_str("3714337881767344119949").unwrap();
     let n = p * p256;
-    let Some((ps, q)) = pm1_impl(&n, 2000, 19e6, v)
-        else { panic!("failed Pollard P-1") };
+    let Some((ps, q)) = pm1_impl(&n, 2000, 19e6, v) else {
+        panic!("failed Pollard P-1")
+    };
     assert_eq!(ps, vec![p]);
     assert_eq!(q, p256);
 
     // All factors are smooth:
     // 271750259454572315341 = 91033 * 6472621 * 461201737
     let n = Uint::from_str("271750259454572315341").unwrap();
-    let Some((ps, q)) = pm1_impl(&n, 16384, 40e3, v)
-        else { panic!("failed Pollard P-1") };
+    let Some((ps, q)) = pm1_impl(&n, 16384, 40e3, v) else {
+        panic!("failed Pollard P-1")
+    };
     assert!(q == Uint::ONE && ps.len() == 3);
     assert_eq!(ps[0] * ps[1] * ps[2], n);
 
@@ -866,16 +871,18 @@ fn test_pm1_uint() {
     // p-1 = 2*2*5*5*53*53*90289 where 53*53 > 1024
     // 90289 == 240 * 377 - 191
     let n = Uint::from_str("11006826704494670034453871933878113282264711716157472884058231906746817631612072806760744802006592942296873294117168841323692902345209717573").unwrap();
-    let Some((p, q)) = pm1_impl(&n, 16384, 100e3, v)
-        else { panic!("failed Pollard P-1") };
+    let Some((p, q)) = pm1_impl(&n, 16384, 100e3, v) else {
+        panic!("failed Pollard P-1")
+    };
     assert_eq!(p, vec![Uint::from_digit(25_362_180_101)]);
     assert_eq!(p[0] * q, n);
 
     // Has factor p=285355513 such that p-1 = 8*9*13*304867
     // 304867 % 6 = 1
     let n = Uint::from_str("71269410553363907234778342302207120711196110927").unwrap();
-    let Some((p, q)) = pm1_impl(&n, 20, 450e3, v)
-        else { panic!("failed Pollard P-1") };
+    let Some((p, q)) = pm1_impl(&n, 20, 450e3, v) else {
+        panic!("failed Pollard P-1")
+    };
     assert_eq!(p, vec![Uint::from_digit(285_355_513)]);
     assert_eq!(p[0] * q, n);
 }

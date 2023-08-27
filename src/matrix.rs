@@ -655,8 +655,9 @@ impl SmallMat {
             orig_idx[i] = i as u8;
         }
         for i in 0..LSIZE {
-            let Some(j) = m.0.iter().position(|&v| lz(v) == i)
-                else { continue };
+            let Some(j) = m.0.iter().position(|&v| lz(v) == i) else {
+                continue;
+            };
             let idx = orig_idx[j] as usize;
             mask |= 1 << idx;
             m.0.swap(rank, j);
@@ -749,8 +750,9 @@ impl SmallMat {
         let mut minv = Self::identity();
         // Run Gauss elimination
         for i in 0..LSIZE {
-            let Some(j) = m.0.iter().position(|&v| lz(v) == i)
-                else { return None };
+            let Some(j) = m.0.iter().position(|&v| lz(v) == i) else {
+                return None;
+            };
             m.0.swap(i, j);
             minv.0.swap(i, j);
             for j in (i + 1)..LSIZE {

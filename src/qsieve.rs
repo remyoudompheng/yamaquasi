@@ -437,10 +437,11 @@ fn sieve_block(s: &SieveQS, st: &mut Sieve, roots: [&[u32]; 2], backward: bool) 
         // Evaluate polynomial (x + nsqrt)^2 - n
         let candidate =
             I256::from(x as i128 * x as i128) + I256::from(2 * x) * s.nsqrt + s.nsqrt2_minus_n;
-        let Some(((p, q), factors)) = fbase::cofactor(
-            s.fbase, &candidate, &facs,
-            maxlarge, s.use_double)
-            else { continue };
+        let Some(((p, q), factors)) =
+            fbase::cofactor(s.fbase, &candidate, &facs, maxlarge, s.use_double)
+        else {
+            continue;
+        };
         let pq = if q > 1 { Some((p, q)) } else { None };
         let cofactor = p * q;
         //println!("i={} smooth {} cofactor {}", i, cabs, cofactor);

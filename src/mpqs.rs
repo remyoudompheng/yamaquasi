@@ -724,10 +724,10 @@ fn sieve_block_poly(s: &SieveMPQS, pol: &Poly, roots: [&[u32]; 2], st: &mut siev
         // Evaluate polynomial
         let (v, mut x) = pol.eval(st.offset + i as i64);
         debug_assert!((x * x) % n == Uint::cast_from(Int::cast_from(*n) + Int::cast_from(v)) % n);
-        let Some(((p, q), factors)) = fbase::cofactor(
-            s.fbase, &v, &facs,
-            maxlarge, s.use_double)
-            else { continue };
+        let Some(((p, q), factors)) = fbase::cofactor(s.fbase, &v, &facs, maxlarge, s.use_double)
+        else {
+            continue;
+        };
         let pq = if q > 1 { Some((p, q)) } else { None };
         let cofactor = p * q;
         if p > 1 {

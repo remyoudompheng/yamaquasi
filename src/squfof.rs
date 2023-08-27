@@ -129,8 +129,9 @@ fn test_squfof() {
         for j in 0..50 {
             let p = 123456789 + i * 2468;
             let q = 198765431 + j * 1590;
-            let Some((x,y))  = squfof(p*q)
-                else { panic!("failed for {p}*{q}") };
+            let Some((x, y)) = squfof(p * q) else {
+                panic!("failed for {p}*{q}")
+            };
             assert!(x > 1 && y > 1 && x * y == p * q);
         }
     }

@@ -283,8 +283,9 @@ fn test_pp1() {
     // p+1 is smooth (max factor 1303)
     // 9^2-4 is not a square mod p
     let p = Uint::from_digit(4106365409);
-    let Some((fs, q)) = pp1(p * p128, 9, 1500, 30e3, v)
-        else { panic!("failed Pollard P-1") };
+    let Some((fs, q)) = pp1(p * p128, 9, 1500, 30e3, v) else {
+        panic!("failed Pollard P-1")
+    };
     assert_eq!(fs, vec![p]);
     assert_eq!(q, p128);
     assert!(pp1(p * p128, 5, 1500, 30e3, v).is_none());
@@ -293,8 +294,9 @@ fn test_pp1() {
     // 3^2-4 is not a square mod p
     // 25293451 % 9240 = 3571
     let p = Uint::from_digit(253042395370635947);
-    let Some((fs, q)) = pp1(p * p128, 3, 80_000, 28e6, v)
-        else { panic!("failed Pollard P+1") };
+    let Some((fs, q)) = pp1(p * p128, 3, 80_000, 28e6, v) else {
+        panic!("failed Pollard P+1")
+    };
     assert_eq!(fs, vec![p]);
     assert_eq!(q, p128);
 
@@ -302,8 +304,9 @@ fn test_pp1() {
     // 3^2-4 is not a square mod p
     // 21323177 % 9240 = 6497
     let p = Uint::from_digit(213266888931348167);
-    let Some((fs, q)) = pp1(p * p128, 3, 2000, 28e6, v)
-        else { panic!("failed Pollard P+1") };
+    let Some((fs, q)) = pp1(p * p128, 3, 2000, 28e6, v) else {
+        panic!("failed Pollard P+1")
+    };
     assert_eq!(fs, vec![p]);
     assert_eq!(q, p128);
 }

@@ -1057,8 +1057,9 @@ fn _finish_polynomial(s: &SieveSIQS, a: &A, pol: &mut Poly) {
             cp = p as u64 - cp;
         }
         let multiplier = if polytype == PolyType::Type1 { 2 } else { 1 };
-        let Some(binv) = arith::inv_mod64(multiplier * bp, p as u64)
-            else { unreachable!("no inverse of b={bp} mod p={p}") };
+        let Some(binv) = arith::inv_mod64(multiplier * bp, p as u64) else {
+            unreachable!("no inverse of b={bp} mod p={p}")
+        };
         let r = div.divmod64(cp * binv).1 as u32;
         let off = s.offset_modp[pidx];
         let r = if r >= off { r - off } else { r + p - off };
@@ -1231,9 +1232,14 @@ fn sieve_block_poly(s: &SieveSIQS, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
         // xrel^2 = (Ax+B)^2 = A * v mod n
         // v is never divisible by A
         let Some(((p, q), mut factors)) = fbase::cofactor(
-            s.fbase, &v, &facs,
-            maxlarge, s.maxdouble > maxprime * maxprime)
-            else { continue };
+            s.fbase,
+            &v,
+            &facs,
+            maxlarge,
+            s.maxdouble > maxprime * maxprime,
+        ) else {
+            continue;
+        };
         let pq = if q > 1 { Some((p, q)) } else { None };
         let cofactor = p * q;
         // Complete with factors of A

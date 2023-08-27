@@ -285,8 +285,9 @@ impl RelationSet {
             self.walk_doubles(p as u32);
         } else {
             // Cofactor is above 32 bits: is it a double prime?
-            let Some((p, q)) = pq
-                else { return; };
+            let Some((p, q)) = pq else {
+                return;
+            };
             assert!(p >> 32 == 0 && q >> 32 == 0);
             self.n_doubles += 1;
             // Hold pp-relations for a while
@@ -320,13 +321,17 @@ impl RelationSet {
             .map(|&k| k)
             .collect();
         for key @ &(p, q) in &pqs {
-            let Some(r) = self.doubles.remove(key) else { continue };
+            let Some(r) = self.doubles.remove(key) else {
+                continue;
+            };
             self.doubles_rev.remove(&(q, p));
             let ok = self.combine_double(&r.unpack(), p as u64, q as u64);
             assert!(ok);
         }
         for key @ &(q, p) in &qps {
-            let Some(r) = self.doubles.remove(&(p, q)) else { continue };
+            let Some(r) = self.doubles.remove(&(p, q)) else {
+                continue;
+            };
             self.doubles_rev.remove(key);
             let ok = self.combine_double(&r.unpack(), p as u64, q as u64);
             assert!(ok);
@@ -354,7 +359,9 @@ impl RelationSet {
             return;
         }
         for (p, q) in delete {
-            let Some(r) = self.doubles.remove(&(p, q)) else { continue };
+            let Some(r) = self.doubles.remove(&(p, q)) else {
+                continue;
+            };
             self.doubles_rev.remove(&(q, p));
             let ok = self.combine_double(&r.unpack(), p as u64, q as u64);
             assert!(ok);
@@ -686,7 +693,9 @@ pub fn final_step(n: &Uint, fb: &FBase, rels: &[Relation], verbose: Verbosity) -
         if verbose >= Verbosity::Debug {
             eprintln!("Same square mod N: {} {}", a, b);
         }
-        let Some((p, q)) = try_factor(n, a, b) else { continue };
+        let Some((p, q)) = try_factor(n, a, b) else {
+            continue;
+        };
         divisors.push(p);
         divisors.push(q);
         nontrivial += 1;
@@ -851,8 +860,9 @@ impl PackedRelation {
             }
         }
         ints.push(n);
-        let [x0,x1,x2,x3,x4,x5,x6,x7,cofactor,clen] = ints[..10]
-            else { unreachable!("corrupted relation data") };
+        let [x0, x1, x2, x3, x4, x5, x6, x7, cofactor, clen] = ints[..10] else {
+            unreachable!("corrupted relation data")
+        };
         let x = U512::from_digits([x0, x1, x2, x3, x4, x5, x6, x7]);
         let mut factors = vec![];
         let mut idx = 10;
