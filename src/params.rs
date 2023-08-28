@@ -49,6 +49,15 @@ pub fn mpqs_fb_size(bitsize: u32, use_double: bool) -> u32 {
     }
 }
 
+pub fn clsgrp_fb_size(bitsize: u32, use_double: bool) -> u32 {
+    if bitsize < 320 {
+        select_fb_size(bitsize, use_double, CLASSGROUP_FBSIZES)
+    } else {
+        // maximal factor base size
+        50_000
+    }
+}
+
 fn select_fb_size(bitsize: u32, use_double: bool, table: &'static [(u32, u32, u32)]) -> u32 {
     let idx = table.partition_point(|&(sz, _, _)| sz <= bitsize);
     if idx == 0 {
@@ -132,6 +141,21 @@ const MPQS_FBSIZES: &'static [(u32, u32, u32)] = &[
     (360, 400000, 280000),
     // Maximal factor base size
     (390, 500000, 500000),
+];
+
+// Factor bases are smaller for class group computations.
+// We follow the growth of SIQS parameters but 2x-4x smaller.
+const CLASSGROUP_FBSIZES: &'static [(u32, u32, u32)] = &[
+    (16, 16, 16),
+    (80, 50, 30),
+    (120, 100, 80),
+    (150, 200, 120),
+    (200, 1500, 800),
+    (220, 3000, 1500),
+    (250, 7000, 3500),
+    (280, 12000, 8000),
+    (320, 30000, 20000),
+    (350, 70000, 50000),
 ];
 
 /// ECM/P-1 suitable parameters according to values of B2.

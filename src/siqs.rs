@@ -25,6 +25,9 @@
 //! => only valid if N=1 mod 4, A=sqrt(N/2)/M max value sqrt(N)M/2
 //! If N=5 mod 8 all polynomial values will be odd.
 //! If N=1 mod 8 all polynomial values will be even.
+//!
+//! Parts of this file are used by the class group computation [crate::classgroup]
+//! and accept negative values of N.
 
 use std::cmp::{max, min};
 use std::collections::BTreeSet;
@@ -384,7 +387,7 @@ fn fb_size(n: &Uint, use_double: bool) -> u32 {
 // For inputs over 80 bits, max prime is above 1000
 // k factors are fine for input size (15..20)*k + 30 or better (18..22)k + 30
 // for factors between 200..1000 (A = sqrt(N) / M)
-fn nfactors(n: &Uint) -> u32 {
+pub(crate) fn nfactors(n: &Uint) -> u32 {
     match n.bits() {
         0..=64 => 2,
         65..=89 => 3,
@@ -398,7 +401,7 @@ fn nfactors(n: &Uint) -> u32 {
     }
 }
 
-fn a_value_count(n: &Uint) -> usize {
+pub(crate) fn a_value_count(n: &Uint) -> usize {
     // Many polynomials are required to accomodate small intervals.
     // When sz=180 we need more than 5k polynomials
     // When sz=200 we need more than 20k polynomials
@@ -653,7 +656,25 @@ pub struct A<'a> {
     rp: Vec<u32>,
 }
 
-fn a_quality(a_s: &[Uint]) -> f64 {
+impl<'a> A<'a> {
+    pub fn description(&self) -> String {
+        format!(
+            "{} (factors {})",
+            self.a,
+            self.factors
+                .iter()
+                .map(|item| item.p.to_string())
+                .collect::<Vec<_>>()[..]
+                .join("*")
+        )
+    }
+
+    pub fn len(&self) -> usize {
+        self.factors.len()
+    }
+}
+
+pub(crate) fn a_quality(a_s: &[Uint]) -> f64 {
     let (amin, amax) = (a_s.first().unwrap(), a_s.last().unwrap());
     let a_diff = amax - amin;
     let a_mid: Uint = (amin + amax) >> 1;
@@ -884,7 +905,7 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase, start_offset: i64
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum PolyType {
+pub(crate) enum PolyType {
     Type1,
     Type2,
 }
@@ -892,19 +913,47 @@ enum PolyType {
 #[derive(Debug)]
 pub struct Poly {
     idx: usize,
-    kind: PolyType,
+    pub(crate) kind: PolyType,
     a: I256,
     b: I256,
     c: I256,
     // Rounded root of the polynomial
     root: u32,
     // Precomputed roots
-    r1p: Box<[u32]>,
-    r2p: Box<[u32]>,
+    pub(crate) r1p: Box<[u32]>,
+    pub(crate) r2p: Box<[u32]>,
     n: Int,
 }
 
 impl Poly {
+    pub(crate) fn description(&self) -> String {
+        format!("A={} B={}", self.a, self.b)
+    }
+
+    /// Returns the prime factorization of self as
+    /// a binary quadratic form. This is a product
+    /// of p^±1 for p dividing A, and the sign is determined
+    /// by the choice of b mod p.
+    pub(crate) fn factors(&self, a: &A) -> Vec<(u64, i64)> {
+        // We don't support discriminant 4D
+        assert!(self.kind == PolyType::Type2);
+        let mut res = vec![];
+        for f in &a.factors {
+            // The sign is 1 if and only if b % p = b+
+            // FIXME: avoid computation and store information directly.
+            let mut bp = f.div.mod_uint(&self.b.unsigned_abs());
+            if self.b.is_negative() {
+                bp = f.p - bp;
+            }
+            if bp == f.b_plus() {
+                res.push((f.p, 1));
+            } else {
+                res.push((f.p, -1));
+            }
+        }
+        res
+    }
+
     // Returns v, y such that:
     // P(x) = v
     // y^2 = 4 A P(x) mod n
@@ -912,7 +961,7 @@ impl Poly {
     // For type 2, y = 2 A x + B = P'(x)
     //
     // v is always small (candidate to be smooth)
-    fn eval(&self, x: i64) -> (I256, I256) {
+    pub(crate) fn eval(&self, x: i64) -> (I256, I256) {
         let x = I256::from(x);
         if self.kind == PolyType::Type1 {
             // Evaluate polynomial Ax^2 + 2Bx+ C
