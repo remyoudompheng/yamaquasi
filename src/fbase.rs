@@ -378,9 +378,22 @@ impl PrimeSieve {
             self.sieve.fill(false);
             for (&p, off) in self.smallprimes.iter().zip(self.offsets.iter_mut()) {
                 let mut o = *off as usize;
+                let p = p as usize;
+                loop {
+                    let o3p = o + 3 * p;
+                    if o3p >= self.sieve.len() {
+                        break;
+                    }
+                    unsafe {
+                        *self.sieve.get_unchecked_mut(o) = true;
+                        *self.sieve.get_unchecked_mut(o + p) = true;
+                        *self.sieve.get_unchecked_mut(o + 2 * p) = true;
+                    }
+                    o = o3p;
+                }
                 while o < self.sieve.len() {
                     self.sieve[o] = true;
-                    o += p as usize;
+                    o += p;
                 }
                 *off = o as u32 - 65536;
             }
