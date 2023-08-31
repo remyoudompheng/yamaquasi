@@ -936,16 +936,28 @@ impl Poly {
     /// by the choice of b mod p.
     pub(crate) fn factors(&self, a: &A) -> Vec<(u64, i64)> {
         // We don't support discriminant 4D
-        assert!(self.kind == PolyType::Type2);
         let mut res = vec![];
         for f in &a.factors {
             // The sign is 1 if and only if b % p = b+
             // FIXME: avoid computation and store information directly.
-            let mut bp = f.div.mod_uint(&self.b.unsigned_abs());
-            if self.b.is_negative() {
-                bp = f.p - bp;
-            }
-            if bp == f.b_plus() {
+            let plus = if self.kind == PolyType::Type1 {
+                // Even case
+                let mut bp = f.div.mod_uint(&(self.b.unsigned_abs() << 1));
+                if self.b.is_negative() {
+                    bp = f.p - bp;
+                }
+                debug_assert!(bp == f.b_plus(true) || f.p - bp == f.b_plus(true));
+                bp == f.b_plus(true)
+            } else {
+                // Odd case
+                let mut bp = f.div.mod_uint(&self.b.unsigned_abs());
+                if self.b.is_negative() {
+                    bp = f.p - bp;
+                }
+                debug_assert!(bp == f.b_plus(false) || f.p - bp == f.b_plus(false));
+                bp == f.b_plus(false)
+            };
+            if plus {
                 res.push((f.p, 1));
             } else {
                 res.push((f.p, -1));

@@ -181,12 +181,26 @@ impl<'a> Prime<'a> {
     /// quadratic form with norm p and discriminant N.
     ///
     /// This is the unique odd square root of N modulo p.
-    pub fn b_plus(&self) -> u64 {
-        // FIXME: make this value the default for self.r ?
-        if self.r % 2 == 0 {
-            self.p - self.r
+    ///
+    /// If even is true, the discriminant is 4N and the even
+    /// square root of 4N is returned.
+    pub fn b_plus(&self, even: bool) -> u64 {
+        let r = self.r;
+        if even {
+            // Discriminant 4D, prime initialized with D
+            let r = self.div.modu63(2 * r);
+            if r % 2 == 0 {
+                r
+            } else {
+                self.p - r
+            }
         } else {
-            self.r
+            // Odd discriminant D
+            if r % 2 == 1 {
+                r
+            } else {
+                self.p - r
+            }
         }
     }
 }

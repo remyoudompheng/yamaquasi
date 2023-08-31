@@ -35,7 +35,7 @@ use crate::fbase::{self, FBase};
 use crate::params::clsgrp_fb_size;
 use crate::relationcls::{CRelation, CRelationSet};
 use crate::sieve::{self, BLOCK_SIZE};
-use crate::siqs::{self, prepare_a, select_a, select_siqs_factors, Factors, Poly, A};
+use crate::siqs::{self, prepare_a, select_a, select_siqs_factors, Factors, Poly, PolyType, A};
 use crate::{Int, Preferences, Uint, Verbosity};
 
 pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -> () {
@@ -46,7 +46,10 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
     let fb = prefs
         .fb_size
         .unwrap_or(clsgrp_fb_size(dabs.bits(), use_double));
-    let fbase = FBase::new(*d, fb);
+    // WARNING: SIQS doesn't use 4D if D=3 mod 4
+    // This creates some redundant *2 /2 operations.
+    let dred = if dabs.low_u64() & 3 == 0 { *d >> 2 } else { *d };
+    let fbase = FBase::new(dred, fb);
     // It is fine to have a divisor of D in the factor base.
     let mm = prefs.interval_size.unwrap_or(interval_size(d, use_double));
     if prefs.verbose(Verbosity::Info) {
@@ -57,7 +60,7 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
 
     // Generate all values of A now.
     let nfacs = siqs::nfactors(&dabs) as usize;
-    let factors = select_siqs_factors(&fbase, &d, nfacs, mm as usize, prefs.verbosity);
+    let factors = select_siqs_factors(&fbase, &dred, nfacs, mm as usize, prefs.verbosity);
     let a_count = a_value_count(&dabs);
     let a_ints = select_a(&factors, a_count, prefs.verbosity);
     let polys_per_a = 1 << (nfacs - 1);
@@ -91,7 +94,8 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
             );
         }
     }
-    let qs = siqs::SieveSIQS::new(*d, &fbase, maxlarge, maxdouble, mm as usize, prefs);
+    // WARNING: use reduced D again.
+    let qs = siqs::SieveSIQS::new(dred, &fbase, maxlarge, maxdouble, mm as usize, prefs);
     let target_rels = qs.fbase.len() * 2 + 32;
     let s = ClSieve {
         d: *d,
@@ -166,7 +170,7 @@ fn a_value_count(n: &Uint) -> usize {
         0..=48 => 8,
         49..=71 => 12,
         // We are using small intervals until 200 bits, many As are needed.
-        72..=150 => 10 * (sz - 71),    // 10..800
+        72..=150 => 10 * (sz - 71),   // 10..800
         151..=199 => 40 * (sz - 131), // 800..2800
         200.. => 300 * (sz - 190),    // 3000..20000 (sz=256).. 34000 (sz=360)
         _ => unreachable!("impossible"),
@@ -308,6 +312,11 @@ fn sieve_block_poly(s: &ClSieve, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
         // If a binary form q=(A, B, C) represents v, then
         // (Bx=2AX+B)^2 - 4AV = -D and q is equivalent to (V, -Bx, A)
         // and (A, B, C) * (V, Bx, A) == 1 in the class group
+        //
+        // If the discriminant is 4D, the quadratic form is
+        // q = (A, 2B, C) where B^2-AC=D and q(x)=V
+        // then (2Ax+2B)^2-4AV = 4D and q is equivalent to
+        // (V, -2Ax-2B, A)
         let Some(((p, q), intfacs)) = fbase::cofactor(
             qs.fbase,
             &v,
@@ -323,10 +332,16 @@ fn sieve_block_poly(s: &ClSieve, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
         }
         // Convert integer factors to ideal factors
         // product(ai^±1) = product(pi^ei)
+        //
+        // This is done by comparing bx % p
+        // with the reference square root of D mod p
+        // (with the same parity as D).
+
         let mut factors = vec![];
         for (p, e) in intfacs {
             if p == 2 {
                 // Positive exponent if b % 4 = 1
+                // Note that if D=4D', ideal class [2] has order 2.
                 if !bx.bit(1) {
                     factors.push((2, e as i32))
                 } else {
@@ -335,15 +350,16 @@ fn sieve_block_poly(s: &ClSieve, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
                 continue;
             }
             let pr = qs.fbase.prime(qs.fbase.idx(p as u32).unwrap());
-            assert!(pr.p == p as u64);
+            debug_assert!(pr.p == p as u64);
+            let ref_bp = pr.b_plus(pol.kind == PolyType::Type1);
             let mut bp = pr.div.mod_uint(&bx.unsigned_abs());
-            if bx.is_negative() {
+            if bx.is_negative() && bp > 0 {
                 bp = p as u64 - bp;
             }
-            let e = if bp == pr.b_plus() {
+            let e = if bp == ref_bp {
                 e as i32
             } else {
-                debug_assert!(bp == p as u64 - pr.b_plus());
+                debug_assert!(bp == p as u64 - ref_bp);
                 -(e as i32)
             };
             factors.push((p as u32, e));
@@ -356,12 +372,13 @@ fn sieve_block_poly(s: &ClSieve, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
             }
         }
         // Also compute exponents for large primes
+        let parity = if pol.kind == PolyType::Type1 { 0 } else { 1 };
         let large1 = if p > 1 {
             let mut bp = bx.unsigned_abs() % p;
             if bx.is_negative() && bp != 0 {
                 bp = p - bp;
             }
-            if bp % 2 == 1 {
+            if bp % 2 == parity {
                 Some((p as u32, if q == p { 2 } else { 1 }))
             } else {
                 Some((p as u32, if q == p { -2 } else { -1 }))
@@ -374,7 +391,7 @@ fn sieve_block_poly(s: &ClSieve, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
             if bx.is_negative() && bq != 0 {
                 bq = q - bq;
             }
-            if bq % 2 == 1 {
+            if bq % 2 == parity {
                 Some((q as u32, 1))
             } else {
                 Some((q as u32, -1))

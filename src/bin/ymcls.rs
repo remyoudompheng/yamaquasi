@@ -42,6 +42,9 @@ fn main() {
             d.unsigned_abs().bits(),
         )
     }
+    if d.bit(1) {
+        panic!("Discriminant must be 0 or 1 mod 4");
+    }
 
     let mut prefs = Preferences::default();
     prefs.fb_size = fb_user;
