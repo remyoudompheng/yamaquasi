@@ -50,11 +50,11 @@ pub fn mpqs_fb_size(bitsize: u32, use_double: bool) -> u32 {
 }
 
 pub fn clsgrp_fb_size(bitsize: u32, use_double: bool) -> u32 {
-    if bitsize < 320 {
+    if bitsize < 380 {
         select_fb_size(bitsize, use_double, CLASSGROUP_FBSIZES)
     } else {
         // maximal factor base size
-        50_000
+        60_000
     }
 }
 
@@ -143,8 +143,11 @@ const MPQS_FBSIZES: &'static [(u32, u32, u32)] = &[
     (390, 500000, 500000),
 ];
 
-// Factor bases are smaller for class group computations.
-// We follow the growth of SIQS parameters but 2x-4x smaller.
+/// Factor base size for class group computations.
+///
+/// We follow the growth of SIQS parameters but the factor
+/// bases are considerably smaller to keep linear algebra
+/// cost below sieving.
 const CLASSGROUP_FBSIZES: &'static [(u32, u32, u32)] = &[
     (16, 16, 16),
     (80, 50, 30),
@@ -153,9 +156,10 @@ const CLASSGROUP_FBSIZES: &'static [(u32, u32, u32)] = &[
     (200, 1500, 800),
     (220, 3000, 1500),
     (250, 7000, 3500),
-    (280, 12000, 8000),
-    (320, 30000, 20000),
-    (350, 70000, 50000),
+    (280, 12000, 7000),
+    (320, 30000, 15000),
+    (350, 60000, 30000),
+    (380, 100000, 60000),
 ];
 
 /// ECM/P-1 suitable parameters according to values of B2.

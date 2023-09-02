@@ -24,7 +24,7 @@
 //! Math. Comp. 68 (226), 1999, 859-867
 //! <https://www.ams.org/journals/mcom/1999-68-226/S0025-5718-99-01003-0/S0025-5718-99-01003-0.pdf>
 
-use std::cmp::min;
+use std::cmp::{max, min};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::RwLock;
 
@@ -96,7 +96,7 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
     }
     // WARNING: use reduced D again.
     let qs = siqs::SieveSIQS::new(dred, &fbase, maxlarge, maxdouble, mm as usize, prefs);
-    let target_rels = qs.fbase.len() * 2 + 32;
+    let target_rels = qs.fbase.len() * max(1, dabs.bits() as usize / 30) + 64;
     let s = ClSieve {
         d: *d,
         qs,
@@ -131,7 +131,6 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
     if prefs.abort() {
         return;
     }
-    // FIXME: Log final progress
     // FIXME: No linear algebra?
     let pdone = s.polys_done.load(Ordering::Relaxed);
     let mm = s.qs.interval_size;
@@ -170,9 +169,10 @@ fn a_value_count(n: &Uint) -> usize {
         0..=48 => 8,
         49..=71 => 12,
         // We are using small intervals until 200 bits, many As are needed.
-        72..=150 => 10 * (sz - 71),   // 10..800
-        151..=199 => 40 * (sz - 131), // 800..2800
-        200.. => 300 * (sz - 190),    // 3000..20000 (sz=256).. 34000 (sz=360)
+        72..=150 => 10 * (sz - 71),    // 10..800
+        151..=199 => 40 * (sz - 131),  // 800..2800
+        200..=255 => 300 * (sz - 190), // 3000..20000 (sz=256)
+        256..=400 => 800 * (sz - 225), // 20000.. 60000 (sz=300)
         _ => unreachable!("impossible"),
     }
 }
@@ -289,7 +289,7 @@ fn sieve_block_poly(s: &ClSieve, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
     } else {
         1 // Do not use the large prime variation.
     };
-    // Polynomial values range from [-m sqrt(2n), m sqrt(2n)] so they have variable size.
+    // Polynomial values range from [-m sqrt(2n), m sqrt(2n)] so they have variable size.
     // The smallest values are about A which is sqrt(2n) / m
     // If the target is too low, the sieve will be slow.
     let msize = if pol.kind == siqs::PolyType::Type1 {
@@ -299,11 +299,8 @@ fn sieve_block_poly(s: &ClSieve, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
         qs.interval_size as u64 / 4
     };
     let target = s.d.unsigned_abs().bits() / 2 + msize.bits() - max_cofactor.bits();
-    //println!("target = {target}");
 
     let (idx, facss) = st.smooths(target as u8, None, [&pol.r1p, &pol.r2p]);
-    //println!("{idx:?}");
-    //println!("{facss:?}");
     let qfacs = pol.factors(a);
     for (i, intfacs) in idx.into_iter().zip(facss) {
         let x = st.offset + (i as i64);
