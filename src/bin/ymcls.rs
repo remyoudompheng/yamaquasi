@@ -90,7 +90,7 @@ fn estimate(d: &Int) -> (f64, f64) {
     // ~5s for bound 10^9
     let fbsize = params::clsgrp_fb_size(d.unsigned_abs().bits(), true);
     // enough to get 4 decimal digits
-    let bound = std::cmp::max(100_000_000, fbsize * fbsize);
+    let bound = std::cmp::min(100_000_000, fbsize * fbsize);
     let mut logprod = 0f64;
     let mut logmin = f64::MAX;
     let mut logmax = f64::MIN;
@@ -131,7 +131,7 @@ fn estimate(d: &Int) -> (f64, f64) {
 
 fn legendre(d: &Uint, p: u32) -> i32 {
     let div = Dividers::new(p);
-    let dmodp = p - div.mod_uint(d) as u32;
+    let dmodp = div.mod_uint(d) as u32;
     let mut k = p / 2;
     let mut pow = 1u64;
     let mut sq = dmodp as u64;
@@ -149,4 +149,29 @@ fn legendre(d: &Uint, p: u32) -> i32 {
         debug_assert!(pow <= 1);
         pow as i32
     }
+}
+
+#[test]
+fn test_estimate() {
+    // D = 1-8k
+    let d =
+        Int::from_str("-1139325066844575699589813265217200398493708241839938355464231").unwrap();
+    // h=964415698883565364637432450736
+    let (h1, h2) = estimate(&d);
+    assert!(h1 <= 9.644157e29 && 9.644157e29 <= h2 * 1.001);
+
+    // D = 5-8k
+    let d = Int::from_str("-12239807779826253214859975412431303497371919444169932188160735019")
+        .unwrap();
+    // h=109997901313565058259819609742265
+    let (h1, h2) = estimate(&d);
+    assert!(h1 <= 1.099979e32 && 1.099979e32 <= h2);
+
+    // D = 4-8k
+    let d = Int::from_str("-40000000000000000000000000000000000000000000000000000000000000004")
+        .unwrap();
+    // h=178397819605839608466892693850112
+    let (h1, h2) = estimate(&d);
+    eprintln!("{h1} {h2}");
+    assert!(h1 <= 1.783978e32 && 1.783978e32 <= h2);
 }
