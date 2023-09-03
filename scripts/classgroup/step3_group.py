@@ -305,20 +305,14 @@ def _sparsekernel_numpy(M, norm, p, dim=None):
             # Small p, we can use numpy only to reduce mod p
             W = V0
             for ai in reversed(polred.list()[:-1]):
-                MW = M @ W
+                MW = (M @ W) % p
                 W = (MW[:N] + proj * MW[-N:] + int(ai) * V0) % p
         else:
-            Vp = vector(GF(p), V0)
             W = V0
             for ai in reversed(polred.list()[:-1]):
-                MW = vector(GF(p), M @ W)
-                MWn = MW[:N] + proj * MW[-N:] + ai * Vp
-                W = np.array([int(z) for z in MWn], dtype=np.int64)
-            # apply the x^k factor
-            for _ in range(dim - polred.degree()):
-                if not ((M @ W[:N]) % p).any():
-                    break
-                W = (M @ W[:N]) % p
+                MW = (M @ W) % p
+                aiV = np.array([(int(ai) * int(vi)) % p for vi in V0], dtype=np.int64)
+                W = (MW[:N] + proj * MW[-N:] + aiV) % p
 
         if all(int(x) % p == 0 for x in M @ W):
             break
