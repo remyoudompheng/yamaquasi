@@ -25,6 +25,7 @@
 //! <https://www.ams.org/journals/mcom/1999-68-226/S0025-5718-99-01003-0/S0025-5718-99-01003-0.pdf>
 
 use std::cmp::{max, min};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::RwLock;
 
@@ -97,11 +98,17 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
     // WARNING: use reduced D again.
     let qs = siqs::SieveSIQS::new(dred, &fbase, maxlarge, maxdouble, mm as usize, prefs);
     let target_rels = qs.fbase.len() * max(1, dabs.bits() as usize / 30) + 64;
+    let relfilepath = PathBuf::from(prefs.outdir.as_ref().unwrap()).join("relations.sieve");
     let s = ClSieve {
         d: *d,
         qs,
         prefs,
-        rels: RwLock::new(CRelationSet::new(*d, target_rels, maxlarge as u32)),
+        rels: RwLock::new(CRelationSet::new(
+            *d,
+            target_rels,
+            maxlarge as u32,
+            relfilepath,
+        )),
         done: AtomicBool::new(false),
         polys_done: AtomicUsize::new(0),
     };

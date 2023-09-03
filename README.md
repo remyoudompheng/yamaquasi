@@ -19,6 +19,10 @@ many factors), but most integers will be processed successfully.
 Utilities like YAFU (https://github.com/bbuhrow/yafu) can be used for more
 reliable or efficient factoring.
 
+Yamaquasi can also be used to compute class groups of imaginary quadratic fields
+on a laptop, for discriminants up to 110 decimal digits.
+See [README_classgroup.md](README_classgroup.md) for details.
+
 # Usage
 
 To compile Yamaquasi, install Rust [https://rust-lang.org] and

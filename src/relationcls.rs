@@ -16,6 +16,9 @@
 use std::cmp::min;
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
+use std::fs;
+use std::io::Write;
+use std::path::PathBuf;
 
 use crate::Int;
 
@@ -93,15 +96,18 @@ pub struct CRelationSet {
     pub n_combined12: usize,
     pub n_cycles: [usize; 8],
     pub print_cycles: bool,
+    // Output
+    file: Option<fs::File>,
 }
 
 impl CRelationSet {
-    pub fn new(d: Int, target: usize, maxlarge: u32) -> Self {
+    pub fn new(d: Int, target: usize, maxlarge: u32, out: PathBuf) -> Self {
         let mut set = CRelationSet {
             d,
             target,
             maxlarge,
             print_cycles: true,
+            file: fs::File::create(out).ok(), // FIXME: errors
             ..Default::default()
         };
         set.paths.insert(1, vec![1]);
@@ -281,17 +287,45 @@ impl CRelationSet {
     pub fn emit(&mut self, r: CRelation, clen: usize) {
         if self.print_cycles {
             // Display factors
-            print!("RELATION: ");
-            for (p, e) in &r.factors {
-                print!("<{p},{e}>, ");
+            let mut line = vec![];
+            for &(p, e) in &r.factors {
+                let (rp, re) = if e > 0 {
+                    (p as i64, e)
+                } else {
+                    (-(p as i64), -e)
+                };
+                for _ in 0..re {
+                    if line.len() > 0 {
+                        line.push(b' ');
+                    }
+                    write!(&mut line, "{rp}").unwrap();
+                }
             }
             if let Some((p, e)) = r.large1 {
-                print!("<{p},{e}>, ");
+                for _ in 0..e.unsigned_abs() {
+                    line.push(b' ');
+                    if e < 0 {
+                        line.push(b'-');
+                    }
+                    write!(&mut line, "{p}").unwrap();
+                }
             }
             if let Some((p, e)) = r.large2 {
-                print!("<{p},{e}>, ");
+                for _ in 0..e.unsigned_abs() {
+                    line.push(b' ');
+                    if e < 0 {
+                        line.push(b'-');
+                    }
+                    write!(&mut line, "{p}").unwrap();
+                }
             }
-            print!("\n");
+            line.push(b'\n');
+            // FIXME: handle errors?
+            self.file
+                .as_mut()
+                .expect("Output file not open")
+                .write(&line)
+                .unwrap();
         }
         if clen > 0 {
             self.n_cycles[min(self.n_cycles.len(), clen) - 1] += 1;

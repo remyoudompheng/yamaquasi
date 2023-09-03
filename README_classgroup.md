@@ -11,13 +11,101 @@ libraries.
 This program is a work-in-progress hobby and should not be trusted
 for serious computations.
 
-## Differences with factorization
+Usage:
+```
+ymcls --threads N DISCRIMINANT OUTPUTDIR
+sage -python scripts/classgroup/compute.py OUTPUTDIR
+```
+
+## Relation and differences with factorization
 
 Multipliers cannot be used: as a result some "unlucky" integers
 will be processed much slower.
 
 The polynomials are definite positive, in particular, their values
 are never close to zero, so the smoothness probability is lower.
+
+The class group computation is closely related to factorization,
+since 2-torsion elements of the class group are in 1-1 correspondance
+with non trivial divisors of the discriminant.
+
+Intermediate computation results contain interesting information
+so they should be written to files.
+
+The sieve effectiveness varies depending on how many small primes
+are such that the Legendre symbol `(D|l)` is 1. The luckiest
+discriminants are such that `h(D)/sqrt(D)` is largest.
+
+The result is unspecified if the discriminant is not a "fundamental"
+discriminant.
+
+## Computation output
+
+The output directory will contain the following files:
+
+* `args.json`: a JSON file describing some input parameters
+
+Example:
+```json
+{
+   "d": "-75742003803548105271232793285527826539",
+   "h_estimate_min": 1.22220e18,
+   "h_estimate_max": 1.22979e18,
+}
+```
+
+* `relations.sieve`: a large text file containing 1 relation per line.
+  Each relation is a space-separated list of primes `p` or `-p` denoting
+  a base prime ideal or its conjugate, such that their product is trivial
+  in the class group. Primes can be repeated if they appear with some
+  exponent in the relation.
+
+Example:
+```
+-3 -3 13 19 73 -163 -2557 4229 6689 -12659
+5 7 -11 17 -107 233 -4751 -9461 -12007 -145723
+-11 -31 -59 -523 -1979 2447 4703 72019 -80489 -112207
+...
+```
+
+* `relations.pruned`: same format as `relations.sieve`, a smaller set of
+  relations resulting from pruning step.
+
+* NOT IMPLEMENTED: `relations.removed` (saved relations during elimination)
+
+* `relations.filter`: a smaller-size text file containing the relations
+  kept for linear algebra steps
+
+Example:
+```
+3^5 5^-2 11^3 17^1
+3^-1 17^3 23^2
+```
+
+* `classnumber`: a one-line file containing the value of the class number
+
+* `group.structure`: a text file containing a decomposition into a
+  product of cyclic groups and the coordinates of generators found in
+  `relations.filter`.
+
+Example:
+```
+G 826781660038665892291 2
+3 1 0
+5 141654769174164315103 1
+7 484348438480025487173 0
+...
+```
+
+* NOT IMPLEMENTED: `group.structure.extra`: discrete logs for removed
+  primes
+
+Example:
+```
+20011 639335354182027341157 1
+20021 167479567451417040664 0
+...
+```
 
 ## Performance
 
@@ -32,10 +120,11 @@ are approximately (for 1 CPU core):
 * 220 bits: about 5 minutes for sieve, 5-10mn for linear algebra
 * 250 bits: about 10 minutes for sieve, 20-30mn for linear algebra
 * 280 bits: 30-40 minutes for sieve, more than 1 hour for linear algebra
-* 300 bits: 2-3 hours for sieve, many hours for linear algebra
+* 300 bits: about 4 hours sieve, about 3 hours linear algebra
+* 330 bits (100 decimal digits): about 20 hours sieve, about 12 hours linear algebra
 
-Parallel computing applies to the sieve in the same way
-as the factoring implementation.
+The sieving step and the computation of the class number can use multiple cores.
+The output of the sieve is usually less than 250 MiB even for 100-digit inputs.
 
 Some computer algebra systems like PARI implement the Buchmann-McCurley
 algorithm which tries to find smooth ideals by random sampling.
@@ -44,26 +133,27 @@ This is slower for large numbers (above 128 bits).
 ## Linear algebra
 
 Unlike integer factorization which only requires linear algebra
-over GF(2), computing the class group requires computation on large
+over GF(2), to compute the 2-torsion subgroup of the class group,
+computing the full class group structure requires computation on large
 integer matrices, mainly a determinant computation to obtain the
 class number.
 
-For large sizes, the difference between dense linear algebra
-libraries and sparse linear algebra routines may be smaller than
-expected, and depend highly on the quality of matrix filtering.
+The main computation is the class number, obtained as the GCD
+of NxN minors of the relation matrix. Following [Kleinjung]
+it is computed using 2 determinants, via CRT and the Wiedemann algorithm.
 
-To handle linear algebra, 2 methods are suggested:
+The Wiedemann algorithm is implemented in Python using
+scipy uint64 matrices and uses 54-bit moduli.
 
-* using SageMath with FLINT dense linear algebra routines
-* calling into Cado-NFS `bwc` utility to apply Block Wiedemann
-  algorithm to a sparse matrix, using Victor Pan's reduction of
-  determinants to linear system solutions via Cramer's rule
+## Group structure
 
-Note that the interface of the `bwc` utility is an internal detail of
-Cado-NFS implementation which is not meant to compute determinants,
-and may change in incompatible ways in the future.
+The group structure (equivalent to Smith normal form of the relation matrix)
+is determined by computing the kernel of the relation matrix modulo
+prime power divisors of the class number.
 
-The other linear algebra steps are less computationally intensive.
+Cado-NFS is the fastest option for primes over 55 bits that cannot use
+the scipy-based Wiedemann algorithm implementation. A very slow implementation
+using generic sparse matrices from SageMath is also available as a fallback.
 
 ## Examples
 
@@ -81,7 +171,18 @@ h(-4695204673552245130677413787157851216622805893433443043026971349460603)
 = 18410786327386854870530065299887240
 ```
 
+Computations inspired by CSI-Fish:
+```
+D = 1 - 4*prod(primes(3,248))*661 (a 338-bit prime)
+h(D) = 3^4 * 489089703283 * 1378350008771 * 11058447639442327727284973
+```
+
 ## Bibliography
+
+Henri Cohen, Calcul du nombre de classes d'un corps quadratique imaginaire ou
+réel, d'après Shanks, Williams, McCurley, A. K. Lenstra et Schnorr
+Séminaire de théorie des nombres de Bordeaux, Série 2, Tome 1 (1989) no. 1, pp. 117-135.
+<http://www.numdam.org/item/JTNB_1989__1_1_117_0/>
 
 Michael Jacobson, Applying sieving to the computation of class groups
 Math. Comp. 68 (226), 1999, 859-867

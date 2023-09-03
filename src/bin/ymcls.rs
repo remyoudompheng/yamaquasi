@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::io::Write;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use num_traits::cast::ToPrimitive;
@@ -13,8 +15,8 @@ use yamaquasi::{Int, Preferences, Uint, Verbosity};
 
 fn main() {
     let arg = arguments::parse(std::env::args()).unwrap();
-    if arg.get::<bool>("help").is_some() || arg.orphans.len() != 1 {
-        eprintln!("Usage: ymcls [OPTIONS] [-]DISCRIMINANT");
+    if arg.get::<bool>("help").is_some() || arg.orphans.len() != 2 {
+        eprintln!("Usage: ymcls [OPTIONS] [-]DISCRIMINANT OUTPUTDIR");
         eprintln!("");
         eprintln!("Options:");
         eprintln!("  --help                    show this help");
@@ -31,6 +33,7 @@ fn main() {
     let double = arg.get::<bool>("use-double");
     let v = arg.get::<String>("verbose").unwrap_or("info".into());
     let number = &arg.orphans[0];
+    let outdir = &arg.orphans[1];
     let mut d = Int::from_str(number).expect("could not read input number");
     if d.is_positive() {
         d = -d;
@@ -54,8 +57,25 @@ fn main() {
     prefs.verbosity = Verbosity::from_str(&v).unwrap();
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Computing class group of discriminant {d}");
-        let (hmin, hmax) = estimate(&d);
+    }
+    let (hmin, hmax) = estimate(&d);
+    if prefs.verbose(Verbosity::Info) {
         eprintln!("Estimate by class number formula {hmin:.5e}-{hmax:.5e}")
+    }
+
+    // Create output directory
+    std::fs::create_dir_all(outdir).unwrap();
+    prefs.outdir = Some(PathBuf::from(outdir));
+
+    // Dump parameters
+    {
+        let mut json: Vec<u8> = vec![];
+        writeln!(&mut json, "{{").unwrap();
+        writeln!(&mut json, r#"  "d": "{d}","#).unwrap();
+        writeln!(&mut json, r#"  "h_estimate_min": {hmin},"#).unwrap();
+        writeln!(&mut json, r#"  "h_estimate_max": {hmax}"#).unwrap();
+        writeln!(&mut json, "}}").unwrap();
+        std::fs::write(PathBuf::from(outdir).join("args.json"), json).unwrap();
     }
 
     // Create thread pool

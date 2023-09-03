@@ -47,6 +47,7 @@ pub type Int = arith::I1024;
 pub type Uint = arith::U1024;
 
 // Top-level functions
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -67,6 +68,8 @@ pub struct Preferences {
     pub interval_size: Option<u32>,
     pub large_factor: Option<u64>,
     pub use_double: Option<bool>,
+    // Only for class group computations
+    pub outdir: Option<PathBuf>,
 
     // Yes, storing state variables in a Preferences object
     // is quite awkward.
