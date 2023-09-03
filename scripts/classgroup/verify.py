@@ -30,8 +30,11 @@ def main():
     if (rels := dir / "relations.pruned").is_file():
         verify_rels(rels, D)
 
+    if not (gextra := dir / "group.structure.extra").is_file():
+        gextra = None
+
     if (g := dir / "group.structure").is_file():
-        verify_group(g, D)
+        verify_group(g, D, gextra=gextra)
 
 
 def verify_rels(rels, D):
@@ -67,7 +70,7 @@ def verify_rels(rels, D):
         print(f"{rels}: {count} relations verified in {time.time()-t0:.3f}s")
 
 
-def verify_group(g, D):
+def verify_group(g, D, gextra=None):
     with open(g) as f:
         structure = next(f)
         assert structure.startswith("G ")
@@ -90,6 +93,15 @@ def verify_group(g, D):
             q = qpow(qf(gen, D), dlog, D).reduced_form()
             assert q == qf(l, D)
             print(f"OK [{l}] == [{gen}]^{dlog}")
+
+    if gextra:
+        with open(gextra) as f:
+            for line in f:
+                l, dlog = line.strip().split()
+                l, dlog = int(l), int(dlog)
+                q = qpow(qf(gen, D), dlog, D).reduced_form()
+                assert q == qf(l, D)
+                print(f"OK [{l}] == [{gen}]^{dlog}")
 
 
 @cached_function

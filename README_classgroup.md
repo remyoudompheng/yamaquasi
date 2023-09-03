@@ -71,15 +71,22 @@ Example:
 * `relations.pruned`: same format as `relations.sieve`, a smaller set of
   relations resulting from pruning step.
 
-* NOT IMPLEMENTED: `relations.removed` (saved relations during elimination)
-
-* `relations.filter`: a smaller-size text file containing the relations
+* `relations.filtered`: a smaller-size text file containing the relations
   kept for linear algebra steps
 
 Example:
 ```
 3^5 5^-2 11^3 17^1
 3^-1 17^3 23^2
+```
+
+* `relations.removed`: saved relations during elimination. Each relation
+  depends on `relations.filtered` or on previous lines in the same file.
+
+Example:
+```
+20707 = 3^2 5^-1 13^1 47^-2
+20717 = 5^1 7^1 19^-1 97^2
 ```
 
 * `classnumber`: a one-line file containing the value of the class number
@@ -97,8 +104,7 @@ G 826781660038665892291 2
 ...
 ```
 
-* NOT IMPLEMENTED: `group.structure.extra`: discrete logs for removed
-  primes
+* `group.structure.extra`: coordinates for elements of `relations.removed`
 
 Example:
 ```

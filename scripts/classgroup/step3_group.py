@@ -161,6 +161,49 @@ def structure(datadir: Path, meta, sage=False):
         print("Discrete logs output to", w.name)
 
 
+def extra(datadir: Path, meta):
+    "Compute more discrete logs using other known relations"
+
+    print("==> ADDITIONAL GROUP STRUCTURE STEP")
+    mods = []
+    fbase = {}
+    with open(datadir / "group.structure") as f:
+        header = next(f).split()
+        assert header[0] == "G"
+        mods = [int(z) for z in header[1:]]
+        for line in f:
+            v = [int(z) for z in line.strip().split()]
+            fbase[v[0]] = v[1:]
+    print(f"Group structure known for {len(fbase)} primes")
+
+    def evalrel(p, rel):
+        dlog = [0 for _ in mods]
+        for le in rel.split():
+            l, _, e = le.partition("^")
+            l, e = int(l), int(e)
+            if l not in fbase:
+                print(f"Cannot compute dlog for {p}: missing {l} in factor base")
+                return None
+            for i, dl in enumerate(fbase[l]):
+                dlog[i] += e * dl
+        for i, m in enumerate(mods):
+            dlog[i] %= m
+        return dlog
+
+    n_extra = 0
+    with open(datadir / "relations.removed") as r:
+        with open(datadir / "group.structure.extra", "w") as w:
+            for line in r:
+                p, _, rel = line.partition("=")
+                p = int(p.strip())
+                dlog = evalrel(p, rel)
+                # keep info for next relations
+                fbase[p] = dlog
+                print(p, " ".join(str(x) for x in dlog), file=w)
+                n_extra += 1
+            print(f"{n_extra} additional discrete logs written to {w.name}")
+
+
 def sparsekernel(M, norm, p, dim=None, sage=False):
     if p * norm < 2**63:
         return _sparsekernel_numpy(M, norm, p, dim=dim)

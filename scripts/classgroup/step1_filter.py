@@ -161,6 +161,9 @@ def step_filter(datadir, meta):
     print(f"{len(stats)} primes appear in relations")
     print(f"{excess} relations can be removed")
 
+    # prime p = product(l^e)
+    saved_pivots = []
+
     Ds = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20]
     Ds += [25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100]
     t = time.time()
@@ -207,8 +210,12 @@ def step_filter(datadir, meta):
                     delstat(ridx, rels[ridx])
                     addstat(ridx, rp)
                     rels[ridx] = rp
+                # Remove and save pivot
                 delstat(pividx, piv)
                 rels[pividx] = None
+                saved_pivots.append(
+                    (p, {l: e * -piv[p] for l, e in piv.items() if l != p})
+                )
                 removed += 1
                 assert p not in stats
                 # FIXME: print pivot
@@ -274,12 +281,19 @@ def step_filter(datadir, meta):
         f"Final: {nc} columns {nr} rows excess={nr-nc} weight={avgw:.3f} maxcoef={maxe} elapsed={dt:.1f}s"
     )
     # Dump result
+    with open(datadir / "relations.removed", "w") as w:
+        for p, rel in reversed(saved_pivots):
+            line = f"{p} = " + " ".join(f"{l}^{e}" for l, e in sorted(rel.items()))
+            w.write(line)
+            w.write("\n")
+        print(f"{len(saved_pivots)} removed relations written to", w.name)
+
     with open(datadir / "relations.filtered", "w") as w:
         for r in rels:
             line = " ".join(f"{l}^{e}" for l, e in sorted(r.items()))
             w.write(line)
             w.write("\n")
-        print("Relations written to", w.name)
+        print(f"{len(rels)} relations written to", w.name)
 
 
 def read_relations_flat(pth: Path):

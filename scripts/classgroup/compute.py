@@ -40,6 +40,7 @@ def main():
         print("If the class number has a large prime factor, Cado-NFS is necessary to")
         print("achieve good performance. Use --sage option to ignore this warning.")
         exit(1)
+
     if os.getenv("CADONFS_BWCDIR"):
         bwc = Path(os.getenv("CADONFS_BWCDIR"))
         files = ["bwc.pl", "krylov", "mksol", "mf_scan2"]
@@ -73,6 +74,11 @@ def main():
 
     if not (datadir / "group.structure").is_file():
         proc = Process(target=group, args=[datadir, meta, args.sage])
+        proc.start()
+        proc.join()
+
+    if not (datadir / "group.structure.extra").is_file():
+        proc = Process(target=groupextra, args=[datadir, meta])
         proc.start()
         proc.join()
 
