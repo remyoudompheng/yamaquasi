@@ -197,6 +197,8 @@ def extra(datadir: Path, meta):
                 p, _, rel = line.partition("=")
                 p = int(p.strip())
                 dlog = evalrel(p, rel)
+                if dlog is None:
+                    continue
                 # keep info for next relations
                 fbase[p] = dlog
                 print(p, " ".join(str(x) for x in dlog), file=w)

@@ -209,7 +209,8 @@ def step_filter(datadir, meta):
                     rp = pivot(piv, rels[ridx], p)
                     delstat(ridx, rels[ridx])
                     addstat(ridx, rp)
-                    rels[ridx] = rp
+                    # If relation becomes empty, remove it
+                    rels[ridx] = rp if len(rp) > 0 else None
                 # Remove and save pivot
                 delstat(pividx, piv)
                 rels[pividx] = None
@@ -288,9 +289,14 @@ def step_filter(datadir, meta):
             w.write("\n")
         print(f"{len(saved_pivots)} removed relations written to", w.name)
 
+    seen = set()
     with open(datadir / "relations.filtered", "w") as w:
         for r in rels:
             line = " ".join(f"{l}^{e}" for l, e in sorted(r.items()))
+            if line in seen:
+                print("WARNING: duplicate relation after filtering")
+                continue
+            seen.add(line)
             w.write(line)
             w.write("\n")
         print(f"{len(rels)} relations written to", w.name)
