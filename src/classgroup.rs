@@ -88,7 +88,7 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
     // Don't allow maxlarge to exceed 32 bits (it would not be very useful anyway).
     let maxlarge = min(maxlarge, (1 << 32) - 1);
     let maxdouble = if use_double {
-        maxprime * maxprime * large_prime_factor(&d)
+        maxprime * maxprime * double_large_factor(&d)
     } else {
         0
     };
@@ -228,6 +228,24 @@ fn large_prime_factor(n: &Int) -> u64 {
         161.. => 2 * sz - 160,
     }
 }
+
+// The bound for double large primes, as a ratio of B².
+// It must be larger than 1 and smaller that L² where L
+// is the large prime factor.
+fn double_large_factor(n: &Int) -> u64 {
+    let sz = n.unsigned_abs().bits() as u64;
+    match sz {
+        0..=160 => sz,
+        161..=250 => 2 * sz - 160,
+        // For larger sizes, use double large primes
+        // more aggressively, we get less than 1 relation
+        // per polynomial so there is no risk of factoring cost.
+        // L=400 at 280 bits
+        // L=500 at 330 bits
+        251.. => 10 * sz - 2000,
+    }
+}
+
 
 fn sieve_a(s: &ClSieve, a_int: &Uint, factors: &Factors) {
     let mm = s.qs.interval_size;
