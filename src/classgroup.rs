@@ -29,9 +29,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::RwLock;
 
+use num_traits::ToPrimitive;
 use rayon::prelude::*;
 
-use crate::arith::Num;
+use crate::arith::{Dividers, Num};
 use crate::fbase::{self, FBase};
 use crate::params::clsgrp_fb_size;
 use crate::relationcls::{CRelation, CRelationSet};
@@ -42,27 +43,32 @@ use crate::{Int, Preferences, Uint, Verbosity};
 pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -> () {
     let dabs = d.unsigned_abs();
     let use_double = prefs.use_double.unwrap_or(dabs.bits() > 180);
-    // Choose factor base. Sieve twice the number of primes
-    // (n will be a quadratic residue for only half of them)
-    let fb = prefs
-        .fb_size
-        .unwrap_or(clsgrp_fb_size(dabs.bits(), use_double));
+    // Choose factor base. Estimate the smoothness bias to increase/decrease
+    // the factor base accordingly.
+    let bias = smoothness_bias(d, clsgrp_fb_size(dabs.bits(), use_double) * 3);
+    let adjsize = (dabs.bits() as i64 - 2 * bias as i64) as u32;
+    let fb = prefs.fb_size.unwrap_or(clsgrp_fb_size(adjsize, use_double));
     // WARNING: SIQS doesn't use 4D if D=3 mod 4
     // This creates some redundant *2 /2 operations.
     let dred = if dabs.low_u64() & 3 == 0 { *d >> 2 } else { *d };
     let fbase = FBase::new(dred, fb);
+    let bias = smoothness_bias(d, fbase.bound());
+    let adjsize = (dabs.bits() as i64 - 2 * bias as i64) as u32;
     // It is fine to have a divisor of D in the factor base.
-    let mm = prefs.interval_size.unwrap_or(interval_size(d, use_double));
+    let mm = prefs
+        .interval_size
+        .unwrap_or(interval_size(adjsize, use_double));
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Smoothness bound B1={}", fbase.bound());
+        eprintln!("Smoothness bias {bias:.3} using parameters for {adjsize} bits");
         eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls(),);
         eprintln!("Sieving interval size {}k", mm >> 10);
     }
 
     // Generate all values of A now.
-    let nfacs = siqs::nfactors(&dabs) as usize;
+    let nfacs = nfactors(adjsize) as usize;
     let factors = select_siqs_factors(&fbase, &dred, nfacs, mm as usize, prefs.verbosity);
-    let a_count = a_value_count(&dabs);
+    let a_count = a_value_count(adjsize) as usize;
     let a_ints = select_a(&factors, a_count, prefs.verbosity);
     let polys_per_a = 1 << (nfacs - 1);
     if prefs.verbose(Verbosity::Info) {
@@ -162,15 +168,28 @@ struct ClSieve<'a> {
     prefs: &'a Preferences,
 }
 
+fn nfactors(sz: u32) -> u32 {
+    match sz {
+        0..=64 => 2,
+        65..=89 => 3,
+        90..=119 => 4,
+        120..=149 => 5,
+        150..=169 => 6,
+        170..=199 => 7,
+        // 13 factors for size 330
+        // 14 factors for size 360
+        200.. => sz / 25,
+    }
+}
+
 // We need more values of A for class field computations
 // than for factoring.
-fn a_value_count(n: &Uint) -> usize {
+fn a_value_count(sz: u32) -> u32 {
     // Many polynomials are required to accomodate small intervals.
     // When sz=180 we need more than 5k polynomials
     // When sz=200 we need more than 20k polynomials
     // When sz=280 we need more than 1M polynomials
     // When sz=360 we need more than 20M polynomials
-    let sz = n.bits() as usize;
     match sz {
         // Even one A value (2-4 polynomials) will give enough smooth values.
         0..=48 => 8,
@@ -186,8 +205,7 @@ fn a_value_count(n: &Uint) -> usize {
 
 // Interval size is similar to SIQS.
 // Factor base is smaller, shrink
-fn interval_size(n: &Int, use_double: bool) -> u32 {
-    let sz = n.unsigned_abs().bits();
+fn interval_size(sz: u32, use_double: bool) -> u32 {
     let nblocks = match sz {
         0..=180 => 4,
         181..=255 => (sz - 141) / 20,
@@ -410,4 +428,140 @@ fn sieve_block_poly(s: &ClSieve, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
         };
         s.rels.write().unwrap().add(rel);
     }
+}
+
+// Estimates and approximations.
+
+/// Compute the amount of extra smoothness expected for a given number.
+/// The result is a floating-point number usually in the -5..5 range.
+fn smoothness_bias(d: &Int, maxfb: u32) -> f64 {
+    // The contribution of 2 is:
+    // +1 if D % 8 == 1
+    // -0.5 for the 4D case
+    let mut bias: f64 = match d.unsigned_abs().low_u64() & 7 {
+        7 => 1.0,
+        3 => 0.0,
+        0 | 4 => -0.5,
+        _ => panic!("impossible"),
+    };
+    // The contribution of a prime is (1 + (D|p)) log(p)/p
+    // One block of primes is enough to compute an estimate.
+    let mut s = fbase::PrimeSieve::new();
+    let block = s.next();
+    let dabs = d.unsigned_abs();
+    for &p in block {
+        if p == 2 {
+            continue;
+        }
+        if p > maxfb {
+            break;
+        }
+        let mut l = legendre(&dabs, p);
+        if p % 4 == 3 {
+            l = -l;
+        }
+        bias += (l as f64) * (p as f64).log2() / (p as f64);
+    }
+    bias
+}
+
+/// Compute an estimate of the class number.
+pub fn estimate(d: &Int) -> (f64, f64) {
+    // The class number formula is:
+    // h(-D) = sqrt(D)/pi * prod(1/(1 - (D|p)/p) for prime p)
+    // For p=2 the factor is 1/(1-1/2)=2 if D % 8 = 1
+    // otherwise 1/(1+1/2) = 2/3
+    //
+    // Numerical evaluation takes
+    // ~0.1s for bound 10^7
+    // ~1s for bound 10^8
+    // ~5s for bound 10^9
+    let fbsize = clsgrp_fb_size(d.unsigned_abs().bits(), true);
+    // enough to get 4 decimal digits
+    let bound = std::cmp::min(100_000_000, fbsize * fbsize);
+    let mut logprod = 0f64;
+    let mut logmin = f64::MAX;
+    let mut logmax = f64::MIN;
+    let mut s = fbase::PrimeSieve::new();
+    let dabs = d.unsigned_abs();
+    'primeloop: loop {
+        let block = s.next();
+        for &p in block {
+            if p == 2 {
+                continue;
+            }
+            // legendre(-d,p) = legendre(d,p) * (-1)^(p-1)/2
+            let mut l = legendre(&dabs, p);
+            if p % 4 == 3 {
+                l = -l;
+            }
+            logprod += -(-l as f64 / p as f64).ln_1p();
+            if p > bound {
+                break 'primeloop;
+            }
+            if p > bound / 2 {
+                // Compute loweR/upper bounds over a window
+                logmin = logmin.min(logprod);
+                logmax = logmax.max(logprod);
+            }
+        }
+    }
+    let h = d.to_f64().unwrap().abs().sqrt() / std::f64::consts::PI;
+    let h = match d.unsigned_abs().low_u64() & 7 {
+        // Only values 7, 4, 3 are valid for fundamental discriminants.
+        5 | 7 => h * 2.0,
+        0 | 2 | 4 | 6 => h,
+        1 | 3 => h * 2.0 / 3.0,
+        _ => unreachable!(),
+    };
+    (h * logmin.exp(), h * logmax.exp())
+}
+
+fn legendre(d: &Uint, p: u32) -> i32 {
+    let div = Dividers::new(p);
+    let dmodp = div.mod_uint(d) as u32;
+    let mut k = p / 2;
+    let mut pow = 1u64;
+    let mut sq = dmodp as u64;
+    while k > 0 {
+        if k & 1 == 1 {
+            pow = div.modu63(pow * sq);
+        }
+        sq = div.modu63(sq * sq);
+        k = k >> 1;
+    }
+    if pow > 1 {
+        debug_assert!(pow == p as u64 - 1);
+        pow as i32 - p as i32
+    } else {
+        debug_assert!(pow <= 1);
+        pow as i32
+    }
+}
+
+#[test]
+fn test_estimate() {
+    use std::str::FromStr;
+
+    // D = 1-8k
+    let d =
+        Int::from_str("-1139325066844575699589813265217200398493708241839938355464231").unwrap();
+    // h=964415698883565364637432450736
+    let (h1, h2) = estimate(&d);
+    assert!(h1 <= 9.644157e29 && 9.644157e29 <= h2 * 1.001);
+
+    // D = 5-8k
+    let d = Int::from_str("-12239807779826253214859975412431303497371919444169932188160735019")
+        .unwrap();
+    // h=109997901313565058259819609742265
+    let (h1, h2) = estimate(&d);
+    assert!(h1 <= 1.099979e32 && 1.099979e32 <= h2);
+
+    // D = 4-8k
+    let d = Int::from_str("-40000000000000000000000000000000000000000000000000000000000000004")
+        .unwrap();
+    // h=178397819605839608466892693850112
+    let (h1, h2) = estimate(&d);
+    eprintln!("{h1} {h2}");
+    assert!(h1 <= 1.783978e32 && 1.783978e32 <= h2);
 }
