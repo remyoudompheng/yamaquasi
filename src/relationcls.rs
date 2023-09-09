@@ -101,13 +101,14 @@ pub struct CRelationSet {
 }
 
 impl CRelationSet {
-    pub fn new(d: Int, target: usize, maxlarge: u32, out: PathBuf) -> Self {
+    pub fn new(d: Int, target: usize, maxlarge: u32, out: Option<PathBuf>) -> Self {
         let mut set = CRelationSet {
             d,
             target,
             maxlarge,
-            print_cycles: true,
-            file: fs::File::create(out).ok(), // FIXME: errors
+            print_cycles: out.is_some(),
+            // FIXME: errors
+            file: out.and_then(|out| fs::File::create(out).ok()),
             ..Default::default()
         };
         set.paths.insert(1, vec![1]);

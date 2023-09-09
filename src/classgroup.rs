@@ -42,22 +42,25 @@ use crate::{Int, Preferences, Uint, Verbosity};
 
 pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -> () {
     let dabs = d.unsigned_abs();
-    let use_double = prefs.use_double.unwrap_or(dabs.bits() > 180);
     // Choose factor base. Estimate the smoothness bias to increase/decrease
     // the factor base accordingly.
-    let bias = smoothness_bias(d, clsgrp_fb_size(dabs.bits(), use_double) * 3);
-    let adjsize = (dabs.bits() as i64 - 2 * bias as i64) as u32;
-    let fb = prefs.fb_size.unwrap_or(clsgrp_fb_size(adjsize, use_double));
+    let adjsize_tmp = {
+        let bias = smoothness_bias(d, clsgrp_fb_size(dabs.bits(), dabs.bits() > 180) * 3);
+        (dabs.bits() as i64 - (2.5 * bias).round() as i64) as u32
+    };
+    let use_double = prefs.use_double.unwrap_or(adjsize_tmp > 180);
+    let fb = prefs
+        .fb_size
+        .unwrap_or(clsgrp_fb_size(adjsize_tmp, use_double));
     // WARNING: SIQS doesn't use 4D if D=3 mod 4
     // This creates some redundant *2 /2 operations.
     let dred = if dabs.low_u64() & 3 == 0 { *d >> 2 } else { *d };
     let fbase = FBase::new(dred, fb);
+    // Recompute bias and adjusted size again.
     let bias = smoothness_bias(d, fbase.bound());
-    let adjsize = (dabs.bits() as i64 - 2 * bias as i64) as u32;
+    let adjsize = (dabs.bits() as i64 - (2.5 * bias).round() as i64) as u32;
     // It is fine to have a divisor of D in the factor base.
-    let mm = prefs
-        .interval_size
-        .unwrap_or(interval_size(adjsize, use_double));
+    let mm = prefs.interval_size.unwrap_or(interval_size(adjsize));
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Smoothness bound B1={}", fbase.bound());
         eprintln!("Smoothness bias {bias:.3} using parameters for {adjsize} bits");
@@ -66,10 +69,9 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
     }
 
     // Generate all values of A now.
-    let nfacs = nfactors(adjsize) as usize;
-    let factors = select_siqs_factors(&fbase, &dred, nfacs, mm as usize, prefs.verbosity);
-    let a_count = a_value_count(adjsize) as usize;
-    let a_ints = select_a(&factors, a_count, prefs.verbosity);
+    let (a_count, nfacs) = a_params(adjsize);
+    let factors = select_siqs_factors(&fbase, &dred, nfacs as usize, mm as usize, prefs.verbosity);
+    let a_ints = select_a(&factors, a_count as usize, prefs.verbosity);
     let polys_per_a = 1 << (nfacs - 1);
     if prefs.verbose(Verbosity::Info) {
         eprintln!(
@@ -82,9 +84,10 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
         siqs::a_quality(&a_ints) * 100.0
     );
     }
+    assert!(a_ints.len() >= a_count as usize);
 
     let maxprime = fbase.bound() as u64;
-    let maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(&d));
+    let maxlarge: u64 = maxprime * prefs.large_factor.unwrap_or(large_prime_factor(adjsize));
     // Don't allow maxlarge to exceed 32 bits (it would not be very useful anyway).
     let maxlarge = min(maxlarge, (1 << 32) - 1);
     let maxdouble = if use_double {
@@ -103,8 +106,15 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
     }
     // WARNING: use reduced D again.
     let qs = siqs::SieveSIQS::new(dred, &fbase, maxlarge, maxdouble, mm as usize, prefs);
-    let target_rels = qs.fbase.len() * max(1, dabs.bits() as usize / 30) + 64;
-    let relfilepath = PathBuf::from(prefs.outdir.as_ref().unwrap()).join("relations.sieve");
+    let target_rels = if qs.fbase.len() < 100 {
+        qs.fbase.len() + 64
+    } else {
+        qs.fbase.len() * max(2, (dabs.bits() as usize - 100) / 20)
+    };
+    let relfilepath = prefs
+        .outdir
+        .as_ref()
+        .map(|p| PathBuf::from(p).join("relations.sieve"));
     let s = ClSieve {
         d: *d,
         qs,
@@ -154,6 +164,9 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
             (pdone as u64 * mm as u64) >> 20,
         ));
     }
+    if rels.len() < rels.target {
+        panic!("not enough polynomials to sieve")
+    }
 }
 
 struct ClSieve<'a> {
@@ -168,61 +181,44 @@ struct ClSieve<'a> {
     prefs: &'a Preferences,
 }
 
-fn nfactors(sz: u32) -> u32 {
+// Determine the number of A values and the number of factors
+// necessary for the class group computation.
+// The total number of ideals will be values * 2^(factors-1)
+fn a_params(sz: u32) -> (u32, u32) {
     match sz {
-        0..=64 => 2,
-        65..=89 => 3,
-        90..=119 => 4,
-        120..=149 => 5,
-        150..=169 => 6,
-        170..=199 => 7,
-        // 13 factors for size 330
-        // 14 factors for size 360
-        200.. => sz / 25,
-    }
-}
-
-// We need more values of A for class field computations
-// than for factoring.
-fn a_value_count(sz: u32) -> u32 {
-    // Many polynomials are required to accomodate small intervals.
-    // When sz=180 we need more than 5k polynomials
-    // When sz=200 we need more than 20k polynomials
-    // When sz=280 we need more than 1M polynomials
-    // When sz=360 we need more than 20M polynomials
-    match sz {
-        // Even one A value (2-4 polynomials) will give enough smooth values.
-        0..=48 => 8,
-        49..=71 => 12,
-        // We are using small intervals until 200 bits, many As are needed.
-        72..=150 => 10 * (sz - 71),    // 10..800
-        151..=199 => 40 * (sz - 131),  // 800..2800
-        200..=255 => 300 * (sz - 190), // 3000..20000 (sz=256)
-        256..=400 => 800 * (sz - 225), // 20000.. 60000 (sz=300)
-        _ => unreachable!("impossible"),
+        0..=32 => (4, 2), // 4 polys
+        33..=64 => (8, 2),
+        65..=80 => (2 * (sz - 60), 3),
+        81..=99 => (10 * (sz - 77), 3),
+        100..=119 => (40 * (sz - 95), 4),   // 200..1000 x8
+        120..=149 => (50 * (sz - 100), 5),  // 1000..2500 x16
+        150..=169 => (60 * (sz - 130), 6),  // 1200..2400 x32
+        170..=199 => (100 * (sz - 150), 7), // 2000..5000 x64
+        200..=209 => (400 * (sz - 190), 8), // 4000..8000 x128
+        210..=219 => (400 * (sz - 190), 9),
+        220..=229 => (400 * (sz - 190), 10),
+        230..=255 => (400 * (sz - 190), (sz - 10) / 20),
+        256.. => (800 * (sz - 225), (sz - 10) / 20),
     }
 }
 
 // Interval size is similar to SIQS.
-// Factor base is smaller, shrink
-fn interval_size(sz: u32, use_double: bool) -> u32 {
+// Factor base is much smaller, so interval size must be much smaller too.
+fn interval_size(sz: u32) -> u32 {
     let nblocks = match sz {
-        0..=180 => 4,
+        0..=64 => 2,
+        65..=180 => 4,
         181..=255 => (sz - 141) / 20,
-        256..=340 => {
-            if use_double {
-                (sz - 176) / 20
-            } else {
-                (sz - 176) / 20 + 1
-            }
-        }
-        341.. => 8 + sz / 100,
+        256..=300 => (sz - 150) / 25,
+        301..=330 => 8,
+        331..=360 => 9,
+        _ => 10,
     };
     nblocks * 32768
 }
 
-fn large_prime_factor(n: &Int) -> u64 {
-    let sz = n.unsigned_abs().bits() as u64;
+fn large_prime_factor(sz: u32) -> u64 {
+    let sz = sz as u64;
     match sz {
         0..=160 => sz,
         161.. => 2 * sz - 160,
@@ -245,7 +241,6 @@ fn double_large_factor(n: &Int) -> u64 {
         251.. => 10 * sz - 2000,
     }
 }
-
 
 fn sieve_a(s: &ClSieve, a_int: &Uint, factors: &Factors) {
     let mm = s.qs.interval_size;
@@ -582,4 +577,29 @@ fn test_estimate() {
     let (h1, h2) = estimate(&d);
     eprintln!("{h1} {h2}");
     assert!(h1 <= 1.783978e32 && 1.783978e32 <= h2);
+}
+
+#[test]
+fn test_classgroup() {
+    fn parse_int(s: &'static str) -> Int {
+        use std::str::FromStr;
+        Int::from_str(s).unwrap()
+    }
+
+    let prefs = Preferences::default();
+    // Worst case inputs with various sizes.
+    let d = parse_int("-5625246009237013252");
+    ideal_relations(&d, &prefs, None);
+
+    let d = parse_int("-17442319661992626809332");
+    ideal_relations(&d, &prefs, None);
+
+    let d = parse_int("-1100921531608271618166868");
+    ideal_relations(&d, &prefs, None);
+
+    let d = parse_int("-4197708731399051763400135492");
+    ideal_relations(&d, &prefs, None);
+
+    let d = parse_int("-333684818975420457430375646788");
+    ideal_relations(&d, &prefs, None);
 }

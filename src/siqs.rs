@@ -426,9 +426,9 @@ fn a_tolerance_divisor(n: &Uint) -> usize {
         0..=50 => 3,
         51..=70 => 5,
         71..=90 => 6,
-        91..=110 => 20,
-        111..=140 => 40,
-        141..=160 => 80,
+        91..=110 => 10,
+        111..=140 => 20,
+        141..=160 => 40,
         _ => 100,
     }
 }
@@ -588,11 +588,10 @@ pub fn select_siqs_factors<'a>(
         if v >= Verbosity::Info {
             eprintln!("WARNING: suboptimal choice of A factors");
         }
-        fb.len() - 2 * nfacs..fb.len()
-    } else if idx > 4 * nfacs && idx + 4 * nfacs < fb.len() {
-        idx - 2 * nfacs..idx + 2 * nfacs
+        max(fb.len(), 4 * nfacs) - 4 * nfacs..fb.len()
     } else {
-        idx - nfacs..idx + max(nfacs, 6)
+        let imin = max(idx, 2 * nfacs) - 2 * nfacs;
+        imin..imin + 4 * nfacs
     };
     assert!(
         selected_idx.len() > nfacs,
@@ -799,9 +798,19 @@ pub fn select_a(f: &Factors, want: usize, v: Verbosity) -> Vec<Uint> {
             .filter(|g| mask & (1 << g) == 0)
             .min_by_key(|&idx| (f.factors[idx].p as i64 - t as i64).abs())
             .unwrap();
-        product *= U256::from(f.factors[idx].p);
-        if amin < product && product < amax {
-            candidates.insert(Uint::cast_from(product));
+        let jrange = if div > 0 {
+            max(2, idx) - 2..min(idx + 3, f.factors.len())
+        } else {
+            0..f.factors.len() // try all combinations
+        };
+        for j in jrange {
+            if mask & (1 << j) != 0 {
+                continue;
+            }
+            let prod = product * U256::from(f.factors[j].p);
+            if amin < prod && prod < amax {
+                candidates.insert(Uint::cast_from(prod));
+            }
         }
         if candidates.len() > 2 * want && iters % 10 == 0 {
             let mut candidates = Vec::from_iter(candidates.into_iter());
