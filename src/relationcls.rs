@@ -139,10 +139,13 @@ impl CRelationSet {
             );
             return;
         }
-        let n1 = self.n_cycles[1] as f64;
+        let mut n1 = self.n_cycles[1] as f64;
+        if n1 <= 2.0 {
+            n1 /= 2.0; // maybe we were lucky, use a conservative estimate
+        }
         if self.n_doubles == 0 {
             // Single large primes: solve K such that n0 K + n1 K^2 == target
-            let k = if n1 <= 2.0 {
+            let k = if n1 == 0.0 {
                 // Cannot estimate, assume that n0 = target/2 is the target.
                 self.target as f64 / (2.0 * n0)
             } else {
@@ -169,8 +172,11 @@ impl CRelationSet {
             return;
         }
         // Double large primes: solve K such that n0 K + n1 K^2 + n2 K^3.5 = target
-        let n2 = self.n_cycles[2..].iter().sum::<usize>() as f64;
-        let k = if n2 <= 2.0 {
+        let mut n2 = self.n_cycles[2..].iter().sum::<usize>() as f64;
+        if n2 <= 2.0 {
+            n2 /= 2.0; // maybe we were lucky, use a conservative estimate
+        }
+        let k = if n2 == 0.0 {
             // Cannot estimate, assume that n0 = target/4 is the target.
             self.target as f64 / (4.0 * n0)
         } else {
