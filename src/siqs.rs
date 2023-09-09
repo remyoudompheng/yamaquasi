@@ -594,6 +594,10 @@ pub fn select_siqs_factors<'a>(
     } else {
         idx - nfacs..idx + max(nfacs, 6)
     };
+    assert!(
+        selected_idx.len() > nfacs,
+        "internal error: cannot sample {nfacs} primes from fb[{selected_idx:?}]"
+    );
     // Make sure that selected factors don't divide n.
     // Also never take the first prime (usually 2).
     let selection: Vec<Prime> = selected_idx
@@ -702,31 +706,50 @@ pub fn select_a(f: &Factors, want: usize, v: Verbosity) -> Vec<Uint> {
     let mut amin = f.target - f.target / div as u64;
     let mut amax = f.target + f.target / div as u64;
 
-    if f.nfacs <= 3 {
+    if f.nfacs <= 5 && f.target.bits() <= 66 {
+        assert!(f.target.bits() < 60 || f.factors[0].p > 100);
         // Generate all products (quicker than random sampling)
-        assert!(f.target.bits() < 60);
-        let mut candidates: Vec<u64> = vec![];
-        for f1 in &f.factors {
-            let p1 = f1.p;
-            for f2 in &f.factors {
-                let p2 = f2.p;
-                if p2 >= p1 {
-                    break;
-                }
+        let mut candidates: Vec<u128> = vec![];
+        let fl = f.factors.len();
+        for i1 in 0..=fl - f.nfacs {
+            let p1 = f.factors[i1].p;
+            for i2 in i1 + 1..fl {
+                let p2 = f.factors[i2].p;
+                let Some(p12) = p1.checked_mul(p2) else {
+                    continue;
+                };
                 if f.nfacs == 2 {
-                    candidates.push(p1 * p2);
-                } else {
-                    for f3 in &f.factors {
-                        let p3 = f3.p;
-                        if p3 >= p2 {
-                            break;
+                    candidates.push(p12 as u128);
+                    continue;
+                }
+                for i3 in i2 + 1..fl {
+                    let p3 = f.factors[i3].p;
+                    let Some(p123) = p12.checked_mul(p3) else {
+                        continue;
+                    };
+                    if f.nfacs == 3 {
+                        candidates.push(p123 as u128);
+                        continue;
+                    }
+                    for i4 in i3 + 1..fl {
+                        let p4 = f.factors[i4].p;
+                        let Some(p1234) = p123.checked_mul(p4) else {
+                            continue;
+                        };
+                        if f.nfacs == 4 {
+                            candidates.push(p1234 as u128);
+                            continue;
                         }
-                        candidates.push(p1 * p2 * p3);
+                        for i5 in i4 + 1..fl {
+                            // Switch to 128 bits for the last factor.
+                            let p5 = f.factors[i5].p as u128;
+                            candidates.push(p1234 as u128 * p5);
+                        }
                     }
                 }
             }
         }
-        let target = f.target.low_u64();
+        let target = u128::cast_from(f.target);
         candidates.sort_by_key(|&c| c.abs_diff(target));
         candidates.dedup();
         if candidates.len() > want {
