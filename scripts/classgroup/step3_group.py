@@ -67,7 +67,7 @@ def structure(datadir: Path, meta, sage=False):
     vlogs = []
 
     for l, e in hfacs:
-        print(f"Invariant factor {l}")
+        print(f"Processing factor {l}^{e}")
         if l == 2:
             M2 = Matrix(GF(2), M.shape[0], M.shape[1])
             for (i, j), v in M.todok().items():
@@ -90,7 +90,7 @@ def structure(datadir: Path, meta, sage=False):
             else:
                 for k in ker:
                     moduli.append(2)
-                    vlogs.append(ker[0])
+                    vlogs.append(k)
             continue
 
         ker = []
@@ -149,7 +149,7 @@ def structure(datadir: Path, meta, sage=False):
     for idx, (m, v) in enumerate(zip(invariants, vlogs)):
         for i in range(10):
             if v[i].is_unit():
-                vlogs[idx] = vector(Zmod(m), v) / v[i]
+                vlogs[idx] = vector(Zmod(m), list(v)) / v[i]
                 break
 
     print("Group structure", "*".join(f"Z/{l}" for l in invariants))
