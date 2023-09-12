@@ -14,6 +14,11 @@ Supported methods:
 
 Currently, the case where the class group has mixed torsion
 (Z/p^a x Z/p^b for a != b) is unsupported.
+
+Interesting examples:
+-4121772595988 (class group contains (Z/64) x (Z/8) x (Z/2)^2)
+-2369327551192371231831524 (class group contains Z/4096)
+-60804245979233297257449655434754756 (class group contains Z/8 Z/4 Z/2 Z/3 Z/3)
 """
 
 import os
@@ -30,8 +35,10 @@ from scipy.sparse import csr_matrix, hstack
 from sage.all import (
     Matrix,
     MatrixSpace,
+    VectorSpace,
     GF,
     Zmod,
+    ZZ,
     factor,
     cputime,
     lcm,
@@ -72,25 +79,10 @@ def structure(datadir: Path, meta, sage=False):
             M2 = Matrix(GF(2), M.shape[0], M.shape[1])
             for (i, j), v in M.todok().items():
                 M2[i, j] = v
-            ker = M2.right_kernel().basis()
-            if len(ker) < e:
-                # Lift them
-                if len(ker) == 1:
-                    sol = ker[0]
-                    for exponent in range(2, e + 1):
-                        print(f"Lifting modulo {l}^{exponent}")
-                        sol = sparsekernel_pk(M, maxw, l, exponent, sol0=sol)
-                    moduli.append(l**e)
-                    vlogs.append(vector(Zmod(l**e), sol))
-                    # FIXME FIXME
-                else:
-                    raise NotImplementedError(
-                        f"Failed to determine 2-torsion: kernel has rank {len(ker)}"
-                    )
-            else:
-                for k in ker:
-                    moduli.append(2)
-                    vlogs.append(k)
+            basis, orders = kernel_2k(M, M2, e)
+            for k, l in zip(basis, orders):
+                moduli.append(2**l)
+                vlogs.append(k.change_ring(Zmod(2**l)))
             continue
 
         ker = []
@@ -129,7 +121,9 @@ def structure(datadir: Path, meta, sage=False):
     # Build a large CRT
     seen = set()
     used = []
-    for i, l in enumerate(moduli):
+    for i, m in enumerate(moduli):
+        assert ZZ(m).is_prime_power()
+        l, e = ZZ(m).factor()[0]
         if l not in seen:
             used.append(i)
             seen.add(l)
@@ -204,6 +198,94 @@ def extra(datadir: Path, meta):
                 print(p, " ".join(str(x) for x in dlog), file=w)
                 n_extra += 1
             print(f"{n_extra} additional discrete logs written to {w.name}")
+
+
+def vec2array(v):
+    return np.array([int(x) for x in v], dtype=np.int64)
+
+
+def kernel_2k(M, M2, e):
+    """
+    Compute the 2-adic kernel of matrix M,
+    where the 2-adic kernel is known to have order 2^e.
+
+    The result is a sequence of bases for:
+
+    ker M[2^k] -> ... ker M[4] -> ker M[2] -> 0
+
+    with increasing rank.
+
+    We obtain solutions by lifting lower solutions
+    to a higher power of 2.
+
+    FIXME: the algorithm is very suboptimal!
+    """
+    # We keep 1 kernel element for each 2^l and for each value of V%2.
+    # They are uniquely defined up to multiplication by an odd integer.
+    ker0 = M2.right_kernel()
+    ker0_vecs = [vec2array(v) for v in ker0 if v]
+    ranks = [ker0.dimension()]
+    kers = [ker0_vecs]
+    R, N = M.shape
+    while sum(ranks) < e:
+        k = len(kers)
+        print(f"Lifting kernel modulo 2^{k+1} (found 2^{sum(ranks)} subgroup)")
+        ker_next = []
+        for v in kers[-1]:
+            # v is in kernel modulo 2^k
+            # But the correct vector to lift can be any v + 2^l w
+            # for some w in kernel modulo 2^(k-l)
+            def v_ball():
+                if k == 1:
+                    yield v
+                    return
+                for w in kers[-2]:
+                    for mw in range(1, 2 ** (k - 2) + 1, 2):
+                        if k == 2:
+                            yield v + 2 * mw * w
+                        else:
+                            for ww in kers[-3]:
+                                for mww in range(1, 2 ** (k - 3) + 1, 2):
+                                    yield v + 2 * mw * w + 4 * mww * ww
+                        # FIXME: recurse even more!
+
+            for vw in v_ball():
+                assert not ((M @ vw) & (2**k - 1)).any()
+                db = ((M @ vw) >> k) & 1
+                try:
+                    msb = M2.solve_right(vector(GF(2), list(db)))
+                    vv = vw + (vec2array(msb) << k)
+                    assert not ((M @ vv) & (2 ** (k + 1) - 1)).any()
+                    assert (vv & 1).any()
+                    ker_next.append(vv)
+                    break
+                except ValueError:
+                    pass
+        span = Matrix(GF(2), [list(_v) for _v in ker_next])
+        ranks.append(span.rank())
+        print(f"Found 2^{k+1}-torsion of rank {span.rank()}")
+        kers.append(ker_next)
+        if not ker_next:
+            break
+    # Compute an "echelonized" basis adapted to group invariants.
+    basis = []
+    order = []
+    VN = VectorSpace(GF(2), N)
+    span = VN.zero_submodule()
+    for l, r, ker in reversed(list(zip(range(1, len(kers) + 1), ranks, kers))):
+        for _ in range(len(basis), r):
+            # find a new independent vector
+            vk = None
+            for _k in ker:
+                _v2 = vector(GF(2), _k)
+                if _v2 not in span:
+                    span += VN.span([_v2])
+                    vz = vector(ZZ, list(_k))
+                    break
+            assert vz is not None
+            basis.append(vz)
+            order.append(l)
+    return basis, order
 
 
 def sparsekernel(M, norm, p, dim=None, sage=False):
