@@ -16,7 +16,9 @@ Currently, the case where the class group has mixed torsion
 (Z/p^a x Z/p^b for a != b) is unsupported.
 
 Interesting examples:
+-9830811079 (class group contains Z/16 x Z/3 x Z/9)
 -4121772595988 (class group contains (Z/64) x (Z/8) x (Z/2)^2)
+-2441606469306899513505764 (class group contains Z/2 x Z/4 x Z/3 x Z/9)
 -2369327551192371231831524 (class group contains Z/4096)
 -60804245979233297257449655434754756 (class group contains Z/8 Z/4 Z/2 Z/3 Z/3)
 """
@@ -86,8 +88,11 @@ def structure(datadir: Path, meta, sage=False):
             continue
 
         ker = []
+        max_dimker = M.shape[1]
         while True:
-            sol = sparsekernel(M, maxw, l, sage=sage)
+            sol, _max_dimker = sparsekernel(M, maxw, l, sage=sage)
+            if _max_dimker is not None:
+                max_dimker = min(max_dimker, _max_dimker)
             if sol == 0:
                 print("solution is a null vector, retry")
             else:
@@ -97,8 +102,11 @@ def structure(datadir: Path, meta, sage=False):
                 else:
                     rk = Matrix(GF(l), ker).rank()
                     print(f"Found rank {rk} subgroup of {l}-torsion")
+                    if rk >= max_dimker:
+                        break
 
-        if (rk := Matrix(GF(l), ker).rank()) < e:
+        Kp = Matrix(GF(l), ker).row_module()
+        if (rk := Kp.dimension()) < e:
             if rk == 1:
                 sol = ker[0]
                 for exponent in range(2, e + 1):
@@ -108,6 +116,33 @@ def structure(datadir: Path, meta, sage=False):
                     sol = sparsekernel_pk(M, maxw, l, exponent, sol0=sol)
                 moduli.append(l**e)
                 vlogs.append(vector(Zmod(l**e), sol))
+            elif rk == e - 1:
+                # We just need 1 p^2-torsion element, should be doable.
+                # FIXME: it is enough to iterate over the (smaller) projective space of Kp.
+                sol = None
+                for sol0 in Kp:
+                    if sol0 == 0:
+                        continue
+                    print(sol0)
+                    try:
+                        sol = sparsekernel_pk(M, maxw, l, 2, sol0=sol0)
+                        break
+                    except Exception as err:
+                        pass
+                assert sol
+                # We have a p^2-torsion element and additional p-torsion vectors.
+                # FIXME: this looks suboptimal.
+                VN = VectorSpace(GF(l), M.shape[1])
+                span = VN.zero_submodule()
+                ker = [sol] + ker
+                orders = [l**2] + [l for _ in ker]
+                for _k, _pk in zip(ker, orders):
+                    _vk = vector(GF(l), list(_k))
+                    if _vk not in span:
+                        span += VN.span([_vk])
+                        vz = vector(Zmod(_pk), list(_k))
+                        moduli.append(_pk)
+                        vlogs.append(vz)
             else:
                 raise NotImplementedError
         else:
@@ -117,6 +152,7 @@ def structure(datadir: Path, meta, sage=False):
 
     print("Coordinates found modulo", moduli)
     assert len(moduli) == len(vlogs)
+    assert prod(moduli) == h
 
     # Build a large CRT
     seen = set()
@@ -289,17 +325,20 @@ def kernel_2k(M, M2, e):
 
 
 def sparsekernel(M, norm, p, dim=None, sage=False):
+    """
+    Return a kernel element and an optional upper bound for the kernel dimension.
+    """
     if p * norm < 2**63:
         return _sparsekernel_numpy(M, norm, p, dim=dim)
     else:
         if os.getenv("CADONFS_BWCDIR"):
-            return _sparsekernel_cado(M, p)
+            return _sparsekernel_cado(M, p), None
         else:
             if not sage:
                 raise ValueError(
                     "Please define CADONFS_BWCDIR to use Cado-NFS or set --sage option"
                 )
-            return _sparsekernel_sage(M, p, dim=dim)
+            return _sparsekernel_sage(M, p, dim=dim), None
 
 
 def sparsekernel_pk(M, norm, p, k, sol0):
@@ -329,10 +368,17 @@ def sparsekernel_pk(M, norm, p, k, sol0):
     M1 = csr_matrix(hstack([M, mv1]))
     M1.sort_indices()
     # FIXME: Why do we need dim=N ?
-    while True:
-        sol1 = sparsekernel(M1, max(norm, norm1), p, dim=N)
+    VN = GF(p) ** N
+    solspace = VN.zero_submodule()
+    maxsols = N
+    while solspace.dimension() < maxsols:
+        sol1, _maxdim = sparsekernel(M1, max(norm, norm1), p, dim=N)
+        maxsols = min(maxsols, _maxdim)
         if sol1[-1]:
             break
+        solspace += VN.span([sol1])
+    if not sol1[-1]:
+        raise ValueError("no solution")
     # Normalize to get M V1 + (M v0 / p) == 0
     sol1 /= sol1[-1]
     sol = [int(sol0[i]) + p ** (k - 1) * int(sol1[i]) for i in range(N)]
@@ -352,6 +398,7 @@ def _sparsekernel_numpy(M, norm, p, dim=None):
 
     t = cputime()
     Fp, (FpX, x) = GF(p), GF(p)["x"].objgen()
+    max_kerdim = N
     for iter in range(50):
         V0 = np.array([random.randint(0, p - 1) for _ in range(N)], dtype=np.int64)
         V = V0
@@ -383,6 +430,7 @@ def _sparsekernel_numpy(M, norm, p, dim=None):
             continue
         # Assume that the minimal polynomial is correct
         # print(f"Minimal polynomial has degree {minpoly.degree()} and valuation {minpoly.valuation()}")
+        max_kerdim = min(max_kerdim, N - minpoly.degree() + minpoly.valuation())
         polred = minpoly >> 1
         # Polynomial with zero coefficient is found
         if p.bit_length() < 30:
@@ -408,8 +456,8 @@ def _sparsekernel_numpy(M, norm, p, dim=None):
 
     assert all(int(x) % p == 0 for x in M @ W[:N])
     sol = vector(GF(p), W[:N])
-    print(f"Solved modulo {p} t={cputime(t):.3f}")
-    return sol
+    print(f"Solved modulo {p} dim(ker)<={max_kerdim} t={cputime(t):.3f}")
+    return sol, max_kerdim
 
 
 def _sparsekernel_sage(M, p, dim=None):
