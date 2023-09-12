@@ -64,12 +64,14 @@ def classno(datadir: Path, meta, nthreads):
         ratio = float(gd) / float(happ)
         if ratio < 1000:
             print("GCD is", gd, f"~{round(ratio, 6)} h_approx")
-        if ratio < 50 and abs(ratio - round(ratio)) < 0.1 and gd % int(round(ratio)) == 0:
-            gd //= int(round(ratio))
-            print("Found exact class number", gd)
-            with open(datadir / "classnumber", "w") as w:
-                w.write(str(gd) + "\n")
-            break
+        if ratio < 50 and abs(ratio - round(ratio)) < 0.1:
+            ratio = int(round(ratio))
+            if ratio and gd % ratio == 0:
+                gd //= ratio
+                print("Found exact class number", gd)
+                with open(datadir / "classnumber", "w") as w:
+                    w.write(str(gd) + "\n")
+                break
 
 
 def read_matrix(filename: Path):

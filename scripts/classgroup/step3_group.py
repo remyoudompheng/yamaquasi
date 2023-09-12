@@ -303,6 +303,8 @@ def kernel_2k(M, M2, e):
         kers.append(ker_next)
         if not ker_next:
             break
+    if sum(ranks) < e:
+        raise ValueError("could not find full 2^*-torsion")
     # Compute an "echelonized" basis adapted to group invariants.
     basis = []
     order = []
@@ -368,9 +370,9 @@ def sparsekernel_pk(M, norm, p, k, sol0):
     M1 = csr_matrix(hstack([M, mv1]))
     M1.sort_indices()
     # FIXME: Why do we need dim=N ?
-    VN = GF(p) ** N
+    VN = GF(p) ** (N + 1)
     solspace = VN.zero_submodule()
-    maxsols = N
+    maxsols = N + 1
     while solspace.dimension() < maxsols:
         sol1, _maxdim = sparsekernel(M1, max(norm, norm1), p, dim=N)
         maxsols = min(maxsols, _maxdim)
