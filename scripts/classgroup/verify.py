@@ -30,6 +30,9 @@ def main():
     if (rels := dir / "relations.pruned").is_file():
         verify_rels(rels, D)
 
+    if (rels := dir / "relations.removed").is_file():
+        verify_removed(rels, D)
+
     if not (gextra := dir / "group.structure.extra").is_file():
         gextra = None
 
@@ -58,6 +61,8 @@ def verify_rels(rels, D):
                     pos.append(f)
                 else:
                     neg.append(-f)
+                if f > 2 and D % (f * f) == 0:
+                    raise ValueError("discriminant is not fundamental")
             # Check
             qpos = ONE
             for l in pos:
@@ -65,7 +70,37 @@ def verify_rels(rels, D):
             qneg = ONE
             for l in neg:
                 qneg *= qf(l, D)
-            assert qpos.reduced_form() == qneg.reduced_form()
+            assert qpos.reduced_form() == qneg.reduced_form(), line
+            count += 1
+        print(f"{rels}: {count} relations verified in {time.time()-t0:.3f}s")
+
+
+def verify_removed(rels, D):
+    match D % 4:
+        case 0:
+            ONE = BinaryQF([1, 0, -D // 4])
+        case 1:
+            ONE = BinaryQF([1, 1, (1 - D) // 4])
+        case _:
+            raise ValueError(f"D must be 0 or 1 modulo 4")
+
+    t0 = time.time()
+    with open(rels) as f:
+        count = 0
+        for line in f:
+            line = line.strip()
+            p, _, facs_str = line.partition(" = ")
+            facs = []
+            for le in facs_str.split():
+                l, _, e = le.partition("^")
+                facs.append((int(l), int(e)))
+            p = int(p)
+            q1 = qf(p, D)
+            q2 = ONE
+            for l, e in facs:
+                q2 *= qpow(qf(l, D), e, D)
+                q2 = q2.reduced_form()
+            assert q1.reduced_form() == q2.reduced_form(), line
             count += 1
         print(f"{rels}: {count} relations verified in {time.time()-t0:.3f}s")
 
@@ -145,7 +180,8 @@ def qf(p, D):
         b = ZZ(min(mod(D, 2 * p).sqrt(all=True)))
         c = (ZZ(b) ** 2 - D) // (4 * p)
         assert b * b - 4 * p * c == D
-        assert (q := BinaryQF([p, b, c])) == q.reduced_form()
+        if p * p < D:
+            assert (q := BinaryQF([p, b, c])) == q.reduced_form(), q
         return BinaryQF(p, b, c)
     else:
         if p == 2:
@@ -165,6 +201,9 @@ def qpow(qf, e, D):
         res = BinaryQF([1, 1, (1 - D) // 4])
     else:
         res = BinaryQF([1, 0, -D // 4])
+    if e < 0:
+        qf = BinaryQF(qf[0], -qf[1], qf[2])
+        e = -e
     sq = qf
     while e:
         if e % 2 == 1:
