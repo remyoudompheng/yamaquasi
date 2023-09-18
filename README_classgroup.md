@@ -119,22 +119,34 @@ Since the computation is identical to SIQS, the performance behaves
 similarly. However, the parameters are chosen to avoid blowing up
 the complexity of the linear algebra step, slowing down the sieve.
 
-Expected execution times, depending on discriminant size
-are approximately (for 1 CPU core):
+The best inputs (discriminant is a square modulo many small primes)
+behave as if they were 15-20 bits smaller, and the worst inputs
+behave as if they were 15-20 bits bigger.
 
-* 200 bits: less than 1 minute sieve, 1-5mn linear algebra
-* 220 bits: about 5 minutes for sieve, 5-10mn for linear algebra
-* 250 bits: about 10 minutes for sieve, 20-30mn for linear algebra
-* 280 bits: 30-40 minutes for sieve, more than 1 hour for linear algebra
-* 300 bits: about 4 hours sieve, about 3 hours linear algebra
-* 330 bits (100 decimal digits): about 20 hours sieve, about 12 hours linear algebra
+Approximate execution times for average inputs, depending on discriminant size
+are approximately (for 1 CPU core, Zen2 4 GHz):
+
+| Input size | Sieve time | Linear algebra time |
+| ---------- | ---------- | ------------------- |
+|  100 bits  |    50 ms  |     5ms   |
+|  120 bits  |   150 ms  |    20ms   |
+|  140 bits  |   300 ms  |    80ms   |
+|  160 bits  |   1 s     |   800ms   |
+|  180 bits  |   3 s     |     2s    |
+|  200 bits  |   15 s    |    15s    |
+|  220 bits  |   1 min   |    30s    |
+|  240 bits  |   5 mins  |   2 mins  |
+|  260 bits  |  15 mins  |   5 mins  |
+|  280 bits  |  60 mins  |  15 mins  |
+|  300 bits  |   3 hours |  1 hour   |
+|  320 bits  |10-20 hours|  2 hours  |
 
 The sieving step and the computation of the class number can use multiple cores.
 The output of the sieve is usually less than 250 MiB even for 100-digit inputs.
 
 Some computer algebra systems like PARI implement the Buchmann-McCurley
 algorithm which tries to find smooth ideals by random sampling.
-This is slower for large numbers (above 128 bits).
+This is slower for large discriminants (above 64-80 bits).
 
 ## Linear algebra
 
@@ -151,6 +163,9 @@ it is computed using 2 determinants, via CRT and the Wiedemann algorithm.
 The Wiedemann algorithm is implemented in Python using
 scipy uint64 matrices and uses 54-bit moduli.
 
+For small discriminants, an implementation using dense linear algebra
+is built in `ymcls` for faster computation.
+
 ## Group structure
 
 The group structure (equivalent to Smith normal form of the relation matrix)
@@ -160,6 +175,8 @@ prime power divisors of the class number.
 Cado-NFS is the fastest option for primes over 55 bits that cannot use
 the scipy-based Wiedemann algorithm implementation. A very slow implementation
 using generic sparse matrices from SageMath is also available as a fallback.
+
+The current implementation can fail if the group has unusually large p^k torsion.
 
 ## Examples
 
