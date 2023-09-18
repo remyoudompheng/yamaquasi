@@ -11,6 +11,7 @@ use bnum::cast::CastFrom;
 use num_traits::ToPrimitive;
 
 use crate::arith;
+use crate::arith_montgomery::{mg_2adic_inv, mg_mul, mg_redc};
 use crate::{Int, Uint};
 
 // A context to compute Gram-Schmidt orthogonal bases out of integral
@@ -131,8 +132,12 @@ pub fn det_matz(mat: Vec<&[i64]>, estimate: f64) -> Int {
 /// Modulus is usually around 60 bits.
 struct GFpEchelonBuilder {
     p: u64,
-    basis: Vec<Vec<u64>>,
+    pinv: u64,
+    r: u64,  // 2^64 % p
+    r2: u64, // 2^128 % p
     indices: Vec<usize>,
+    // All values are stored in Montgomery form.
+    basis: Vec<Vec<u64>>,
     factors: Vec<u64>,
 }
 
@@ -159,8 +164,14 @@ const PRIMES: [u64; 17] = [
 
 impl GFpEchelonBuilder {
     fn new(p: u64) -> Self {
+        let pinv = mg_2adic_inv(p);
+        let r = (1u128 << 64).rem_euclid(p as u128) as u64;
+        let r2 = (r as u128 * r as u128).rem_euclid(p as u128) as u64;
         Self {
             p,
+            pinv,
+            r,
+            r2,
             basis: vec![],
             indices: vec![],
             factors: vec![],
@@ -172,11 +183,16 @@ impl GFpEchelonBuilder {
             assert_eq!(v.len(), self.basis[0].len());
         }
         let mut vp = vec![0u64; v.len()];
+        let p = self.p as i64;
         for i in 0..v.len() {
-            vp[i] = v[i].unsigned_abs() % self.p;
-            if v[i] < 0 {
-                vp[i] = self.p - vp[i];
+            let mut vi = v[i];
+            while vi < 0 {
+                vi += p;
             }
+            while vi >= p {
+                vi -= p;
+            }
+            vp[i] = mg_mul(self.p, self.pinv, vi as u64, self.r2);
         }
         // Eliminate
         for (&idx, b) in self.indices.iter().zip(&self.basis) {
@@ -191,7 +207,7 @@ impl GFpEchelonBuilder {
             let vi = vp[i];
             if vi != 0 {
                 self.div(&mut vp, vi);
-                assert_eq!(vp[i], 1);
+                assert_eq!(vp[i], self.r);
                 self.indices.push(i);
                 self.basis.push(vp);
                 self.factors.push(vi);
@@ -203,18 +219,25 @@ impl GFpEchelonBuilder {
 
     fn div(&self, v: &mut [u64], m: u64) {
         let p = self.p;
-        let minv = arith::inv_mod64(m, p).unwrap();
+        // mm = m/R
+        let mm = mg_redc(self.p, self.pinv, m as u128);
+        let mminv = arith::inv_mod64(mm, p).unwrap();
+        // minv = R/mm = R^2/m
+        let minv = mg_mul(self.p, self.pinv, mminv, self.r2);
         for vi in v {
-            let x = (*vi as u128 * minv as u128).rem_euclid(p as u128);
-            *vi = x as u64;
+            *vi = mg_mul(self.p, self.pinv, *vi, minv);
         }
     }
 
     fn submul(&self, v: &mut [u64], w: &[u64], m: u64) {
         let p = self.p;
         for (i, vi) in v.iter_mut().enumerate() {
-            let x = *vi as i128 - m as i128 * w[i] as i128;
-            *vi = x.rem_euclid(p as i128) as u64;
+            let mw = mg_mul(self.p, self.pinv, m, w[i]);
+            if *vi >= mw {
+                *vi -= mw;
+            } else {
+                *vi += p - mw;
+            }
         }
     }
 
@@ -234,10 +257,14 @@ impl GFpEchelonBuilder {
             i += 1;
         }
         let p = self.p;
-        let mut det = if swaps % 2 == 0 { 1 } else { p - 1 };
         // Multiply diagonal elements
-        for &f in &self.factors {
-            det = (det as u128 * f as u128).rem_euclid(p as u128) as u64;
+        let mut det = self.factors[0];
+        for &f in &self.factors[1..] {
+            det = mg_mul(p, self.pinv, det, f);
+        }
+        det = mg_redc(p, self.pinv, det as u128);
+        if swaps % 2 == 1 && det > 0 {
+            det = p - det
         }
         det
     }
