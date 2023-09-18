@@ -33,6 +33,9 @@ def main():
     if (rels := dir / "relations.removed").is_file():
         verify_removed(rels, D)
 
+    if (rels := dir / "relations.filtered").is_file():
+        verify_rels2(rels, D)
+
     if not (gextra := dir / "group.structure.extra").is_file():
         gextra = None
 
@@ -101,6 +104,33 @@ def verify_removed(rels, D):
                 q2 *= qpow(qf(l, D), e, D)
                 q2 = q2.reduced_form()
             assert q1.reduced_form() == q2.reduced_form(), line
+            count += 1
+        print(f"{rels}: {count} relations verified in {time.time()-t0:.3f}s")
+
+
+def verify_rels2(rels, D):
+    match D % 4:
+        case 0:
+            ONE = BinaryQF([1, 0, -D // 4])
+        case 1:
+            ONE = BinaryQF([1, 1, (1 - D) // 4])
+        case _:
+            raise ValueError(f"D must be 0 or 1 modulo 4")
+
+    t0 = time.time()
+    with open(rels) as f:
+        count = 0
+        for line in f:
+            line = line.strip()
+            facs = []
+            for le in line.split():
+                l, _, e = le.partition("^")
+                facs.append((int(l), int(e)))
+            q = ONE
+            for l, e in facs:
+                q *= qpow(qf(l, D), e, D)
+                q = q.reduced_form()
+            assert q.reduced_form() == ONE
             count += 1
         print(f"{rels}: {count} relations verified in {time.time()-t0:.3f}s")
 

@@ -13,13 +13,17 @@
 //! We still keep track of the largest connected component of the
 //! large prime graph, but emit relations instead of combining them.
 
-use std::cmp::min;
+use std::cmp::{max, min};
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+use std::time::Instant;
 
+use bnum::cast::CastFrom;
+
+use crate::matrixint;
 use crate::Int;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,51 +33,6 @@ pub struct CRelation {
     // Large primes are stored separately and may be larger.
     pub large1: Option<(u32, i32)>,
     pub large2: Option<(u32, i32)>,
-}
-
-/// Combine 2 relations sharing a large prime.
-pub fn combine(r1: &CRelation, r2: &CRelation) -> CRelation {
-    // Which large prime is common?
-    let (_p, e1, e2, q1, q2) = match (r1.large1, r1.large2, r2.large1, r2.large2) {
-        (Some((p1, e1)), q1, Some((p2, e2)), q2) if p1 == p2 => (p1, e1, e2, q1, q2),
-        (Some((p1, e1)), q1, q2, Some((p2, e2))) if p1 == p2 => (p1, e1, e2, q1, q2),
-        (q1, Some((p1, e1)), Some((p2, e2)), q2) if p1 == p2 => (p1, e1, e2, q1, q2),
-        (q1, Some((p1, e1)), q2, Some((p2, e2))) if p1 == p2 => (p1, e1, e2, q1, q2),
-        _ => {
-            panic!("impossible: relations cannot be combined")
-        }
-    };
-    let (q1, q2) = if q1.is_none() { (q2, q1) } else { (q1, q2) };
-    // Eliminate like Gauss elimination e2 * factors1 - e1 * factors2
-    // The exponents are always ±1 and ±1 in practice, because it's
-    // highly unlikely that a binary form value is divisible by a large square.
-    let mut factors: Vec<(u32, i32)> = vec![];
-    'iter1: for &(p, k) in &r1.factors {
-        for f in factors.iter_mut() {
-            if f.0 == p {
-                f.1 += e2 * k;
-                continue 'iter1;
-            }
-        }
-        factors.push((p, e2 * k));
-    }
-    'iter2: for &(p, k) in &r2.factors {
-        for f in factors.iter_mut() {
-            if f.0 == p {
-                f.1 -= e1 * k;
-                continue 'iter2;
-            }
-        }
-        factors.push((p, -e1 * k));
-    }
-    // Also multiply large primes
-    let q1 = q1.map(|(p, k)| (p, e2 * k));
-    let q2 = q2.map(|(p, k)| (p, -e1 * k));
-    CRelation {
-        factors,
-        large1: q1,
-        large2: q2,
-    }
 }
 
 #[derive(Default)]
@@ -121,6 +80,10 @@ impl CRelationSet {
 
     pub fn done(&self) -> bool {
         self.len() > self.target
+    }
+
+    pub fn to_vec(self) -> Vec<CRelation> {
+        self.emitted
     }
 
     pub fn log_progress<S: AsRef<str>>(&self, prefix: S) {
@@ -295,7 +258,7 @@ impl CRelationSet {
         if self.print_cycles {
             // Display factors
             let mut line = vec![];
-            for &(p, e) in &r.factors {
+            let mut push = |p: u32, e: i32| {
                 let (rp, re) = if e > 0 {
                     (p as i64, e)
                 } else {
@@ -307,24 +270,15 @@ impl CRelationSet {
                     }
                     write!(&mut line, "{rp}").unwrap();
                 }
+            };
+            for &(p, e) in &r.factors {
+                push(p, e);
             }
             if let Some((p, e)) = r.large1 {
-                for _ in 0..e.unsigned_abs() {
-                    line.push(b' ');
-                    if e < 0 {
-                        line.push(b'-');
-                    }
-                    write!(&mut line, "{p}").unwrap();
-                }
+                push(p, e);
             }
             if let Some((p, e)) = r.large2 {
-                for _ in 0..e.unsigned_abs() {
-                    line.push(b' ');
-                    if e < 0 {
-                        line.push(b'-');
-                    }
-                    write!(&mut line, "{p}").unwrap();
-                }
+                push(p, e);
             }
             line.push(b'\n');
             // FIXME: handle errors?
@@ -339,4 +293,395 @@ impl CRelationSet {
         }
         self.emitted.push(r);
     }
+}
+
+pub fn group_structure(rels: Vec<CRelation>, hest: (f64, f64), outdir: Option<PathBuf>) {
+    let t0 = Instant::now();
+    let mut r = RelFilterSparse::new(rels);
+    while let Some(_) = r.pivot_one() {
+        if r.weight.len() % 16 == 0 {
+            let nrows = r.rows.iter().filter(|r| r.len() > 0).count();
+            eprintln!(
+                "{} columns {} rows {} coefs",
+                r.weight.len(),
+                nrows,
+                r.nonzero.len()
+            );
+        }
+    }
+    if let Some(outdir) = outdir.as_ref() {
+        r.write_files(outdir);
+    }
+    let mut r = matrixint::SmithNormalForm::new(&r.rows, r.removed, hest.0, hest.1);
+    eprintln!("{} columns {} rows", r.gens.len(), r.rows.len());
+    eprintln!("Class number is {}", r.h);
+    if let Some(outdir) = outdir.as_ref() {
+        let mut w = fs::File::create(outdir.join("classnumber")).unwrap();
+        writeln!(w, "{}", r.h).unwrap();
+    }
+    r.reduce();
+    // Removed relations, in reverse order
+    if let Some(outdir) = outdir.as_ref() {
+        write_relations(&r, outdir);
+        write_group_structure(&r, outdir);
+        let qual = if r.gens.len() == 1 { "Full" } else { "Partial" };
+        eprintln!(
+            "{} group structure computed in {:.3}s",
+            qual,
+            t0.elapsed().as_secs_f64()
+        );
+    }
+}
+
+/// A structure to filter relations when they are sparse.
+/// It implements a simple form of structured Gauss elimination.
+struct RelFilterSparse {
+    // Array of relations represented by sparse, sorted
+    // vectors of (prime, exponent).
+    rows: Vec<Vec<(u32, i32)>>,
+    // How many times each given prime appears.
+    weight: BTreeMap<u32, u32>,
+    // Set of ±1 coefficients
+    ones: BTreeSet<(u32, u32)>,
+    // Set of nonzero indices (prime, row index)
+    nonzero: BTreeSet<(u32, u32)>,
+    // An array of removed relations, arranged as a triangular matrix.
+    // Each relation involves primes appearing afterwards.
+    removed: Vec<(u32, Vec<(u32, i32)>)>,
+    // Min weight
+    wmin: usize,
+    dense: bool,
+}
+
+impl RelFilterSparse {
+    fn new(rels: Vec<CRelation>) -> Self {
+        let mut rows = vec![];
+        for r in rels {
+            let mut row: Vec<_> = r.factors.clone();
+            if let Some((p, e)) = r.large1 {
+                row.push((p, e));
+            }
+            if let Some((p, e)) = r.large2 {
+                row.push((p, e));
+            }
+            row.sort();
+            //eprintln!("got {row:?}");
+            rows.push(row);
+        }
+        let mut weight = BTreeMap::new();
+        let mut ones = BTreeSet::new();
+        let mut nonzero = BTreeSet::new();
+        for i in 0..rows.len() {
+            for &(p, e) in &rows[i] {
+                let w: &mut u32 = weight.entry(p).or_default();
+                *w += 1;
+                nonzero.insert((p, i as u32));
+                if e.unsigned_abs() == 1 {
+                    ones.insert((p, i as u32));
+                }
+            }
+        }
+        Self {
+            rows,
+            weight,
+            ones,
+            nonzero,
+            removed: vec![],
+            wmin: 0,
+            dense: false,
+        }
+    }
+
+    fn write_files(&self, outdir: &PathBuf) {
+        let mut buf = vec![];
+        for row in &self.rows {
+            if row.len() == 0 {
+                continue;
+            }
+            let mut first = true;
+            for &(p, e) in row {
+                if e == 0 {
+                    continue;
+                }
+                if !first {
+                    buf.push(b' ');
+                }
+                first = false;
+                write!(&mut buf, "{p}^{e}").unwrap();
+            }
+            buf.push(b'\n');
+        }
+        let mut w = fs::File::create(outdir.join("relations.filtered")).unwrap();
+        w.write(&buf[..]).unwrap();
+    }
+
+    fn coeff(&self, idx: usize, p: u32) -> i32 {
+        let row = &self.rows[idx];
+        if let Ok(j) = row.binary_search_by_key(&p, |&(_p, _)| _p) {
+            row[j].1
+        } else {
+            0
+        }
+    }
+
+    fn pivot_one(&mut self) -> Option<()> {
+        let mut p = 0;
+        'mainloop: while self.wmin < self.rows.len() {
+            for (&q, &wq) in self.weight.iter() {
+                if wq as usize <= self.wmin {
+                    for &(q, _) in self.ones.range((q, 0)..(q + 1, 0)) {
+                        p = q;
+                        break 'mainloop;
+                    }
+                }
+            }
+            self.wmin += 1;
+        }
+        if p == 0 {
+            return None;
+        }
+        self.pivot(p)
+    }
+
+    /// Eliminate p from all relations.
+    fn pivot(&mut self, p: u32) -> Option<()> {
+        //eprintln!("pivot {p}");
+        let idx: Option<u32> = {
+            let mut idx = None;
+            for &(_, i) in self.ones.range((p, 0)..(p + 1, 0)) {
+                idx = match idx {
+                    None => Some(i),
+                    Some(j) if self.rows[i as usize].len() < self.rows[j as usize].len() => Some(i),
+                    _ => idx,
+                };
+            }
+            idx
+        };
+        let Some(idx) = idx else {
+            return None;
+        };
+        if !self.dense && self.nonzero.len() > self.weight.len() * self.rows.len() / 10 {
+            self.dense = true;
+            self.nonzero.clear();
+            // stop updating weights.
+        }
+        let ci = self.coeff(idx as usize, p);
+        debug_assert!(ci == 1 || ci == -1);
+        if self.dense {
+            // Dense mode.
+            for j in 0..self.rows.len() {
+                if j == idx as usize {
+                    continue;
+                }
+                let cj = self.coeff(j, p);
+                if cj != 0 {
+                    self.rowsub(j, idx as usize, cj * ci)?;
+                }
+            }
+            self.weight.remove(&p);
+        } else {
+            // Sparse mode.
+            let indices: Vec<usize> = self
+                .nonzero
+                .range((p, 0)..(p + 1, 0))
+                .map(|&(_, i)| i as usize)
+                .collect();
+            for j in indices {
+                if j == idx as usize {
+                    continue;
+                }
+                let cj = self.coeff(j, p);
+                // Stop now in case of overflow.
+                self.rowsub(j, idx as usize, cj * ci)?;
+            }
+        }
+        let ri = self.rows[idx as usize].clone();
+        // update indices
+        self.del_row(idx as usize);
+        // pop p
+        let mut rel = ri;
+        for i in 0..rel.len() {
+            if rel[i].0 == p {
+                rel.remove(i);
+                break;
+            }
+        }
+        if ci == 1 {
+            // p + sum(ei [li]) == 0
+            // => p = sum(-ei [li])
+            for i in 0..rel.len() {
+                rel[i].1 = -rel[i].1;
+            }
+        }
+        self.removed.push((p, rel));
+        Some(())
+    }
+
+    fn update_index(&mut self, idx: usize, p: u32, old: Option<i32>, new: Option<i32>) {
+        match (old, new) {
+            (None, None) => {}
+            (None, Some(x)) => {
+                if x.unsigned_abs() == 1 {
+                    self.ones.insert((p, idx as u32));
+                }
+                if !self.dense {
+                    self.weight.entry(p).and_modify(|w| *w += 1);
+                    self.nonzero.insert((p, idx as u32));
+                }
+            }
+            (Some(x), None) => {
+                if x.unsigned_abs() == 1 {
+                    self.ones.remove(&(p, idx as u32));
+                }
+                if !self.dense {
+                    self.weight.entry(p).and_modify(|w| *w -= 1);
+                    if self.weight.get(&p) == Some(&0) {
+                        self.weight.remove(&p);
+                    }
+                    self.nonzero.remove(&(p, idx as u32));
+                }
+            }
+            (Some(x), Some(y)) => {
+                if x.unsigned_abs() == 1 && y.unsigned_abs() != 1 {
+                    self.ones.remove(&(p, idx as u32));
+                } else if x.unsigned_abs() != 1 && y.unsigned_abs() == 1 {
+                    self.ones.insert((p, idx as u32));
+                }
+            }
+        }
+    }
+
+    fn del_row(&mut self, idx: usize) {
+        for &(p, e) in &self.rows[idx] {
+            if !self.dense {
+                self.weight.entry(p).and_modify(|w| *w -= 1);
+                if self.weight.get(&p) == Some(&0) {
+                    self.weight.remove(&p);
+                }
+            }
+            self.nonzero.remove(&(p, idx as u32));
+            if e.unsigned_abs() == 1 {
+                self.ones.remove(&(p, idx as u32));
+            }
+        }
+        self.rows[idx as usize].clear();
+    }
+
+    // Apply operation row[i]-=c*row[j]
+    // Returns false in case of overflow.
+    #[must_use]
+    fn rowsub(&mut self, i: usize, j: usize, c: i32) -> Option<()> {
+        debug_assert!(c != 0 && i != j);
+        let li = self.rows[i].len();
+        let lj = self.rows[j].len();
+        let mut res: Vec<(u32, i32)> = Vec::with_capacity(max(li, lj));
+        let mut ii = 0;
+        let mut jj = 0;
+        while ii < li || jj < lj {
+            let pei = self.rows[i].get(ii);
+            let pej = self.rows[j].get(jj);
+            match (pei, pej) {
+                (Some(&(p, e)), None) => {
+                    // No change
+                    res.push((p, e));
+                    ii += 1;
+                }
+                (None, Some(&(p, e))) => {
+                    // New entry
+                    let pe = (p, e.checked_mul(-c)?);
+                    self.update_index(i, p, None, Some(pe.1));
+                    res.push(pe);
+                    jj += 1;
+                }
+                (Some(&(pi, ei)), Some(&(pj, _))) if pi < pj => {
+                    // No change
+                    res.push((pi, ei));
+                    ii += 1;
+                }
+                (Some(&(pi, _)), Some(&(pj, ej))) if pi > pj => {
+                    let pe = (pj, ej.checked_mul(-c)?);
+                    self.update_index(i, pj, None, Some(pe.1));
+                    res.push(pe);
+                    jj += 1;
+                }
+                (Some(&(pi, ei)), Some(&(pj, ej))) if pi == pj => {
+                    let e = ei.checked_add(ej.checked_mul(-c)?)?;
+                    if e != 0 {
+                        res.push((pi, e));
+                    }
+                    self.update_index(i, pi, Some(ei), if e == 0 { None } else { Some(e) });
+                    ii += 1;
+                    jj += 1;
+                }
+                _ => unreachable!(),
+            }
+        }
+        self.rows[i] = res;
+        Some(())
+    }
+}
+
+fn write_relations(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) {
+    let mut removed = snf.removed.clone();
+    removed.reverse();
+    let mut buf = vec![];
+    for (p, rel) in &removed {
+        write!(&mut buf, "{p} =").unwrap();
+        for &(l, e) in rel {
+            write!(&mut buf, " {l}^{e}").unwrap();
+        }
+        buf.push(b'\n');
+    }
+    {
+        let mut w = fs::File::create(outdir.join("relations.removed")).unwrap();
+        w.write(&buf[..]).unwrap();
+    }
+    let mut buf = vec![];
+    for row in &snf.rows {
+        for (&p, &e) in snf.gens.iter().zip(row) {
+            if e == 0 {
+                continue;
+            }
+            write!(&mut buf, "{p}^{e} ").unwrap();
+        }
+        buf.push(b'\n');
+    }
+    {
+        // Overwrite filtered relations.
+        let mut w = fs::File::create(outdir.join("relations.filtered")).unwrap();
+        w.write(&buf[..]).unwrap();
+    }
+}
+
+fn write_group_structure(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) {
+    if snf.gens.len() > 1 {
+        return; // not yet implemented
+    }
+    // Cyclic group, we know how to do this.
+    let mut w = fs::File::create(outdir.join("group.structure")).unwrap();
+    let mut buf = vec![];
+    writeln!(&mut buf, "G {}", snf.h).unwrap();
+    writeln!(&mut buf, "{} 1", snf.gens[0]).unwrap();
+    w.write(&buf[..]).unwrap();
+
+    let mut w = fs::File::create(outdir.join("group.structure.extra")).unwrap();
+    let mut buf = vec![];
+    let mut coords = BTreeMap::<u32, i128>::new();
+    coords.insert(snf.gens[0], 1);
+    let mut removed = snf.removed.clone();
+    removed.reverse();
+    'extra: for (p, rel) in removed.iter() {
+        let mut dlog = Int::ZERO;
+        for (l, e) in rel {
+            if !coords.contains_key(l) {
+                eprintln!("Missing relations for {l}");
+                continue 'extra;
+            }
+            dlog += Int::from(*e) * Int::from(*coords.get(l).unwrap());
+        }
+        let dl = i128::cast_from(dlog.rem_euclid(Int::from(snf.h)));
+        coords.insert(*p, dl);
+        writeln!(&mut buf, "{} {}", p, dl).unwrap();
+    }
+    w.write(&buf[..]).unwrap();
 }

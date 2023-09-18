@@ -45,7 +45,7 @@ impl FBase {
         let mut prepared = prepare_factor_base(&n, &ps);
         // Align to a multiple of 8.
         // This is required for SIMD code.
-        prepared.truncate(8 * min(size as usize / 8 + 1, prepared.len() / 8));
+        prepared.truncate(8 * min((size + 7) as usize / 8, prepared.len() / 8));
         for (p, r, div) in prepared {
             let p = p as u32;
             let l = 32 - u32::leading_zeros(p) as usize;

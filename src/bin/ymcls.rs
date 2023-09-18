@@ -2,11 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::io::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use yamaquasi::classgroup::{self, estimate};
+use yamaquasi::classgroup;
 use yamaquasi::{Int, Preferences, Verbosity};
 
 fn main() {
@@ -54,25 +53,7 @@ fn main() {
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Computing class group of discriminant {d}");
     }
-    let (hmin, hmax) = estimate(&d);
-    if prefs.verbose(Verbosity::Info) {
-        eprintln!("Estimate by class number formula {hmin:.5e}-{hmax:.5e}")
-    }
-
-    // Create output directory
-    std::fs::create_dir_all(outdir).unwrap();
     prefs.outdir = Some(PathBuf::from(outdir));
-
-    // Dump parameters
-    {
-        let mut json: Vec<u8> = vec![];
-        writeln!(&mut json, "{{").unwrap();
-        writeln!(&mut json, r#"  "d": "{d}","#).unwrap();
-        writeln!(&mut json, r#"  "h_estimate_min": {hmin},"#).unwrap();
-        writeln!(&mut json, r#"  "h_estimate_max": {hmax}"#).unwrap();
-        writeln!(&mut json, "}}").unwrap();
-        std::fs::write(PathBuf::from(outdir).join("args.json"), json).unwrap();
-    }
 
     // Create thread pool
     let tpool: Option<rayon::ThreadPool> = match prefs.threads {

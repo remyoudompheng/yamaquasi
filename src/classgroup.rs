@@ -25,6 +25,7 @@
 //! <https://www.ams.org/journals/mcom/1999-68-226/S0025-5718-99-01003-0/S0025-5718-99-01003-0.pdf>
 
 use std::cmp::{max, min};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::RwLock;
@@ -41,6 +42,21 @@ use crate::siqs::{self, prepare_a, select_a, select_siqs_factors, Factors, Poly,
 use crate::{Int, Preferences, Uint, Verbosity};
 
 pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -> () {
+    let (hmin, hmax) = estimate(&d);
+    if prefs.verbose(Verbosity::Info) {
+        eprintln!("Estimate by class number formula {hmin:.5e}-{hmax:.5e}")
+    }
+    if let Some(outdir) = prefs.outdir.as_ref() {
+        std::fs::create_dir_all(outdir).unwrap();
+        let mut json: Vec<u8> = vec![];
+        writeln!(&mut json, "{{").unwrap();
+        writeln!(&mut json, r#"  "d": "{d}","#).unwrap();
+        writeln!(&mut json, r#"  "h_estimate_min": {hmin},"#).unwrap();
+        writeln!(&mut json, r#"  "h_estimate_max": {hmax}"#).unwrap();
+        writeln!(&mut json, "}}").unwrap();
+        std::fs::write(PathBuf::from(outdir).join("args.json"), json).unwrap();
+    }
+
     let dabs = d.unsigned_abs();
     // Choose factor base. Estimate the smoothness bias to increase/decrease
     // the factor base accordingly.
@@ -167,7 +183,16 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
     if rels.len() < rels.target {
         panic!("not enough polynomials to sieve")
     }
+    drop(rels);
+    if fbase.len() < EXTERNAL_LINALG_THRESHOLD {
+        let crels = s.result();
+        use crate::relationcls;
+        let outdir = prefs.outdir.as_ref().map(PathBuf::from);
+        relationcls::group_structure(crels, (hmin, hmax), outdir);
+    }
 }
+
+const EXTERNAL_LINALG_THRESHOLD: usize = 1000;
 
 struct ClSieve<'a> {
     // A negative discriminant
@@ -181,13 +206,18 @@ struct ClSieve<'a> {
     prefs: &'a Preferences,
 }
 
+impl<'a> ClSieve<'a> {
+    fn result(self) -> Vec<CRelation> {
+        self.rels.into_inner().unwrap().to_vec()
+    }
+}
+
 // Determine the number of A values and the number of factors
 // necessary for the class group computation.
 // The total number of ideals will be values * 2^(factors-1)
 fn a_params(sz: u32) -> (u32, u32) {
     match sz {
-        0..=32 => (4, 2), // 4 polys
-        33..=64 => (8, 2),
+        0..=64 => (8, 2),
         65..=80 => (2 * (sz - 60), 3),
         81..=99 => (10 * (sz - 77), 3),
         100..=119 => (40 * (sz - 95), 4),   // 200..1000 x8
@@ -206,8 +236,10 @@ fn a_params(sz: u32) -> (u32, u32) {
 // Factor base is much smaller, so interval size must be much smaller too.
 fn interval_size(sz: u32) -> u32 {
     let nblocks = match sz {
-        0..=64 => 2,
-        65..=180 => 4,
+        0..=32 => 1,
+        33..=64 => 2,
+        65..=128 => 3,
+        129..=180 => 4,
         181..=255 => (sz - 141) / 20,
         256..=300 => (sz - 150) / 25,
         301..=330 => 8,
