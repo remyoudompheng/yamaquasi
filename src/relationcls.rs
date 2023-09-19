@@ -333,13 +333,25 @@ pub fn group_structure(rels: Vec<CRelation>, hest: (f64, f64), outdir: Option<Pa
     // Removed relations, in reverse order
     if let Some(outdir) = outdir.as_ref() {
         write_relations(&r, outdir);
-        write_group_structure(&r, outdir);
-        let qual = if r.gens.len() == 1 { "Full" } else { "Partial" };
+        let ok = write_group_structure(&r, outdir);
+        let qual = if ok { "Full" } else { "Partial" };
         eprintln!(
             "{} group structure computed in {:.3}s",
             qual,
             t0.elapsed().as_secs_f64()
         );
+    }
+    // Also print relations to stderr. The number of remaining
+    // relations is similar to the number of factors of D.
+    for row in &r.rows {
+        let mut line = String::new();
+        for (&p, &e) in r.gens.iter().zip(row) {
+            if e == 0 {
+                continue;
+            }
+            line += format!("{p}^{e} ").as_str();
+        }
+        eprintln!("{}", line.trim_end());
     }
 }
 
@@ -617,6 +629,7 @@ fn write_relations(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) {
             }
             write!(&mut buf, "{p}^{e} ").unwrap();
         }
+        buf.pop(); // trailing space
         buf.push(b'\n');
     }
     {
@@ -626,35 +639,94 @@ fn write_relations(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) {
     }
 }
 
-fn write_group_structure(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) {
-    if snf.gens.len() > 1 {
-        return; // not yet implemented
+fn compute_group_structure(
+    snf: &matrixint::SmithNormalForm,
+) -> Option<Vec<(u32, u128, Vec<i128>)>> {
+    // Compute a triangular system:
+    // p[i] = d-torsion element - sum(aj p[j] for j < i)
+    // We return tuples (pi, d, [aj])
+    let mut rows = snf.rows.clone();
+    rows.reverse();
+    let mut group: Vec<(u32, u128, Vec<i128>)> = vec![];
+    for (i, r) in rows.iter().enumerate() {
+        let mut rel = vec![Int::ZERO; snf.gens.len()];
+        for j in 0..i {
+            if r[j] % r[i] != 0 {
+                return None;
+            }
+            // Add r[j]/r[i] times pj
+            let q = -Int::from(r[j] / r[i]);
+            rel[j] += q;
+            for k in 0..j {
+                rel[k] += q * Int::from(group[j].2[k]);
+            }
+        }
+        // Negate
+        for j in 0..i {
+            rel[j] = rel[j].rem_euclid(Int::from(group[j].1));
+        }
+        let mut rel: Vec<i128> = rel.into_iter().map(i128::cast_from).collect();
+        rel[i] = 1;
+        group.push((snf.gens[i], r[i] as u128, rel));
     }
-    // Cyclic group, we know how to do this.
-    let mut w = fs::File::create(outdir.join("group.structure")).unwrap();
-    let mut buf = vec![];
-    writeln!(&mut buf, "G {}", snf.h).unwrap();
-    writeln!(&mut buf, "{} 1", snf.gens[0]).unwrap();
-    w.write(&buf[..]).unwrap();
+    Some(group)
+}
 
+fn write_group_structure(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) -> bool {
+    let Some(grp) = compute_group_structure(snf) else {
+        return false;
+    };
+    // Cyclic group, we know how to do this.
+    let mut buf = vec![];
+    // Group invariants
+    write!(&mut buf, "G").unwrap();
+    let mut ds = vec![];
+    for &(_, d, _) in &grp {
+        write!(&mut buf, " {d}").unwrap();
+        ds.push(d);
+    }
+    buf.push(b'\n');
+    // Coordinates
+    let mut coords = BTreeMap::<u32, Vec<i128>>::new();
+    for (p, _, rel) in grp {
+        write!(&mut buf, "{p}").unwrap();
+        for x in &rel {
+            write!(&mut buf, " {x}").unwrap();
+        }
+        buf.push(b'\n');
+        coords.insert(p, rel);
+    }
+    let mut w = fs::File::create(outdir.join("group.structure")).unwrap();
+    w.write(&buf[..]).unwrap();
+    // Compute coordinates for eliminated relations
     let mut w = fs::File::create(outdir.join("group.structure.extra")).unwrap();
     let mut buf = vec![];
-    let mut coords = BTreeMap::<u32, i128>::new();
-    coords.insert(snf.gens[0], 1);
     let mut removed = snf.removed.clone();
     removed.reverse();
     'extra: for (p, rel) in removed.iter() {
-        let mut dlog = Int::ZERO;
+        let mut dlog = vec![Int::ZERO; ds.len()];
         for (l, e) in rel {
             if !coords.contains_key(l) {
                 eprintln!("Missing relations for {l}");
                 continue 'extra;
             }
-            dlog += Int::from(*e) * Int::from(*coords.get(l).unwrap());
+            let v = coords.get(l).unwrap();
+            for idx in 0..ds.len() {
+                dlog[idx] += Int::from(*e) * Int::from(v[idx]);
+            }
         }
-        let dl = i128::cast_from(dlog.rem_euclid(Int::from(snf.h)));
+        for idx in 0..ds.len() {
+            dlog[idx] = dlog[idx].rem_euclid(Int::from(ds[idx]));
+        }
+        let dl = dlog.into_iter().map(i128::cast_from).collect();
+        write!(&mut buf, "{p}").unwrap();
+        for x in &dl {
+            write!(&mut buf, " {x}").unwrap();
+        }
+        {}
+        buf.push(b'\n');
         coords.insert(*p, dl);
-        writeln!(&mut buf, "{} {}", p, dl).unwrap();
     }
     w.write(&buf[..]).unwrap();
+    true
 }
