@@ -192,7 +192,7 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
     }
 }
 
-const EXTERNAL_LINALG_THRESHOLD: usize = 1000;
+const EXTERNAL_LINALG_THRESHOLD: usize = 1500;
 
 struct ClSieve<'a> {
     // A negative discriminant
