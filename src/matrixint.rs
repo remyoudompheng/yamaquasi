@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use bnum::cast::CastFrom;
-use bnum::types::{I2048, I256};
+use bnum::types::{I2048, I256, U256};
 use num_integer::Integer;
 use num_traits::ToPrimitive;
 
@@ -360,6 +360,7 @@ pub struct SmithNormalForm {
     pub gens: Vec<u32>,
     pub removed: Vec<(u32, Vec<(u32, i128)>)>,
     pub h: u128,
+    pub hinv: (u128, i32),
 }
 
 impl SmithNormalForm {
@@ -406,11 +407,13 @@ impl SmithNormalForm {
             .iter()
             .map(|(p, v)| (*p, v.iter().map(|&(l, e)| (l, e as i128)).collect()))
             .collect();
+        let hinv = Self::divider(h);
         Self {
             rows,
             gens,
             removed,
             h,
+            hinv,
         }
     }
 
@@ -483,6 +486,10 @@ impl SmithNormalForm {
                     }
                 }
             }
+            if self.rows[n][0] == 0 {
+                self.rows[n][0] = self.h as i128;
+            }
+
             // Extract redundant relations (coefficient=1).
             for j in 0..=n {
                 if self.rows[j][n - j] == 1 {
@@ -505,39 +512,42 @@ impl SmithNormalForm {
                     cols.push(n - j);
                 }
             }
-            // Collect remaining entries, put GCD=1 last
-            // then largest diagonal entries.
-            let mut order = vec![];
-            for i in 0..cols.len() {
-                let idx = cols[i];
-                let mut gcd: i128 = self.h as i128;
-                for r in &remaining {
-                    gcd = Integer::gcd(&gcd, &r[idx]);
-                }
-                order.push((gcd, idx));
-            }
-            order.sort();
-            order.reverse();
-            //eprintln!("columns {order:?}");
-            let cols: Vec<usize> = order.iter().map(|&(_, idx)| idx).collect();
+            // Shrink matrix
+            cols.reverse();
             self.rows = vec![];
             for r in remaining {
                 self.rows.push(cols.iter().map(|&idx| r[idx]).collect());
             }
             self.gens = cols.iter().map(|&idx| self.gens[idx]).collect();
             assert_eq!(self.rows.len(), self.gens.len());
-            // Perform reduction again
-            let rank = self.gens.len();
-            for i in 0..rank {
-                for j in i + 1..rank {
-                    self.eliminate(i, j, rank - 1 - i);
+            // Swap columns to reduce invariants
+            let n = self.rows.len();
+            let mut swaps = 0;
+            for i in 0..n {
+                let ii = n - 1 - i;
+                for j in 0..i {
+                    let jj = n - 1 - j;
+                    let d = Integer::gcd(&self.rows[j][ii], &self.rows[i][ii]);
+                    if d < self.rows[j][jj] {
+                        // Swap columns i and j, reduce.
+                        self.gens.swap(ii, jj);
+                        for r in self.rows.iter_mut() {
+                            r.swap(ii, jj);
+                        }
+                        for k in j..i {
+                            for l in k + 1..=i {
+                                self.eliminate(k, l, n - 1 - k);
+                            }
+                            if self.rows[k][n - 1 - k] == 0 {
+                                self.rows[k][n - 1 - k] = self.h as i128;
+                            }
+                        }
+                        swaps += 1;
+                    }
                 }
-                self.normalize(i, rank - 1 - i);
             }
-            if self.rows[rank - 1][0] == 0 {
-                self.rows[rank - 1][0] = self.h as i128;
-            }
-            if order.last().unwrap().0 > 1 {
+            //eprintln!("Group invariants {invariants:?}");
+            if swaps == 0 {
                 break;
             }
         }
@@ -569,26 +579,18 @@ impl SmithNormalForm {
         if xj == 0 {
             return;
         }
-        let (ri, rj) = if i < j {
-            let (mi, mj) = self.rows.split_at_mut(j);
-            (&mut mi[i][..], &mut mj[0][..])
-        } else {
-            let (mj, mi) = self.rows.split_at_mut(i);
-            (&mut mi[0][..], &mut mj[j][..])
-        };
         if xi == 1 {
             // Common situation
-            let ri = ri as &[i128];
             for idx in 0..self.gens.len() {
-                let (yi, yj) = (ri[idx], rj[idx]);
+                let (yi, yj) = (self.rows[i][idx], self.rows[j][idx]);
                 if yi == 0 && yj == 0 {
                     continue;
                 }
                 if self.h > 0 && self.h < 1 << 64 {
-                    rj[idx] = (yj - xj * yi).rem_euclid(self.h as i128);
+                    self.rows[j][idx] = self.modh128(yj - xj * yi);
                 } else {
                     let x = I256::from(yj) - I256::from(xj) * I256::from(yi);
-                    rj[idx] = i128::cast_from(x % I256::from(self.h));
+                    self.rows[j][idx] = self.modh256(x);
                 };
             }
         } else {
@@ -596,23 +598,84 @@ impl SmithNormalForm {
             assert!(e.gcd != 0);
             let (a, b, c, d) = (e.x, e.y, -xj / e.gcd, xi / e.gcd);
             for idx in 0..self.gens.len() {
-                let (x, y) = (ri[idx], rj[idx]);
+                let (x, y) = (self.rows[i][idx], self.rows[j][idx]);
                 if x == 0 && y == 0 {
                     continue;
                 }
                 if self.h > 0 && self.h < 1 << 64 {
                     let xx = a * x + b * y;
                     let yy = c * x + d * y;
-                    ri[idx] = xx.rem_euclid(self.h as i128);
-                    rj[idx] = yy.rem_euclid(self.h as i128);
+                    self.rows[i][idx] = xx.rem_euclid(self.h as i128);
+                    self.rows[j][idx] = yy.rem_euclid(self.h as i128);
                 } else {
                     let xx = I256::from(a) * I256::from(x) + I256::from(b) * I256::from(y);
                     let yy = I256::from(c) * I256::from(x) + I256::from(d) * I256::from(y);
-                    ri[idx] = i128::cast_from(xx % I256::from(self.h));
-                    rj[idx] = i128::cast_from(yy % I256::from(self.h));
+                    self.rows[i][idx] = self.modh256(xx);
+                    self.rows[j][idx] = self.modh256(yy);
                 };
             }
         }
+    }
+
+    fn divider(h: u128) -> (u128, i32) {
+        assert!(h < 1 << 125);
+        // Compute a rounded value for 2^255/h
+        let q: U256 = (U256::ONE << 255) / U256::from(h);
+        // Keep top 127 bits
+        let qlen = q.bits();
+        if qlen <= 127 {
+            (u128::cast_from(q), -255)
+        } else {
+            let shift = qlen - 127;
+            let round = u128::from(q.bit(shift - 1));
+            (u128::cast_from(q >> shift) + round, shift as i32 - 255)
+        }
+    }
+
+    // Reduction modulo h using precomputed divider.
+    fn modh128(&self, x: i128) -> i128 {
+        let h = self.h as i128;
+        let (qm, qe) = self.hinv;
+        let q = (I256::from(x) * I256::from(qm)) >> (-qe);
+        let q = i128::cast_from(q);
+        let mut rem = x - q * h;
+        while rem >= h {
+            rem -= h;
+        }
+        while rem < 0 {
+            rem += h;
+        }
+        rem
+    }
+
+    // Reduction modulo h using precomputed divider.
+    fn modh256(&self, x: I256) -> i128 {
+        if x.is_negative() {
+            self.h as i128 - self.modh256u(x.unsigned_abs())
+        } else {
+            self.modh256u(x.unsigned_abs())
+        }
+    }
+
+    fn modh256u(&self, x: U256) -> i128 {
+        let h = self.h as i128;
+        let (qm, qe) = self.hinv;
+        // We only care about top 128 bits.
+        let xw: &[u64; 4] = x.digits();
+        let q = if xw[2] == 0 && xw[3] == 0 {
+            u128::cast_from((x * U256::cast_from(qm)) >> (-qe))
+        } else {
+            let shift = x.bits() as i32 - 128;
+            u128::cast_from(((x >> shift) * U256::cast_from(qm)) >> (-qe - shift))
+        };
+        let mut rem = i128::cast_from(I256::cast_from(x) - I256::from(q) * I256::from(h));
+        while rem >= h {
+            rem -= h;
+        }
+        while rem < 0 {
+            rem += h;
+        }
+        rem
     }
 }
 
