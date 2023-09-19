@@ -299,7 +299,7 @@ pub fn group_structure(rels: Vec<CRelation>, hest: (f64, f64), outdir: Option<Pa
     let t0 = Instant::now();
     let mut r = RelFilterSparse::new(rels);
     while let Some(_) = r.pivot_one() {
-        if r.weight.len() % 16 == 0 {
+        if r.weight.len() % 64 == 0 {
             let nrows = r.rows.iter().filter(|r| r.len() > 0).count();
             eprintln!(
                 "{} columns {} rows {} coefs",
@@ -307,13 +307,23 @@ pub fn group_structure(rels: Vec<CRelation>, hest: (f64, f64), outdir: Option<Pa
                 nrows,
                 r.nonzero.len()
             );
+            let nc = r.weight.len();
+            let want = nc + nc / 2 + 128;
+            if nrows > want {
+                r.trim(nrows - want);
+            }
         }
     }
     if let Some(outdir) = outdir.as_ref() {
         r.write_files(outdir);
     }
+    let nrows = r.rows.iter().filter(|r| r.len() > 0).count();
+    eprintln!(
+        "Filtered matrix has {} columns {} rows",
+        r.weight.len(),
+        nrows
+    );
     let mut r = matrixint::SmithNormalForm::new(&r.rows, r.removed, hest.0, hest.1);
-    eprintln!("{} columns {} rows", r.gens.len(), r.rows.len());
     eprintln!("Class number is {}", r.h);
     if let Some(outdir) = outdir.as_ref() {
         let mut w = fs::File::create(outdir.join("classnumber")).unwrap();
@@ -341,16 +351,16 @@ struct RelFilterSparse {
     rows: Vec<Vec<(u32, i32)>>,
     // How many times each given prime appears.
     weight: BTreeMap<u32, u32>,
-    // Set of ±1 coefficients
-    ones: BTreeSet<(u32, u32)>,
     // Set of nonzero indices (prime, row index)
+    // We never remove elements, except when a prime is eliminated.
     nonzero: BTreeSet<(u32, u32)>,
     // An array of removed relations, arranged as a triangular matrix.
     // Each relation involves primes appearing afterwards.
     removed: Vec<(u32, Vec<(u32, i32)>)>,
+    // A set of primes that cannot be handled (they have no coefficient 1).
+    skip: BTreeSet<u32>,
     // Min weight
     wmin: usize,
-    dense: bool,
 }
 
 impl RelFilterSparse {
@@ -384,11 +394,10 @@ impl RelFilterSparse {
         Self {
             rows,
             weight,
-            ones,
             nonzero,
             removed: vec![],
+            skip: BTreeSet::new(),
             wmin: 0,
-            dense: false,
         }
     }
 
@@ -428,11 +437,14 @@ impl RelFilterSparse {
         let mut p = 0;
         'mainloop: while self.wmin < self.rows.len() {
             for (&q, &wq) in self.weight.iter() {
-                if wq as usize <= self.wmin {
-                    for &(q, _) in self.ones.range((q, 0)..(q + 1, 0)) {
-                        p = q;
-                        break 'mainloop;
+                if wq as usize <= self.wmin && !self.skip.contains(&q) {
+                    for &(q, idx) in self.nonzero.range((q, 0)..(q + 1, 0)) {
+                        if self.coeff(idx as usize, q).unsigned_abs() == 1 {
+                            p = q;
+                            break 'mainloop;
+                        }
                     }
+                    self.skip.insert(q);
                 }
             }
             self.wmin += 1;
@@ -445,10 +457,12 @@ impl RelFilterSparse {
 
     /// Eliminate p from all relations.
     fn pivot(&mut self, p: u32) -> Option<()> {
-        //eprintln!("pivot {p}");
         let idx: Option<u32> = {
             let mut idx = None;
-            for &(_, i) in self.ones.range((p, 0)..(p + 1, 0)) {
+            for &(_, i) in self.nonzero.range((p, 0)..(p + 1, 0)) {
+                if self.coeff(i as usize, p).unsigned_abs() != 1 {
+                    continue;
+                }
                 idx = match idx {
                     None => Some(i),
                     Some(j) if self.rows[i as usize].len() < self.rows[j as usize].len() => Some(i),
@@ -460,44 +474,30 @@ impl RelFilterSparse {
         let Some(idx) = idx else {
             return None;
         };
-        if !self.dense && self.nonzero.len() > self.weight.len() * self.rows.len() / 10 {
-            self.dense = true;
-            self.nonzero.clear();
-            // stop updating weights.
-        }
+
         let ci = self.coeff(idx as usize, p);
         debug_assert!(ci == 1 || ci == -1);
-        if self.dense {
-            // Dense mode.
-            for j in 0..self.rows.len() {
-                if j == idx as usize {
-                    continue;
-                }
-                let cj = self.coeff(j, p);
-                if cj != 0 {
-                    self.rowsub(j, idx as usize, cj * ci)?;
-                }
+        // A superset of interesting indices.
+        let indices: Vec<usize> = self
+            .nonzero
+            .range((p, 0)..(p + 1, 0))
+            .map(|&(_, i)| i as usize)
+            .collect();
+        for j in indices {
+            if j == idx as usize {
+                continue;
             }
-            self.weight.remove(&p);
-        } else {
-            // Sparse mode.
-            let indices: Vec<usize> = self
-                .nonzero
-                .range((p, 0)..(p + 1, 0))
-                .map(|&(_, i)| i as usize)
-                .collect();
-            for j in indices {
-                if j == idx as usize {
-                    continue;
-                }
-                let cj = self.coeff(j, p);
-                // Stop now in case of overflow.
-                self.rowsub(j, idx as usize, cj * ci)?;
+            let cj = self.coeff(j, p);
+            if cj == 0 {
+                continue;
             }
+            // Stop now in case of overflow.
+            self.rowsub(j, idx as usize, cj * ci)?;
         }
         let ri = self.rows[idx as usize].clone();
+        self.rows[idx as usize].clear();
         // update indices
-        self.del_row(idx as usize);
+        self.weight.remove(&p);
         // pop p
         let mut rel = ri;
         for i in 0..rel.len() {
@@ -517,54 +517,36 @@ impl RelFilterSparse {
         Some(())
     }
 
-    fn update_index(&mut self, idx: usize, p: u32, old: Option<i32>, new: Option<i32>) {
-        match (old, new) {
-            (None, None) => {}
-            (None, Some(x)) => {
-                if x.unsigned_abs() == 1 {
-                    self.ones.insert((p, idx as u32));
-                }
-                if !self.dense {
-                    self.weight.entry(p).and_modify(|w| *w += 1);
-                    self.nonzero.insert((p, idx as u32));
-                }
+    fn trim(&mut self, count: usize) {
+        let mut counts = vec![0; self.weight.len() + 1];
+        for r in &self.rows {
+            counts[r.len()] += 1;
+        }
+        let mut trimmed = 0;
+        let mut threshold = self.weight.len() + 1;
+        while threshold > 0 {
+            let n = counts[threshold - 1];
+            if trimmed + n < count {
+                trimmed += n;
+                threshold -= 1;
+            } else {
+                break;
             }
-            (Some(x), None) => {
-                if x.unsigned_abs() == 1 {
-                    self.ones.remove(&(p, idx as u32));
-                }
-                if !self.dense {
-                    self.weight.entry(p).and_modify(|w| *w -= 1);
-                    if self.weight.get(&p) == Some(&0) {
-                        self.weight.remove(&p);
-                    }
-                    self.nonzero.remove(&(p, idx as u32));
-                }
+        }
+        for r in self.rows.iter_mut() {
+            if r.len() >= threshold {
+                r.clear();
             }
-            (Some(x), Some(y)) => {
-                if x.unsigned_abs() == 1 && y.unsigned_abs() != 1 {
-                    self.ones.remove(&(p, idx as u32));
-                } else if x.unsigned_abs() != 1 && y.unsigned_abs() == 1 {
-                    self.ones.insert((p, idx as u32));
-                }
-            }
+        }
+        if trimmed > 0 {
+            eprintln!("{trimmed} extra relations trimmed (weight >= {threshold})");
         }
     }
 
-    fn del_row(&mut self, idx: usize) {
-        for &(p, e) in &self.rows[idx] {
-            if !self.dense {
-                self.weight.entry(p).and_modify(|w| *w -= 1);
-                if self.weight.get(&p) == Some(&0) {
-                    self.weight.remove(&p);
-                }
-            }
-            self.nonzero.remove(&(p, idx as u32));
-            if e.unsigned_abs() == 1 {
-                self.ones.remove(&(p, idx as u32));
-            }
+    fn add_index(&mut self, idx: usize, p: u32) {
+        if self.nonzero.insert((p, idx as u32)) {
+            self.weight.entry(p).and_modify(|w| *w += 1);
         }
-        self.rows[idx as usize].clear();
     }
 
     // Apply operation row[i]-=c*row[j]
@@ -578,42 +560,33 @@ impl RelFilterSparse {
         let mut ii = 0;
         let mut jj = 0;
         while ii < li || jj < lj {
-            let pei = self.rows[i].get(ii);
-            let pej = self.rows[j].get(jj);
-            match (pei, pej) {
-                (Some(&(p, e)), None) => {
-                    // No change
-                    res.push((p, e));
-                    ii += 1;
+            let (pi, ei) = if ii < li {
+                self.rows[i][ii]
+            } else {
+                (u32::MAX, 0)
+            };
+            let (pj, ej) = if jj < lj {
+                self.rows[j][jj]
+            } else {
+                (u32::MAX, 0)
+            };
+            if pi < pj {
+                // No change
+                res.push((pi, ei));
+                ii += 1;
+            } else if pi > pj {
+                // New entry
+                let pe = (pj, ej.checked_mul(-c)?);
+                self.add_index(i, pj);
+                res.push(pe);
+                jj += 1;
+            } else {
+                let e = ei.checked_add(ej.checked_mul(-c)?)?;
+                if e != 0 {
+                    res.push((pi, e));
                 }
-                (None, Some(&(p, e))) => {
-                    // New entry
-                    let pe = (p, e.checked_mul(-c)?);
-                    self.update_index(i, p, None, Some(pe.1));
-                    res.push(pe);
-                    jj += 1;
-                }
-                (Some(&(pi, ei)), Some(&(pj, _))) if pi < pj => {
-                    // No change
-                    res.push((pi, ei));
-                    ii += 1;
-                }
-                (Some(&(pi, _)), Some(&(pj, ej))) if pi > pj => {
-                    let pe = (pj, ej.checked_mul(-c)?);
-                    self.update_index(i, pj, None, Some(pe.1));
-                    res.push(pe);
-                    jj += 1;
-                }
-                (Some(&(pi, ei)), Some(&(pj, ej))) if pi == pj => {
-                    let e = ei.checked_add(ej.checked_mul(-c)?)?;
-                    if e != 0 {
-                        res.push((pi, e));
-                    }
-                    self.update_index(i, pi, Some(ei), if e == 0 { None } else { Some(e) });
-                    ii += 1;
-                    jj += 1;
-                }
-                _ => unreachable!(),
+                ii += 1;
+                jj += 1;
             }
         }
         self.rows[i] = res;
