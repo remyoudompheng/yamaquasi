@@ -183,7 +183,7 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
         panic!("not enough polynomials to sieve")
     }
     drop(rels);
-    if fbase.len() < EXTERNAL_LINALG_THRESHOLD {
+    if hmax.log2() < 126.0 && fbase.len() < EXTERNAL_LINALG_THRESHOLD {
         let crels = s.result();
         use crate::relationcls;
         let outdir = prefs.outdir.as_ref().map(PathBuf::from);
@@ -191,7 +191,7 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
     }
 }
 
-const EXTERNAL_LINALG_THRESHOLD: usize = 1500;
+const EXTERNAL_LINALG_THRESHOLD: usize = 3000;
 
 struct ClSieve<'a> {
     // A negative discriminant

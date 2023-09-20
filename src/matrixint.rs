@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use bnum::cast::CastFrom;
-use bnum::types::{I2048, I256, U256};
+use bnum::types::{I256, I4096, U256};
 use num_integer::Integer;
 use num_traits::ToPrimitive;
 
@@ -80,7 +80,7 @@ fn submulf(v: &mut [f64], w: &[f64], m: f64) {
 /// of the determinant absolute value (volume) obtained by
 /// a Gram-Schmidt computation. The estimate is assumed to have
 /// at least 24 correct bits.
-pub fn det_matz(mat: Vec<&[i64]>, log2estimate: f64) -> I2048 {
+pub fn det_matz(mat: Vec<&[i64]>, log2estimate: f64) -> I4096 {
     let bits = log2estimate.round();
     assert!(bits >= 1.0);
     assert!(
@@ -114,33 +114,33 @@ pub fn det_matz(mat: Vec<&[i64]>, log2estimate: f64) -> I2048 {
     det
 }
 
-fn crt(modp: &[u64]) -> I2048 {
-    let mut crt_basis = vec![I2048::ONE; modp.len()];
+fn crt(modp: &[u64]) -> I4096 {
+    let mut crt_basis = vec![I4096::ONE; modp.len()];
     for i in 0..modp.len() {
         let mut inv: u64 = 1;
         let pi = PRIMES[i];
         for j in 0..modp.len() {
             if i != j {
-                crt_basis[i] *= I2048::from(PRIMES[j]);
+                crt_basis[i] *= I4096::from(PRIMES[j]);
                 let inv_j = arith::inv_mod64(PRIMES[j], pi).unwrap();
                 inv = ((inv as u128 * inv_j as u128) % (pi as u128)) as u64;
             }
         }
-        crt_basis[i] *= I2048::from(inv);
+        crt_basis[i] *= I4096::from(inv);
     }
-    let mut prod = I2048::ONE;
+    let mut prod = I4096::ONE;
     for &p in &PRIMES[..modp.len()] {
-        prod *= I2048::from(p);
+        prod *= I4096::from(p);
     }
-    let mut det = I2048::ZERO;
+    let mut det = I4096::ZERO;
     for (&deti, bi) in modp.iter().zip(&crt_basis) {
-        det += I2048::from(deti) * bi;
+        det += I4096::from(deti) * bi;
     }
     det %= prod;
     let det = if det > (prod >> 1) {
-        I2048::cast_from(det) - I2048::cast_from(prod)
+        I4096::cast_from(det) - I4096::cast_from(prod)
     } else {
-        I2048::cast_from(det)
+        I4096::cast_from(det)
     };
     det
 }
@@ -159,7 +159,7 @@ struct GFpEchelonBuilder {
 }
 
 // A few large 63-bit primes, enough to compute 1024-bit determinants.
-const PRIMES: [u64; 32] = [
+const PRIMES: [u64; 64] = [
     0x7fffffffffffffe7,
     0x7fffffffffffff5b,
     0x7ffffffffffffefd,
@@ -192,6 +192,38 @@ const PRIMES: [u64; 32] = [
     0x7ffffffffffffb2b,
     0x7ffffffffffffb1f,
     0x7ffffffffffffaef,
+    0x7ffffffffffffaed,
+    0x7ffffffffffffae3,
+    0x7ffffffffffffab3,
+    0x7ffffffffffffa8d,
+    0x7ffffffffffffa45,
+    0x7ffffffffffffa2f,
+    0x7ffffffffffffa23,
+    0x7ffffffffffffa05,
+    0x7ffffffffffff9f1,
+    0x7ffffffffffff9e7,
+    0x7ffffffffffff9d9,
+    0x7ffffffffffff9b7,
+    0x7ffffffffffff9a3,
+    0x7ffffffffffff99d,
+    0x7ffffffffffff925,
+    0x7ffffffffffff8ef,
+    0x7ffffffffffff8d9,
+    0x7ffffffffffff8c1,
+    0x7ffffffffffff88b,
+    0x7ffffffffffff86b,
+    0x7ffffffffffff817,
+    0x7ffffffffffff787,
+    0x7ffffffffffff739,
+    0x7ffffffffffff735,
+    0x7ffffffffffff70f,
+    0x7ffffffffffff703,
+    0x7ffffffffffff6f1,
+    0x7ffffffffffff6e5,
+    0x7ffffffffffff6c3,
+    0x7ffffffffffff6b5,
+    0x7ffffffffffff69f,
+    0x7ffffffffffff669,
 ];
 
 impl GFpEchelonBuilder {
@@ -326,7 +358,7 @@ impl<'a> CRTDetBuilder<'a> {
         }
     }
 
-    fn det(&mut self, nth_row: &[i64], log2estimate: f64) -> I2048 {
+    fn det(&mut self, nth_row: &[i64], log2estimate: f64) -> I4096 {
         let bits = log2estimate.round();
         assert!(bits >= 1.0);
         assert!(
@@ -384,7 +416,7 @@ pub fn compute_lattice_index(rows: &Vec<Vec<i64>>, hmin: f64, hmax: f64) -> u128
     let mut builder = None;
     let mut indices = vec![];
     g.threshold = Some(LATTICE_MINDIST * LATTICE_MINDIST);
-    let mut gcd = I2048::ZERO;
+    let mut gcd = I4096::ZERO;
     for idx in 0..rows.len() {
         if g.rank() == dim - 1 {
             if builder.is_none() {
@@ -395,8 +427,9 @@ pub fn compute_lattice_index(rows: &Vec<Vec<i64>>, hmin: f64, hmax: f64) -> u128
             let mut gg = g.clone();
             if gg.add(&rows[idx]) {
                 indices.push(idx);
-                let det = b.det(&rows[idx], gg.detlog2_estimate());
-                eprintln!("det={} estimate={:e}", det, gg.det_estimate());
+                let logest = gg.detlog2_estimate();
+                let det = b.det(&rows[idx], logest);
+                eprintln!("det={} log2={:.6}", det, logest);
                 //eprintln!("indices = {indices:?}");
                 indices.pop();
                 // Analyse candidates
@@ -412,7 +445,7 @@ pub fn compute_lattice_index(rows: &Vec<Vec<i64>>, hmin: f64, hmax: f64) -> u128
                     if m <= 0 {
                         continue;
                     }
-                    let (q, r) = gcd.div_rem(&I2048::from(m));
+                    let (q, r) = gcd.div_rem(&I4096::from(m));
                     if r.is_zero() {
                         candidates.push(q)
                     }
@@ -784,7 +817,7 @@ fn test_matrix_det() {
 
     assert_eq!(
         det_matz(M.to_vec(), det_approx.log2()),
-        I2048::from(14293689752795_i64)
+        I4096::from(14293689752795_i64)
     );
 
     // Another random matrix. Its determinant is -1258731415851007568569087128744.
@@ -816,6 +849,6 @@ fn test_matrix_det() {
 
     assert_eq!(
         det_matz(M16.to_vec(), det_approx.log2()),
-        I2048::from_str("-1258731415851007568569087128744").unwrap()
+        I4096::from_str("-1258731415851007568569087128744").unwrap()
     );
 }
