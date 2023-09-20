@@ -126,20 +126,20 @@ behave as if they were 15-20 bits bigger.
 Approximate execution times for average inputs, depending on discriminant size
 are approximately (for 1 CPU core, Zen2 4 GHz):
 
-| Input size | Sieve time | Linear algebra time |
-| ---------- | ---------- | ------------------- |
-|  100 bits  |    50 ms  |     5ms   |
-|  120 bits  |   150 ms  |    20ms   |
-|  140 bits  |   300 ms  |    80ms   |
-|  160 bits  |   1 s     |   800ms   |
-|  180 bits  |   3 s     |     2s    |
-|  200 bits  |   15 s    |    15s    |
-|  220 bits  |   1 min   |    30s    |
-|  240 bits  |   5 mins  |   2 mins  |
-|  260 bits  |  15 mins  |   5 mins  |
-|  280 bits  |  60 mins  |  15 mins  |
-|  300 bits  |   3 hours |  1 hour   |
-|  320 bits  |10-20 hours|  2 hours  |
+| Input size | Sieve time | Linear algebra time | Dense linalg |
+| ---------- | ---------- | ------------------- | ------------ |
+|  100 bits  |    50 ms  |     —     |  5ms  |
+|  120 bits  |   150 ms  |     —     | 10ms  |
+|  140 bits  |   300 ms  |     —     | 40ms  |
+|  160 bits  |   1 s     |     5s    | 200ms |
+|  180 bits  |   3 s     |    5-10s  |  1s   |
+|  200 bits  |   15 s    |   10-15s  |  2-3s |
+|  220 bits  |   1 min   |    30s    |  20s  |
+|  240 bits  |   5 mins  |   2 mins  | 100-150s |
+|  260 bits  |  15 mins  |   5 mins  | — |
+|  280 bits  |  60 mins  |  15 mins  | — |
+|  300 bits  |   3 hours |  1 hour   | — |
+|  320 bits  |10-20 hours|  2 hours  | — |
 
 The sieving step and the computation of the class number can use multiple cores.
 The output of the sieve is usually less than 250 MiB even for 100-digit inputs.
@@ -163,9 +163,6 @@ it is computed using 2 determinants, via CRT and the Wiedemann algorithm.
 The Wiedemann algorithm is implemented in Python using
 scipy uint64 matrices and uses 54-bit moduli.
 
-For small discriminants, an implementation using dense linear algebra
-is built in `ymcls` for faster computation.
-
 ## Group structure
 
 The group structure (equivalent to Smith normal form of the relation matrix)
@@ -177,6 +174,15 @@ the scipy-based Wiedemann algorithm implementation. A very slow implementation
 using generic sparse matrices from SageMath is also available as a fallback.
 
 The current implementation can fail if the group has unusually large p^k torsion.
+
+## Dense variant
+
+An alternative implementation using dense linear algebra is built in `ymcls`
+for convenience (and also faster computation for small inputs). It uses
+Gauss elimination modulo 64-bit primes to compute determinants and
+division-free Gauss elimination to compute a partial Smith normal form.
+
+It can handle discriminants up to 240 bits with moderate performance loss.
 
 ## Examples
 
