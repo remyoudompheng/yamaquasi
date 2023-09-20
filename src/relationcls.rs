@@ -24,7 +24,7 @@ use std::time::Instant;
 use bnum::cast::CastFrom;
 
 use crate::matrixint;
-use crate::Int;
+use crate::{Int, Verbosity};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CRelation {
@@ -295,22 +295,32 @@ impl CRelationSet {
     }
 }
 
-pub fn group_structure(rels: Vec<CRelation>, hest: (f64, f64), outdir: Option<PathBuf>) {
+pub fn group_structure(
+    rels: Vec<CRelation>,
+    hest: (f64, f64),
+    v: Verbosity,
+    outdir: Option<PathBuf>,
+) {
     let t0 = Instant::now();
     let mut r = RelFilterSparse::new(rels);
     while let Some(_) = r.pivot_one() {
         if r.weight.len() % 64 == 0 {
             let nrows = r.rows.iter().filter(|r| r.len() > 0).count();
-            eprintln!(
-                "{} columns {} rows {} coefs",
-                r.weight.len(),
-                nrows,
-                r.nonzero.len()
-            );
+            if v >= Verbosity::Debug {
+                eprintln!(
+                    "{} columns {} rows {} coefs",
+                    r.weight.len(),
+                    nrows,
+                    r.nonzero.len()
+                );
+            }
             let nc = r.weight.len();
             let want = nc + nc / 2 + 128;
             if nrows > want {
-                r.trim(nrows - want);
+                let trimmed = r.trim(nrows - want);
+                if v >= Verbosity::Debug && trimmed > 0 {
+                    eprintln!("{trimmed} extra relations trimmed");
+                }
             }
         }
     }
@@ -319,9 +329,10 @@ pub fn group_structure(rels: Vec<CRelation>, hest: (f64, f64), outdir: Option<Pa
     }
     let nrows = r.rows.iter().filter(|r| r.len() > 0).count();
     eprintln!(
-        "Filtered matrix has {} columns {} rows",
+        "Filtered matrix has {} columns {} rows (elapsed: {:.3}s)",
         r.weight.len(),
-        nrows
+        nrows,
+        t0.elapsed().as_secs_f64()
     );
     let mut r = matrixint::SmithNormalForm::new(&r.rows, r.removed, hest.0, hest.1);
     eprintln!("Class number is {}", r.h);
@@ -529,7 +540,7 @@ impl RelFilterSparse {
         Some(())
     }
 
-    fn trim(&mut self, count: usize) {
+    fn trim(&mut self, count: usize) -> usize {
         let mut counts = vec![0; self.weight.len() + 1];
         for r in &self.rows {
             counts[r.len()] += 1;
@@ -550,9 +561,7 @@ impl RelFilterSparse {
                 r.clear();
             }
         }
-        if trimmed > 0 {
-            eprintln!("{trimmed} extra relations trimmed (weight >= {threshold})");
-        }
+        trimmed
     }
 
     fn add_index(&mut self, idx: usize, p: u32) {
@@ -703,11 +712,12 @@ fn write_group_structure(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) -> 
     let mut buf = vec![];
     let mut removed = snf.removed.clone();
     removed.reverse();
+    let mut skipped = 0;
     'extra: for (p, rel) in removed.iter() {
         let mut dlog = vec![Int::ZERO; ds.len()];
         for (l, e) in rel {
             if !coords.contains_key(l) {
-                eprintln!("Missing relations for {l}");
+                skipped += 1;
                 continue 'extra;
             }
             let v = coords.get(l).unwrap();
@@ -726,6 +736,9 @@ fn write_group_structure(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) -> 
         {}
         buf.push(b'\n');
         coords.insert(*p, dl);
+    }
+    if skipped > 0 {
+        eprintln!("{skipped} discrete logs skipped due to missing relations");
     }
     w.write(&buf[..]).unwrap();
     true

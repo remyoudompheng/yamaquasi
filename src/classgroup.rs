@@ -170,7 +170,6 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
     if prefs.abort() {
         return;
     }
-    // FIXME: No linear algebra?
     let pdone = s.polys_done.load(Ordering::Relaxed);
     let mm = s.qs.interval_size;
     let rels = s.rels.read().unwrap();
@@ -188,7 +187,7 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
         let crels = s.result();
         use crate::relationcls;
         let outdir = prefs.outdir.as_ref().map(PathBuf::from);
-        relationcls::group_structure(crels, (hmin, hmax), outdir);
+        relationcls::group_structure(crels, (hmin, hmax), prefs.verbosity, outdir);
     }
 }
 
@@ -302,7 +301,9 @@ fn sieve_a(s: &ClSieve, a_int: &Uint, factors: &Factors) {
         }
     }
     let pdone = s.polys_done.load(Ordering::Relaxed);
-    if s.prefs.verbose(Verbosity::Info) {
+    if s.prefs.verbose(Verbosity::Debug)
+        || (s.prefs.verbose(Verbosity::Info) && a_int.low_u64() % 17 <= 1)
+    {
         let rels = s.rels.read().unwrap();
         rels.log_progress(format!(
             "Sieved {}M {} polys",
