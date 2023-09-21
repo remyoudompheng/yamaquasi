@@ -488,7 +488,7 @@ impl SmithNormalForm {
                 gens.insert(p, p);
             }
         }
-        let gens: Vec<_> = gens.into_keys().collect();
+        let mut gens: Vec<_> = gens.into_keys().collect();
         let mut rows = vec![];
         for row in rels {
             if row.len() == 0 {
@@ -507,8 +507,11 @@ impl SmithNormalForm {
                     v[i] = row[j].1.into();
                 }
             }
+            // Put generators are in decreasing order.
+            v.reverse();
             rows.push(v);
         }
+        gens.reverse();
         let h = compute_lattice_index(&rows, hmin, hmax);
         // Convert to 128-bits.
         let rows = rows
@@ -535,45 +538,45 @@ impl SmithNormalForm {
         for j in 0..self.gens.len() {
             // Invariant
             // for i in 0..j
-            // row[i,n-i] = Di
-            // row[k>i,n-i] = 0
+            // row[i,i] = Di
+            // row[k>i,i] = 0
             for i in j..self.rows.len() {
                 for jj in 0..j {
-                    self.eliminate(jj, i, n - jj);
-                    assert!(self.rows[i][n - jj] == 0);
+                    self.eliminate(jj, i, jj);
+                    assert!(self.rows[i][jj] == 0);
                 }
-                if self.rows[i][n - j] != 0 {
+                if self.rows[i][j] != 0 {
                     //eprintln!("using row {i} for step {j}");
                     self.rows.swap(j, i);
                     break;
                 }
             }
             //eprintln!("reduction {j} {:?}", self.rows[j]);
-            if self.rows[j][n - j] != 0 {
-                self.normalize(j, n - j);
+            if self.rows[j][j] != 0 {
+                self.normalize(j, j);
             }
             if j < n {
-                assert!(self.rows[j][n - j] != 0);
+                assert!(self.rows[j][j] != 0);
             } else {
-                if self.rows[n][0] == 0 {
-                    self.rows[n][0] = self.h as i128;
+                if self.rows[n][n] == 0 {
+                    self.rows[n][n] = self.h as i128;
                 }
             }
         }
-        //let diag: Vec<i128> = (0..=n).map(|j| self.rows[j][n - j]).collect();
+        //let diag: Vec<i128> = (0..=n).map(|j| self.rows[j][j]).collect();
         //eprintln!("diag {diag:?}");
         // Add some vectors to reduce until class number is reached.
         for i in n + 1..self.rows.len() {
             for j in 0..=n {
-                if self.rows[i][n - j] == 0 {
+                if self.rows[i][j] == 0 {
                     continue;
                 }
-                self.eliminate(j, i, n - j);
+                self.eliminate(j, i, j);
             }
-            if self.rows[n][0] == 0 {
-                self.rows[n][0] = self.h as i128;
+            if self.rows[n][n] == 0 {
+                self.rows[n][n] = self.h as i128;
             }
-            let diag: Vec<i128> = (0..=n).map(|j| self.rows[j][n - j]).collect();
+            let diag: Vec<i128> = (0..=n).map(|j| self.rows[j][j]).collect();
             //eprintln!("diag {diag:?}");
             let prod = diag.iter().product::<i128>();
             if prod == self.h as i128 {
@@ -591,23 +594,23 @@ impl SmithNormalForm {
             let mut remaining = vec![];
             let mut cols = vec![];
             for j in 0..=n {
-                let nj = self.rows[j][n - j];
+                let nj = self.rows[j][j];
                 for i in 0..j {
-                    if nj == 1 || (nj > 0 && self.rows[i][n - j] % nj == 0) {
-                        self.eliminate(j, i, n - j);
+                    if nj == 1 || (nj > 0 && self.rows[i][j] % nj == 0) {
+                        self.eliminate(j, i, j);
                     }
                 }
             }
-            if self.rows[n][0] == 0 {
-                self.rows[n][0] = self.h as i128;
+            if self.rows[n][n] == 0 {
+                self.rows[n][n] = self.h as i128;
             }
 
             // Extract redundant relations (coefficient=1).
             for j in 0..=n {
-                if self.rows[j][n - j] == 1 {
-                    let p = self.gens[n - j];
+                if self.rows[j][j] == 1 {
+                    let p = self.gens[j];
                     let mut rel = vec![];
-                    for idx in 0..n - j {
+                    for idx in j + 1..=n {
                         let e = self.rows[j][idx];
                         if e == 0 {
                             continue;
@@ -621,11 +624,10 @@ impl SmithNormalForm {
                     self.removed.push((p, rel));
                 } else {
                     remaining.push(self.rows[j].clone());
-                    cols.push(n - j);
+                    cols.push(j);
                 }
             }
             // Shrink matrix
-            cols.reverse();
             self.rows = vec![];
             for r in remaining {
                 self.rows.push(cols.iter().map(|&idx| r[idx]).collect());
@@ -636,22 +638,20 @@ impl SmithNormalForm {
             let n = self.rows.len();
             let mut swaps = 0;
             for i in 0..n {
-                let ii = n - 1 - i;
                 for j in 0..i {
-                    let jj = n - 1 - j;
-                    let d = Integer::gcd(&self.rows[j][ii], &self.rows[i][ii]);
-                    if d < self.rows[j][jj] {
+                    let d = Integer::gcd(&self.rows[j][i], &self.rows[i][i]);
+                    if d < self.rows[j][j] {
                         // Swap columns i and j, reduce.
-                        self.gens.swap(ii, jj);
+                        self.gens.swap(i, j);
                         for r in self.rows.iter_mut() {
-                            r.swap(ii, jj);
+                            r.swap(i, j);
                         }
                         for k in j..i {
                             for l in k + 1..=i {
-                                self.eliminate(k, l, n - 1 - k);
+                                self.eliminate(k, l, k);
                             }
-                            if self.rows[k][n - 1 - k] == 0 {
-                                self.rows[k][n - 1 - k] = self.h as i128;
+                            if self.rows[k][k] == 0 {
+                                self.rows[k][k] = self.h as i128;
                             }
                         }
                         swaps += 1;

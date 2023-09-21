@@ -654,29 +654,30 @@ fn compute_group_structure(
     // Compute a triangular system:
     // p[i] = d-torsion element - sum(aj p[j] for j < i)
     // We return tuples (pi, d, [aj])
-    let mut rows = snf.rows.clone();
-    rows.reverse();
-    let mut group: Vec<(u32, u128, Vec<i128>)> = vec![];
-    for (i, r) in rows.iter().enumerate() {
-        let mut rel = vec![Int::ZERO; snf.gens.len()];
-        for j in 0..i {
+    let n = snf.gens.len();
+    let mut group: Vec<(u32, u128, Vec<i128>)> = vec![(0, 0, vec![]); n];
+    for i in 0..n {
+        let i = n - 1 - i;
+        let r = &snf.rows[i];
+        let mut rel = vec![Int::ZERO; n];
+        for j in i + 1..n {
             if r[j] % r[i] != 0 {
                 return None;
             }
             // Add r[j]/r[i] times pj
             let q = -Int::from(r[j] / r[i]);
             rel[j] += q;
-            for k in 0..j {
+            for k in j + 1..n {
                 rel[k] += q * Int::from(group[j].2[k]);
             }
         }
         // Negate
-        for j in 0..i {
+        for j in i + 1..n {
             rel[j] = rel[j].rem_euclid(Int::from(group[j].1));
         }
         let mut rel: Vec<i128> = rel.into_iter().map(i128::cast_from).collect();
         rel[i] = 1;
-        group.push((snf.gens[i], r[i] as u128, rel));
+        group[i] = (snf.gens[i], r[i] as u128, rel);
     }
     Some(group)
 }
