@@ -344,25 +344,12 @@ pub fn group_structure(
     // Removed relations, in reverse order
     if let Some(outdir) = outdir.as_ref() {
         write_relations(&r, outdir);
-        let ok = write_group_structure(&r, outdir);
-        let qual = if ok { "Full" } else { "Partial" };
+        let group = write_group_structure(&r, outdir);
         eprintln!(
-            "{} group structure computed in {:.3}s",
-            qual,
+            "Group structure computed in {:.3}s",
             t0.elapsed().as_secs_f64()
         );
-    }
-    // Also print relations to stderr. The number of remaining
-    // relations is similar to the number of factors of D.
-    for row in &r.rows {
-        let mut line = String::new();
-        for (&p, &e) in r.gens.iter().zip(row) {
-            if e == 0 {
-                continue;
-            }
-            line += format!("{p}^{e} ").as_str();
-        }
-        eprintln!("{}", line.trim_end());
+        std::io::stdout().write_all(&group).unwrap();
     }
 }
 
@@ -630,84 +617,42 @@ fn write_relations(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) {
         let mut w = fs::File::create(outdir.join("relations.removed")).unwrap();
         w.write(&buf[..]).unwrap();
     }
-    let mut buf = vec![];
-    for row in &snf.rows {
-        for (&p, &e) in snf.gens.iter().zip(row) {
-            if e == 0 {
-                continue;
-            }
-            write!(&mut buf, "{p}^{e} ").unwrap();
-        }
-        buf.pop(); // trailing space
-        buf.push(b'\n');
-    }
-    {
-        // Overwrite filtered relations.
-        let mut w = fs::File::create(outdir.join("relations.filtered")).unwrap();
-        w.write(&buf[..]).unwrap();
-    }
 }
 
-fn compute_group_structure(
-    snf: &matrixint::SmithNormalForm,
-) -> Option<Vec<(u32, u128, Vec<i128>)>> {
-    // Compute a triangular system:
-    // p[i] = d-torsion element - sum(aj p[j] for j < i)
-    // We return tuples (pi, d, [aj])
+fn write_group_structure(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) -> Vec<u8> {
     let n = snf.gens.len();
-    let mut group: Vec<(u32, u128, Vec<i128>)> = vec![(0, 0, vec![]); n];
-    for i in 0..n {
-        let i = n - 1 - i;
-        let r = &snf.rows[i];
-        let mut rel = vec![Int::ZERO; n];
-        for j in i + 1..n {
-            if r[j] % r[i] != 0 {
-                return None;
-            }
-            // Add r[j]/r[i] times pj
-            let q = -Int::from(r[j] / r[i]);
-            rel[j] += q;
-            for k in j + 1..n {
-                rel[k] += q * Int::from(group[j].2[k]);
-            }
-        }
-        // Negate
-        for j in i + 1..n {
-            rel[j] = rel[j].rem_euclid(Int::from(group[j].1));
-        }
-        let mut rel: Vec<i128> = rel.into_iter().map(i128::cast_from).collect();
-        rel[i] = 1;
-        group[i] = (snf.gens[i], r[i] as u128, rel);
-    }
-    Some(group)
-}
-
-fn write_group_structure(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) -> bool {
-    let Some(grp) = compute_group_structure(snf) else {
-        return false;
-    };
     // Cyclic group, we know how to do this.
     let mut buf = vec![];
     // Group invariants
     write!(&mut buf, "G").unwrap();
     let mut ds = vec![];
-    for &(_, d, _) in &grp {
-        write!(&mut buf, " {d}").unwrap();
+    for i in 0..n {
+        let d = snf.rows[i][i];
+        if d != 1 {
+            write!(&mut buf, " {d}").unwrap();
+        }
         ds.push(d);
     }
     buf.push(b'\n');
     // Coordinates
+    // If D = PUQ is diagonal, it means that Q^-1 gens are cyclic
     let mut coords = BTreeMap::<u32, Vec<i128>>::new();
-    for (p, _, rel) in grp {
+    for i in 0..n {
+        let p = snf.gens[i];
+        let mut c = snf.q[i].clone();
         write!(&mut buf, "{p}").unwrap();
-        for x in &rel {
-            write!(&mut buf, " {x}").unwrap();
+        for j in 0..n {
+            if ds[j] != 1 {
+                c[j] %= ds[j];
+                write!(&mut buf, " {}", c[j]).unwrap();
+            }
         }
         buf.push(b'\n');
-        coords.insert(p, rel);
+        coords.insert(p, c);
     }
     let mut w = fs::File::create(outdir.join("group.structure")).unwrap();
     w.write(&buf[..]).unwrap();
+    let group = buf;
     // Compute coordinates for eliminated relations
     let mut w = fs::File::create(outdir.join("group.structure.extra")).unwrap();
     let mut buf = vec![];
@@ -729,12 +674,13 @@ fn write_group_structure(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) -> 
         for idx in 0..ds.len() {
             dlog[idx] = dlog[idx].rem_euclid(Int::from(ds[idx]));
         }
-        let dl = dlog.into_iter().map(i128::cast_from).collect();
+        let dl: Vec<i128> = dlog.into_iter().map(i128::cast_from).collect();
         write!(&mut buf, "{p}").unwrap();
-        for x in &dl {
-            write!(&mut buf, " {x}").unwrap();
+        for (x, &d) in dl.iter().zip(&ds) {
+            if d != 1 {
+                write!(&mut buf, " {x}").unwrap();
+            }
         }
-        {}
         buf.push(b'\n');
         coords.insert(*p, dl);
     }
@@ -742,5 +688,5 @@ fn write_group_structure(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) -> 
         eprintln!("{skipped} discrete logs skipped due to missing relations");
     }
     w.write(&buf[..]).unwrap();
-    true
+    group
 }
