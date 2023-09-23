@@ -13,12 +13,13 @@ use pyo3::prelude::*;
 use pyo3::pyfunction;
 use pyo3::types::{PyList, PyLong};
 
-use yamaquasi::{self, Algo, Preferences, Uint, Verbosity};
+use yamaquasi::{self, Algo, Int, Preferences, Uint, Verbosity};
 
 #[pymodule]
 fn pymqs(_: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(factor, m)?)?;
     m.add_function(wrap_pyfunction!(ecm, m)?)?;
+    m.add_function(wrap_pyfunction!(quadratic_classnumber, m)?)?;
     Ok(())
 }
 
@@ -110,7 +111,7 @@ fn factor(
         return Err(PyKeyboardInterrupt::new_err(()));
     }
     let Ok(factors) = result else {
-        return Err(PyValueError::new_err(format!("failed to factor {n}")))
+        return Err(PyValueError::new_err(format!("failed to factor {n}")));
     };
     let l = PyList::empty(py);
     for f in factors {
@@ -192,4 +193,65 @@ fn ecm(
         l.append(obj)?;
     }
     Ok(l.into())
+}
+
+#[pyfunction]
+#[pyo3(
+    signature = (d, /, verbose = "silent", threads = None),
+    text_signature = "(d: int, /, verbose=\"silent\", threads=None) -> List[int]"
+)]
+fn quadratic_classnumber(
+    py: Python<'_>,
+    d: &PyLong,
+    verbose: &str,
+    threads: Option<usize>,
+) -> PyResult<Py<PyLong>> {
+    let verbosity =
+        Verbosity::from_str(verbose).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let mut prefs = Preferences::default();
+    prefs.threads = threads;
+    prefs.verbosity = verbosity;
+    let d = Int::from_str(&d.to_string()).map_err(|_| {
+        PyValueError::new_err(format!(
+            "Yamaquasi only accepts negative integers with at most 75 decimal digits"
+        ))
+    })?;
+    if !d.is_negative() || d.unsigned_abs().bits() > 250 {
+        return Err(PyValueError::new_err(format!(
+            "Yamaquasi only accepts negative integers with at most 75 decimal digits"
+        )));
+    }
+    if d.bit(1) {
+        return Err(PyValueError::new_err(format!(
+            "Discriminant must be 0 or 1 mod 4"
+        )));
+    }
+    let tpool: Option<rayon::ThreadPool> = prefs.threads.map(|t| {
+        if prefs.verbose(Verbosity::Verbose) {
+            eprintln!("Using a pool of {t} threads");
+        }
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(t)
+            .build()
+            .expect("cannot create thread pool")
+    });
+    let tpool = tpool.as_ref();
+    let result = py.allow_threads(|| yamaquasi::classgroup::ideal_relations(&d, &prefs, tpool));
+    let d = match result {
+        Some(d) => d,
+        None => {
+            return Err(PyValueError::new_err(format!(
+                "Classgroup computation failure"
+            )))
+        }
+    };
+    // FIXME: this is ugly.
+    let s = CString::new(d.to_string()).unwrap();
+    let sptr = s.as_ptr();
+    let nullptr: *mut *mut c_char = std::ptr::null::<*mut c_char>() as *mut _;
+    let obj = unsafe {
+        let obj_ptr = PyLong_FromString(sptr, nullptr, 0);
+        Py::<PyLong>::from_owned_ptr(py, obj_ptr)
+    };
+    Ok(obj)
 }

@@ -41,7 +41,7 @@ use crate::sieve::{self, BLOCK_SIZE};
 use crate::siqs::{self, prepare_a, select_a, select_siqs_factors, Factors, Poly, PolyType, A};
 use crate::{Int, Preferences, Uint, Verbosity};
 
-pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -> () {
+pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -> Option<u128> {
     let (hmin, hmax) = estimate(&d);
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Estimate by class number formula {hmin:.5e}-{hmax:.5e}")
@@ -191,7 +191,7 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
         }
     }
     if prefs.abort() {
-        return;
+        return None;
     }
     let pdone = s.polys_done.load(Ordering::Relaxed);
     let mm = s.qs.interval_size;
@@ -210,7 +210,9 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
         let crels = s.result();
         use crate::relationcls;
         let outdir = prefs.outdir.as_ref().map(PathBuf::from);
-        relationcls::group_structure(crels, (hmin, hmax), prefs.verbosity, outdir);
+        Some(relationcls::group_structure(crels, (hmin, hmax), prefs.verbosity, outdir))
+    } else {
+        None
     }
 }
 

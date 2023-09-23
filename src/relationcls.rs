@@ -301,7 +301,7 @@ pub fn group_structure(
     hest: (f64, f64),
     v: Verbosity,
     outdir: Option<PathBuf>,
-) {
+) -> u128 {
     let t0 = Instant::now();
     let mut r = RelFilterSparse::new(rels);
     while let Some(_) = r.pivot_one() {
@@ -359,6 +359,7 @@ pub fn group_structure(
         }
         std::io::stdout().write_all(&group).unwrap();
     }
+    r.h as u128
 }
 
 /// A structure to filter relations when they are sparse.
