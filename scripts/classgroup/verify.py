@@ -184,7 +184,7 @@ def verify_group(g, D, gextra=None):
         for l, dlog in zip(ls, dlogs):
             exps = coords(G(dlog))
             q = prod(qpow(qf(_l, D), _e, D).reduced_form() for _l, _e in zip(ls, exps))
-            assert q.reduced_form() == qf(l, D)
+            assert q.reduced_form() == qf(l, D).reduced_form()
             factors = "*".join(f"[{_l}]^{_e}" for _l, _e in zip(ls, exps) if _e)
             print(f"OK [{l}] == {factors}")
 
@@ -197,7 +197,7 @@ def verify_group(g, D, gextra=None):
                 q = prod(
                     qpow(qf(_l, D), _e, D).reduced_form() for _l, _e in zip(ls, exps)
                 )
-                assert q.reduced_form() == qf(l, D)
+                assert q.reduced_form() == qf(l, D).reduced_form()
                 factors = "*".join(f"[{_l}]^{_e}" for _l, _e in zip(ls, exps) if _e)
                 print(f"OK [{l}] == {factors}")
 
