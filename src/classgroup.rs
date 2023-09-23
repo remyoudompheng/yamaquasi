@@ -60,7 +60,10 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
     let dabs = d.unsigned_abs();
     // Choose factor base. Estimate the smoothness bias to increase/decrease
     // the factor base accordingly.
-    let adjsize_tmp = {
+    let adjsize_tmp = if dabs.bits() <= 64 {
+        // For very small sizes, adjustment is useless.
+        dabs.bits()
+    } else {
         let bias = smoothness_bias(d, clsgrp_fb_size(dabs.bits(), dabs.bits() > 180) * 3);
         (dabs.bits() as i64 - (2.5 * bias).round() as i64) as u32
     };
@@ -84,13 +87,21 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
         }
     }
     // Recompute bias and adjusted size again.
-    let bias = smoothness_bias(d, fbase.bound());
-    let adjsize = (dabs.bits() as i64 - (2.5 * bias).round() as i64) as u32;
+    let adjsize = if dabs.bits() <= 64 {
+        // For very small sizes, adjustment is useless.
+        dabs.bits()
+    } else {
+        let bias = smoothness_bias(d, fbase.bound());
+        let adjsize = (dabs.bits() as i64 - (2.5 * bias).round() as i64) as u32;
+        if prefs.verbose(Verbosity::Info) {
+            eprintln!("Smoothness bias {bias:.3} using parameters for {adjsize} bits");
+        }
+        adjsize
+    };
     // It is fine to have a divisor of D in the factor base.
     let mm = prefs.interval_size.unwrap_or(interval_size(adjsize));
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Smoothness bound B1={}", fbase.bound());
-        eprintln!("Smoothness bias {bias:.3} using parameters for {adjsize} bits");
         eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls(),);
         eprintln!("Sieving interval size {}k", mm >> 10);
     }

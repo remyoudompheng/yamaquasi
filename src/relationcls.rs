@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use bnum::cast::CastFrom;
+use bnum::types::I256;
 
 use crate::matrixint;
 use crate::{Int, Verbosity};
@@ -660,7 +661,7 @@ fn write_group_structure(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) -> 
     removed.reverse();
     let mut skipped = 0;
     'extra: for (p, rel) in removed.iter() {
-        let mut dlog = vec![Int::ZERO; ds.len()];
+        let mut dlog = vec![I256::ZERO; ds.len()];
         for (l, e) in rel {
             if !coords.contains_key(l) {
                 skipped += 1;
@@ -668,11 +669,11 @@ fn write_group_structure(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) -> 
             }
             let v = coords.get(l).unwrap();
             for idx in 0..ds.len() {
-                dlog[idx] += Int::from(*e) * Int::from(v[idx]);
+                dlog[idx] += I256::from(*e).checked_mul(I256::from(v[idx])).unwrap();
             }
         }
         for idx in 0..ds.len() {
-            dlog[idx] = dlog[idx].rem_euclid(Int::from(ds[idx]));
+            dlog[idx] = dlog[idx].rem_euclid(I256::from(ds[idx]));
         }
         let dl: Vec<i128> = dlog.into_iter().map(i128::cast_from).collect();
         write!(&mut buf, "{p}").unwrap();
