@@ -72,6 +72,17 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
     // This creates some redundant *2 /2 operations.
     let dred = if dabs.low_u64() & 3 == 0 { *d >> 2 } else { *d };
     let fbase = FBase::new(dred, fb);
+    let mut conductor_primes = vec![];
+    for idx in 0..fbase.len() {
+        let pr = fbase.prime(idx);
+        if pr.r == 0 && dred.unsigned_abs() % (pr.p * pr.p) == 0 {
+            eprintln!(
+                "WARNING: D is not fundamental, {} divides the conductor",
+                pr.p
+            );
+            conductor_primes.push(pr.p);
+        }
+    }
     // Recompute bias and adjusted size again.
     let bias = smoothness_bias(d, fbase.bound());
     let adjsize = (dabs.bits() as i64 - (2.5 * bias).round() as i64) as u32;
@@ -134,6 +145,7 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
     let s = ClSieve {
         d: *d,
         qs,
+        conductor_primes,
         prefs,
         rels: RwLock::new(CRelationSet::new(
             *d,
@@ -197,6 +209,8 @@ struct ClSieve<'a> {
     // A negative discriminant
     d: Int,
     qs: siqs::SieveSIQS<'a>,
+    // Relations involving conductor primes will be rejected.
+    conductor_primes: Vec<u64>,
     // A signal for threads to stop sieving.
     done: AtomicBool,
     rels: RwLock<CRelationSet>,
@@ -373,7 +387,7 @@ fn sieve_block_poly(s: &ClSieve, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
 
     let (idx, facss) = st.smooths(target as u8, None, [&pol.r1p, &pol.r2p]);
     let qfacs = pol.factors(a);
-    for (i, intfacs) in idx.into_iter().zip(facss) {
+    'smoothloop: for (i, intfacs) in idx.into_iter().zip(facss) {
         let x = st.offset + (i as i64);
         let (v, bx) = pol.eval(x);
         debug_assert!(v.is_positive());
@@ -416,6 +430,12 @@ fn sieve_block_poly(s: &ClSieve, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
                     factors.push((2, -(e as i32)))
                 }
                 continue;
+            }
+            if s.conductor_primes.contains(&(p as u64)) {
+                if s.prefs.verbose(Verbosity::Debug) {
+                    eprintln!("WARNING: rejecting relation with conductor prime {p}");
+                }
+                continue 'smoothloop;
             }
             let pr = qs.fbase.prime(qs.fbase.idx(p as u32).unwrap());
             debug_assert!(pr.p == p as u64);
