@@ -432,7 +432,7 @@ pub fn compute_lattice_index(rows: &Vec<Vec<i64>>, hmin: f64, hmax: f64) -> u128
                 indices.push(idx);
                 let logest = gg.detlog2_estimate();
                 let det = b.det(&rows[idx], logest);
-                eprintln!("det={} log2={:.6}", det, logest);
+                //eprintln!("det={} log2={:.6}", det, logest);
                 //eprintln!("indices = {indices:?}");
                 indices.pop();
                 // Analyse candidates
@@ -454,7 +454,7 @@ pub fn compute_lattice_index(rows: &Vec<Vec<i64>>, hmin: f64, hmax: f64) -> u128
                         candidates.push(q)
                     }
                 }
-                eprintln!("gcd={gcd} h in {:?}", &candidates);
+                //eprintln!("gcd={gcd} h in {:?}", &candidates);
                 if candidates.len() == 1 {
                     return u128::cast_from(candidates[0]);
                 }
@@ -482,6 +482,7 @@ pub struct SmithNormalForm {
     pub removed: Vec<(u32, Vec<(u32, i128)>)>,
     pub h: u128,
     pub hinv: (u128, i32),
+    pub verbose: bool,
 }
 
 impl SmithNormalForm {
@@ -540,6 +541,7 @@ impl SmithNormalForm {
             removed,
             h,
             hinv,
+            verbose: false,
         }
     }
 
@@ -614,7 +616,9 @@ impl SmithNormalForm {
             //eprintln!("diag {diag:?}");
             let prod = diag.iter().product::<i128>();
             if prod == self.h as i128 {
-                eprintln!("Found basis of relation lattice");
+                if self.verbose {
+                    eprintln!("Found basis of relation lattice");
+                }
                 break;
             }
         }

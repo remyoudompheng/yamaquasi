@@ -329,14 +329,19 @@ pub fn group_structure(
         r.write_files(outdir);
     }
     let nrows = r.rows.iter().filter(|r| r.len() > 0).count();
-    eprintln!(
-        "Filtered matrix has {} columns {} rows (elapsed: {:.3}s)",
-        r.weight.len(),
-        nrows,
-        t0.elapsed().as_secs_f64()
-    );
+    if v >= Verbosity::Info {
+        eprintln!(
+            "Filtered matrix has {} columns {} rows (elapsed: {:.3}s)",
+            r.weight.len(),
+            nrows,
+            t0.elapsed().as_secs_f64()
+        );
+    }
     let mut r = matrixint::SmithNormalForm::new(&r.rows, r.removed, hest.0, hest.1);
-    eprintln!("Class number is {}", r.h);
+    r.verbose = v >= Verbosity::Info;
+    if v >= Verbosity::Info {
+        eprintln!("Class number is {}", r.h);
+    }
     if let Some(outdir) = outdir.as_ref() {
         let mut w = fs::File::create(outdir.join("classnumber")).unwrap();
         writeln!(w, "{}", r.h).unwrap();
@@ -346,10 +351,12 @@ pub fn group_structure(
     if let Some(outdir) = outdir.as_ref() {
         write_relations(&r, outdir);
         let group = write_group_structure(&r, outdir);
-        eprintln!(
-            "Group structure computed in {:.3}s",
-            t0.elapsed().as_secs_f64()
-        );
+        if v >= Verbosity::Info {
+            eprintln!(
+                "Group structure computed in {:.4}s",
+                t0.elapsed().as_secs_f64()
+            );
+        }
         std::io::stdout().write_all(&group).unwrap();
     }
 }
@@ -622,7 +629,6 @@ fn write_relations(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) {
 
 fn write_group_structure(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) -> Vec<u8> {
     let n = snf.gens.len();
-    // Cyclic group, we know how to do this.
     let mut buf = vec![];
     // Group invariants
     write!(&mut buf, "G").unwrap();
