@@ -13,7 +13,7 @@
 //! We still keep track of the largest connected component of the
 //! large prime graph, but emit relations instead of combining them.
 
-use std::cmp::{max, min};
+use std::cmp::min;
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
 use std::fs;
@@ -402,9 +402,9 @@ struct RelFilterSparse {
     rows: Vec<Vec<(u32, i32)>>,
     // How many times each given prime appears.
     weight: BTreeMap<u32, u32>,
-    // Set of nonzero indices (prime, row index)
+    // Set of nonzero indices prime => [row index]
     // We never remove elements, except when a prime is eliminated.
-    nonzero: BTreeSet<(u32, u32)>,
+    nonzero: BTreeMap<u32, Vec<u32>>,
     // An array of removed relations, arranged as a triangular matrix.
     // Each relation involves primes appearing afterwards.
     removed: Vec<(u32, Vec<(u32, i32)>)>,
@@ -416,7 +416,7 @@ struct RelFilterSparse {
 
 impl RelFilterSparse {
     fn new(rels: Vec<CRelation>) -> Self {
-        let mut rows = vec![];
+        let mut rows = Vec::with_capacity(rels.len());
         for r in rels {
             let mut row: Vec<_> = r.factors.clone();
             if let Some((p, e)) = r.large1 {
@@ -430,16 +430,19 @@ impl RelFilterSparse {
             rows.push(row);
         }
         let mut weight = BTreeMap::new();
-        let mut ones = BTreeSet::new();
-        let mut nonzero = BTreeSet::new();
-        for i in 0..rows.len() {
-            for &(p, e) in &rows[i] {
+        for r in &rows {
+            for &(p, _) in r {
                 let w: &mut u32 = weight.entry(p).or_default();
                 *w += 1;
-                nonzero.insert((p, i as u32));
-                if e.unsigned_abs() == 1 {
-                    ones.insert((p, i as u32));
-                }
+            }
+        }
+        let mut nonzero = BTreeMap::new();
+        for (&p, &w) in &weight {
+            nonzero.insert(p, Vec::with_capacity(w as usize));
+        }
+        for i in 0..rows.len() {
+            for &(p, _) in &rows[i] {
+                nonzero.get_mut(&p).unwrap().push(i as u32);
             }
         }
         Self {
@@ -489,7 +492,10 @@ impl RelFilterSparse {
         'mainloop: while self.wmin < self.rows.len() {
             for (&q, &wq) in self.weight.iter() {
                 if wq as usize <= self.wmin && !self.skip.contains(&q) {
-                    for &(q, idx) in self.nonzero.range((q, 0)..(q + 1, 0)) {
+                    let Some(nz) = self.nonzero.get(&q) else {
+                        continue;
+                    };
+                    for &idx in nz {
                         if self.coeff(idx as usize, q).unsigned_abs() == 1 {
                             p = q;
                             break 'mainloop;
@@ -510,7 +516,8 @@ impl RelFilterSparse {
     fn pivot(&mut self, p: u32) -> Option<()> {
         let idx: Option<u32> = {
             let mut idx = None;
-            for &(_, i) in self.nonzero.range((p, 0)..(p + 1, 0)) {
+            let nz = self.nonzero.get(&p).unwrap();
+            for &i in nz {
                 if self.coeff(i as usize, p).unsigned_abs() != 1 {
                     continue;
                 }
@@ -529,15 +536,12 @@ impl RelFilterSparse {
         let ci = self.coeff(idx as usize, p);
         debug_assert!(ci == 1 || ci == -1);
         // A superset of interesting indices.
-        let indices: Vec<usize> = self
-            .nonzero
-            .range((p, 0)..(p + 1, 0))
-            .map(|&(_, i)| i as usize)
-            .collect();
+        let indices = self.nonzero.get(&p).unwrap().clone();
         for j in indices {
-            if j == idx as usize {
+            if j == idx {
                 continue;
             }
+            let j = j as usize;
             let cj = self.coeff(j, p);
             if cj == 0 {
                 continue;
@@ -549,6 +553,7 @@ impl RelFilterSparse {
         self.rows[idx as usize].clear();
         // update indices
         self.weight.remove(&p);
+        self.nonzero.remove(&p);
         // pop p
         let mut rel = ri;
         for i in 0..rel.len() {
@@ -593,9 +598,8 @@ impl RelFilterSparse {
     }
 
     fn add_index(&mut self, idx: usize, p: u32) {
-        if self.nonzero.insert((p, idx as u32)) {
-            self.weight.entry(p).and_modify(|w| *w += 1);
-        }
+        self.nonzero.entry(p).and_modify(|v| v.push(idx as u32));
+        self.weight.entry(p).and_modify(|w| *w += 1);
     }
 
     // Apply operation row[i]-=c*row[j]
@@ -605,7 +609,7 @@ impl RelFilterSparse {
         debug_assert!(c != 0 && i != j);
         let li = self.rows[i].len();
         let lj = self.rows[j].len();
-        let mut res: Vec<(u32, i32)> = Vec::with_capacity(max(li, lj));
+        let mut res: Vec<(u32, i32)> = Vec::with_capacity(min(self.weight.len(), li + lj));
         let mut ii = 0;
         let mut jj = 0;
         while ii < li || jj < lj {
