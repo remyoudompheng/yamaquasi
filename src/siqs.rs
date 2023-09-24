@@ -584,11 +584,19 @@ pub fn select_siqs_factors<'a>(
     let idx = fb
         .primes
         .partition_point(|&p| Uint::from(p as u64).pow(nfacs as u32) < target);
-    let selected_idx = if idx + nfacs >= fb.len() {
+    // Make sure that selected factors don't divide n.
+    // Also never take the first prime (usually 2).
+    let mut pool = vec![];
+    for i in 1..min(fb.len(), 2 * idx + 4 * nfacs) {
+        if fb.r(i) != 0 {
+            pool.push(fb.prime(i));
+        }
+    }
+    let selected_idx = if idx + 4 * nfacs >= pool.len() {
         if v >= Verbosity::Info {
             eprintln!("WARNING: suboptimal choice of A factors");
         }
-        max(fb.len(), 4 * nfacs) - 4 * nfacs..fb.len()
+        max(pool.len(), 4 * nfacs) - 4 * nfacs..pool.len()
     } else {
         let imin = max(idx, 2 * nfacs) - 2 * nfacs;
         imin..imin + 4 * nfacs
@@ -597,12 +605,7 @@ pub fn select_siqs_factors<'a>(
         selected_idx.len() > nfacs,
         "internal error: cannot sample {nfacs} primes from fb[{selected_idx:?}]"
     );
-    // Make sure that selected factors don't divide n.
-    // Also never take the first prime (usually 2).
-    let selection: Vec<Prime> = selected_idx
-        .filter(|&i| i > 0 && i < fb.len() && fb.div(i).mod_uint(&nabs) != 0)
-        .map(|i| fb.prime(i))
-        .collect();
+    let selection: Vec<Prime> = selected_idx.map(|i| pool[i].clone()).collect();
     // Precompute inverses
     let mut inverses = vec![];
     for p in &selection {
