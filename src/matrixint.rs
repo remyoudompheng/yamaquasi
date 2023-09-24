@@ -554,12 +554,18 @@ impl SmithNormalForm {
                 self.rows[i][i] = self.h as i128;
             }
             det *= self.rows[i][i];
+            for j in 0..self.rows.len() {
+                if i != j {
+                    assert_eq!(self.rows[i][j], 0, "nonzero@[{i},{j}]");
+                }
+            }
         }
         assert_eq!(det, self.h as i128);
     }
 
     #[allow(unused)]
     fn debug(&self) {
+        eprintln!("gens = {:?}", &self.gens);
         eprintln!("M =");
         for r in &self.rows {
             eprintln!("{r:?}");
@@ -586,7 +592,7 @@ impl SmithNormalForm {
             for i in j..self.rows.len() {
                 for jj in 0..j {
                     self.eliminate(jj, i, jj);
-                    assert!(self.rows[i][jj] == 0);
+                    assert_eq!(self.rows[i][jj], 0);
                 }
                 if self.rows[i][j] != 0 {
                     //eprintln!("using row {i} for step {j}");
@@ -624,6 +630,7 @@ impl SmithNormalForm {
         }
         // Discard unneeded relations
         self.rows.truncate(n);
+
         // Now the matrix is square and upper triangular.
         // Remove upper coefficients and redundant generators
         // starting from the last column.
@@ -697,13 +704,12 @@ impl SmithNormalForm {
         }
         // is it necessary to loop here??
         for _ in 0..10 {
-            let mut changes = 0;
+            let mut needs_more = false;
             for i in 0..n {
                 for j in i + 1..n {
-                    while self.rows[i][j].abs() > self.rows[i][i].abs() {
+                    while self.rows[i][j] != 0 {
                         let k = self.rows[i][j].div_euclid(self.rows[i][i]);
                         self.colsub(j, i, k);
-                        changes += 1;
                         if self.rows[i][j] != 0 {
                             // The GCD M[i,j] M[j,j] must be less than M[i,i]
                             // Swap columns i and j, reduce.
@@ -715,10 +721,13 @@ impl SmithNormalForm {
                         self.colsub(j, i, 1);
                         self.colswap(i, j);
                     }
+                    if self.rows[i][j] != 0 {
+                        needs_more = true;
+                    }
                 }
             }
-            if changes == 0 {
-                break;
+            if !needs_more {
+                return;
             }
         }
     }
@@ -795,17 +804,18 @@ impl SmithNormalForm {
         if xj == 0 {
             return;
         }
-        if xi == 1 {
+        if xi == 1 || (xi != 0 && xj % xi == 0) {
             // Common situation
+            let m = xj / xi;
             for idx in 0..self.gens.len() {
                 let (yi, yj) = (self.rows[i][idx], self.rows[j][idx]);
                 if yi == 0 && yj == 0 {
                     continue;
                 }
                 if self.h > 0 && self.h < 1 << 64 {
-                    self.rows[j][idx] = self.modh128(yj - xj * yi);
+                    self.rows[j][idx] = self.modh128(yj - m * yi);
                 } else {
-                    let x = I256::from(yj) - I256::from(xj) * I256::from(yi);
+                    let x = I256::from(yj) - I256::from(m) * I256::from(yi);
                     self.rows[j][idx] = self.modh256(x);
                 };
             }
