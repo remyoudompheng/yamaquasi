@@ -44,14 +44,6 @@ def main():
 
 
 def verify_rels(rels, D):
-    match D % 4:
-        case 0:
-            ONE = BinaryQF([1, 0, -D // 4])
-        case 1:
-            ONE = BinaryQF([1, 1, (1 - D) // 4])
-        case _:
-            raise ValueError(f"D must be 0 or 1 modulo 4")
-
     t0 = time.time()
     with open(rels) as f:
         count = 0
@@ -67,10 +59,10 @@ def verify_rels(rels, D):
                 if f > 2 and D % (f * f) == 0:
                     raise ValueError("discriminant is not fundamental")
             # Check
-            qpos = ONE
+            qpos = qf(1, D)
             for l in pos:
                 qpos *= qf(l, D)
-            qneg = ONE
+            qneg = qf(1, D)
             for l in neg:
                 qneg *= qf(l, D)
             assert qpos.reduced_form() == qneg.reduced_form(), line
@@ -79,14 +71,6 @@ def verify_rels(rels, D):
 
 
 def verify_removed(rels, D):
-    match D % 4:
-        case 0:
-            ONE = BinaryQF([1, 0, -D // 4])
-        case 1:
-            ONE = BinaryQF([1, 1, (1 - D) // 4])
-        case _:
-            raise ValueError(f"D must be 0 or 1 modulo 4")
-
     t0 = time.time()
     with open(rels) as f:
         count = 0
@@ -99,7 +83,7 @@ def verify_removed(rels, D):
                 facs.append((int(l), int(e)))
             p = int(p)
             q1 = qf(p, D)
-            q2 = ONE
+            q2 = qf(1, D)
             for l, e in facs:
                 q2 *= qpow(qf(l, D), e, D)
                 q2 = q2.reduced_form()
@@ -109,14 +93,6 @@ def verify_removed(rels, D):
 
 
 def verify_rels2(rels, D):
-    match D % 4:
-        case 0:
-            ONE = BinaryQF([1, 0, -D // 4])
-        case 1:
-            ONE = BinaryQF([1, 1, (1 - D) // 4])
-        case _:
-            raise ValueError(f"D must be 0 or 1 modulo 4")
-
     t0 = time.time()
     with open(rels) as f:
         count = 0
@@ -126,11 +102,11 @@ def verify_rels2(rels, D):
             for le in line.split():
                 l, _, e = le.partition("^")
                 facs.append((int(l), int(e)))
-            q = ONE
+            q = qf(1, D)
             for l, e in facs:
                 q *= qpow(qf(l, D), e, D)
                 q = q.reduced_form()
-            assert q.reduced_form() == ONE
+            assert q.reduced_form() == qf(1, D)
             count += 1
         print(f"{rels}: {count} relations verified in {time.time()-t0:.3f}s")
 
@@ -204,43 +180,11 @@ def verify_group(g, D, gextra=None):
 
 @cached_function
 def qf(p, D):
-    # Convert to binary quadratic form
-    assert p == 2 or legendre_symbol(D, p) >= 0
-    if D & 1:
-        b = ZZ(min(mod(D, 2 * p).sqrt(all=True)))
-        c = (ZZ(b) ** 2 - D) // (4 * p)
-        assert b * b - 4 * p * c == D
-        if p * p < D:
-            assert (q := BinaryQF([p, b, c])) == q.reduced_form(), q
-        return BinaryQF(p, b, c)
-    else:
-        if p == 2:
-            if D % 8 == 0:
-                return BinaryQF(2, 0, -D // 8)
-            else:
-                return BinaryQF(2, 2, (4 - D) // 8)
-        b = ZZ(min(mod(D, 2 * p).sqrt(all=True)))
-        c = (ZZ(b) ** 2 - D) // (4 * p)
-        assert b * b - 4 * p * c == D
-        assert (q := BinaryQF([p, b, c])) == q.reduced_form()
-        return BinaryQF(p, b, c)
+    return BinaryQF(pari.qfbprimeform(D, p))
 
 
 def qpow(qf, e, D):
-    if D % 4 == 1:
-        res = BinaryQF([1, 1, (1 - D) // 4])
-    else:
-        res = BinaryQF([1, 0, -D // 4])
-    if e < 0:
-        qf = BinaryQF(qf[0], -qf[1], qf[2])
-        e = -e
-    sq = qf
-    while e:
-        if e % 2 == 1:
-            res = (res * sq).reduced_form()
-        sq = (sq * sq).reduced_form()
-        e //= 2
-    return res
+    return BinaryQF(pari.qfbpow(qf.__pari__(), e))
 
 
 if __name__ == "__main__":
