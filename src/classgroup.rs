@@ -36,12 +36,16 @@ use rayon::prelude::*;
 use crate::arith::{Dividers, Num};
 use crate::fbase::{self, FBase};
 use crate::params::clsgrp_fb_size;
-use crate::relationcls::{CRelation, CRelationSet};
+use crate::relationcls::{CRelation, CRelationSet, ClassGroup};
 use crate::sieve::{self, BLOCK_SIZE};
 use crate::siqs::{self, prepare_a, select_a, select_siqs_factors, Factors, Poly, PolyType, A};
 use crate::{Int, Preferences, Uint, Verbosity};
 
-pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::ThreadPool>) -> Option<u128> {
+pub fn classgroup(
+    d: &Int,
+    prefs: &Preferences,
+    tpool: Option<&rayon::ThreadPool>,
+) -> Option<ClassGroup> {
     let (hmin, hmax) = estimate(&d);
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Estimate by class number formula {hmin:.5e}-{hmax:.5e}")
@@ -79,10 +83,12 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
     for idx in 0..fbase.len() {
         let pr = fbase.prime(idx);
         if pr.r == 0 && dred.unsigned_abs() % (pr.p * pr.p) == 0 {
-            eprintln!(
-                "WARNING: D is not fundamental, {} divides the conductor",
-                pr.p
-            );
+            if prefs.verbose(Verbosity::Info) {
+                eprintln!(
+                    "WARNING: D is not fundamental, {} divides the conductor",
+                    pr.p
+                );
+            }
             conductor_primes.push(pr.p);
         }
     }
@@ -210,7 +216,7 @@ pub fn ideal_relations(d: &Int, prefs: &Preferences, tpool: Option<&rayon::Threa
         let crels = s.result();
         use crate::relationcls;
         let outdir = prefs.outdir.as_ref().map(PathBuf::from);
-        Some(relationcls::group_structure(crels, (hmin, hmax), prefs.verbosity, outdir))
+        relationcls::group_structure(crels, (hmin, hmax), prefs.verbosity, outdir)
     } else {
         None
     }
@@ -655,17 +661,17 @@ fn failing_test_classgroup() {
     let prefs = Preferences::default();
     // Worst case inputs with various sizes.
     let d = parse_int("-5625246009237013252");
-    ideal_relations(&d, &prefs, None);
+    classgroup(&d, &prefs, None);
 
     let d = parse_int("-17442319661992626809332");
-    ideal_relations(&d, &prefs, None);
+    classgroup(&d, &prefs, None);
 
     let d = parse_int("-1100921531608271618166868");
-    ideal_relations(&d, &prefs, None);
+    classgroup(&d, &prefs, None);
 
     let d = parse_int("-4197708731399051763400135492");
-    ideal_relations(&d, &prefs, None);
+    classgroup(&d, &prefs, None);
 
     let d = parse_int("-333684818975420457430375646788");
-    ideal_relations(&d, &prefs, None);
+    classgroup(&d, &prefs, None);
 }

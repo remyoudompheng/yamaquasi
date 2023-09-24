@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -10,8 +12,8 @@ use yamaquasi::{Int, Preferences, Verbosity};
 
 fn main() {
     let arg = arguments::parse(std::env::args()).unwrap();
-    if arg.get::<bool>("help").is_some() || arg.orphans.len() != 2 {
-        eprintln!("Usage: ymcls [OPTIONS] [-]DISCRIMINANT OUTPUTDIR");
+    if arg.get::<bool>("help").is_some() || !matches!(arg.orphans.len(), 1 | 2) {
+        eprintln!("Usage: ymcls [OPTIONS] [-]DISCRIMINANT [OUTPUTDIR]");
         eprintln!("");
         eprintln!("Options:");
         eprintln!("  --help                    show this help");
@@ -28,7 +30,11 @@ fn main() {
     let double = arg.get::<bool>("use-double");
     let v = arg.get::<String>("verbose").unwrap_or("info".into());
     let number = &arg.orphans[0];
-    let outdir = &arg.orphans[1];
+    let outdir = if arg.orphans.len() > 1 {
+        Some(&arg.orphans[1])
+    } else {
+        None
+    };
     let mut d = Int::from_str(number).expect("could not read input number");
     if d.is_positive() {
         d = -d;
@@ -53,7 +59,7 @@ fn main() {
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Computing class group of discriminant {d}");
     }
-    prefs.outdir = Some(PathBuf::from(outdir));
+    prefs.outdir = outdir.map(PathBuf::from);
 
     // Create thread pool
     let tpool: Option<rayon::ThreadPool> = match prefs.threads {
@@ -71,5 +77,28 @@ fn main() {
         }
     };
     let tpool = tpool.as_ref();
-    classgroup::ideal_relations(&d, &prefs, tpool);
+    let g = classgroup::classgroup(&d, &prefs, tpool);
+    let Some(g) = g else {
+        return;
+    };
+    let mut buf = vec![];
+    // Group invariants
+    write!(&mut buf, "G").unwrap();
+    for d in &g.invariants {
+        write!(&mut buf, " {d}").unwrap();
+    }
+    buf.push(b'\n');
+    // Coordinates
+    for (p, v) in g.gens {
+        write!(&mut buf, "{p}").unwrap();
+        for &x in &v {
+            write!(&mut buf, " {x}").unwrap();
+        }
+        buf.push(b'\n');
+    }
+    if let Some(outdir) = prefs.outdir {
+        let mut w = fs::File::create(outdir.join("group.structure")).unwrap();
+        w.write(&buf[..]).unwrap();
+    }
+    std::io::stdout().write(&buf[..]).unwrap();
 }

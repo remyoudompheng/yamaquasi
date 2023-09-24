@@ -19,7 +19,7 @@ use yamaquasi::{self, Algo, Int, Preferences, Uint, Verbosity};
 fn pymqs(_: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(factor, m)?)?;
     m.add_function(wrap_pyfunction!(ecm, m)?)?;
-    m.add_function(wrap_pyfunction!(quadratic_classnumber, m)?)?;
+    m.add_function(wrap_pyfunction!(quadratic_classgroup, m)?)?;
     Ok(())
 }
 
@@ -198,14 +198,21 @@ fn ecm(
 #[pyfunction]
 #[pyo3(
     signature = (d, /, verbose = "silent", threads = None),
-    text_signature = "(d: int, /, verbose=\"silent\", threads=None) -> List[int]"
+    text_signature = "(d: int, /, verbose=\"silent\", threads=None) -> Tuple[int, List[int], List[Tuple[int,List[int]]]]"
 )]
-fn quadratic_classnumber(
+/// Compute the class group of Q(sqrt(d)) where d is a negative integer
+/// such that d % 4 == 0 or 1.
+///
+/// The result is a tuple containing:
+/// - the class number h
+/// - the invariants of the class group [di] such that product(di) == h
+/// - a list of generators (p, [vi]) where [vi] are the coordinates of p
+fn quadratic_classgroup(
     py: Python<'_>,
     d: &PyLong,
     verbose: &str,
     threads: Option<usize>,
-) -> PyResult<Py<PyLong>> {
+) -> PyResult<Py<PyAny>> {
     let verbosity =
         Verbosity::from_str(verbose).map_err(|e| PyValueError::new_err(e.to_string()))?;
     let mut prefs = Preferences::default();
@@ -236,22 +243,14 @@ fn quadratic_classnumber(
             .expect("cannot create thread pool")
     });
     let tpool = tpool.as_ref();
-    let result = py.allow_threads(|| yamaquasi::classgroup::ideal_relations(&d, &prefs, tpool));
-    let d = match result {
-        Some(d) => d,
+    let result = py.allow_threads(|| yamaquasi::classgroup::classgroup(&d, &prefs, tpool));
+    let grp = match result {
+        Some(grp) => grp,
         None => {
             return Err(PyValueError::new_err(format!(
                 "Classgroup computation failure"
             )))
         }
     };
-    // FIXME: this is ugly.
-    let s = CString::new(d.to_string()).unwrap();
-    let sptr = s.as_ptr();
-    let nullptr: *mut *mut c_char = std::ptr::null::<*mut c_char>() as *mut _;
-    let obj = unsafe {
-        let obj_ptr = PyLong_FromString(sptr, nullptr, 0);
-        Py::<PyLong>::from_owned_ptr(py, obj_ptr)
-    };
-    Ok(obj)
+    Ok((grp.h, grp.invariants, grp.gens).into_py(py))
 }

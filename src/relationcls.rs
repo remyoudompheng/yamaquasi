@@ -296,12 +296,20 @@ impl CRelationSet {
     }
 }
 
+pub struct ClassGroup {
+    pub h: u128,
+    pub invariants: Vec<u128>,
+    /// A list of (p, vs) where vs are the coordinates of [p]
+    /// in the class group.
+    pub gens: Vec<(u32, Vec<u128>)>,
+}
+
 pub fn group_structure(
     rels: Vec<CRelation>,
     hest: (f64, f64),
     v: Verbosity,
     outdir: Option<PathBuf>,
-) -> u128 {
+) -> Option<ClassGroup> {
     let t0 = Instant::now();
     let mut r = RelFilterSparse::new(rels);
     while let Some(_) = r.pivot_one() {
@@ -350,16 +358,40 @@ pub fn group_structure(
     // Removed relations, in reverse order
     if let Some(outdir) = outdir.as_ref() {
         write_relations(&r, outdir);
-        let group = write_group_structure(&r, outdir);
-        if v >= Verbosity::Info {
-            eprintln!(
-                "Group structure computed in {:.4}s",
-                t0.elapsed().as_secs_f64()
-            );
-        }
-        std::io::stdout().write_all(&group).unwrap();
     }
-    r.h as u128
+    let mut g = ClassGroup {
+        h: r.h as u128,
+        invariants: vec![],
+        gens: vec![],
+    };
+    let n = r.gens.len();
+    for i in 0..n {
+        let d = r.rows[i][i];
+        if d != 1 {
+            g.invariants.push(d as u128);
+        }
+    }
+    for i in 0..n {
+        let p = r.gens[i];
+        let mut c = vec![];
+        for j in 0..n {
+            let d = r.rows[j][j];
+            if d != 1 {
+                c.push((r.q[i][j] % d) as u128);
+            }
+        }
+        g.gens.push((p, c));
+    }
+    if v >= Verbosity::Info {
+        eprintln!(
+            "Group structure computed in {:.4}s",
+            t0.elapsed().as_secs_f64()
+        );
+    }
+    if let Some(outdir) = outdir.as_ref() {
+        write_extra_group_structure(&r, &g, outdir);
+    }
+    Some(g)
 }
 
 /// A structure to filter relations when they are sparse.
@@ -628,66 +660,38 @@ fn write_relations(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) {
     }
 }
 
-fn write_group_structure(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) -> Vec<u8> {
-    let n = snf.gens.len();
-    let mut buf = vec![];
-    // Group invariants
-    write!(&mut buf, "G").unwrap();
-    let mut ds = vec![];
-    for i in 0..n {
-        let d = snf.rows[i][i];
-        if d != 1 {
-            write!(&mut buf, " {d}").unwrap();
-        }
-        ds.push(d);
+fn write_extra_group_structure(snf: &matrixint::SmithNormalForm, g: &ClassGroup, outdir: &PathBuf) {
+    let mut coords = BTreeMap::<u32, Vec<u128>>::new();
+    for (p, v) in &g.gens {
+        coords.insert(*p, v.clone());
     }
-    buf.push(b'\n');
-    // Coordinates
-    // If D = PUQ is diagonal, it means that Q^-1 gens are cyclic
-    let mut coords = BTreeMap::<u32, Vec<i128>>::new();
-    for i in 0..n {
-        let p = snf.gens[i];
-        let mut c = snf.q[i].clone();
-        write!(&mut buf, "{p}").unwrap();
-        for j in 0..n {
-            if ds[j] != 1 {
-                c[j] %= ds[j];
-                write!(&mut buf, " {}", c[j]).unwrap();
-            }
-        }
-        buf.push(b'\n');
-        coords.insert(p, c);
-    }
-    let mut w = fs::File::create(outdir.join("group.structure")).unwrap();
-    w.write(&buf[..]).unwrap();
-    let group = buf;
     // Compute coordinates for eliminated relations
     let mut w = fs::File::create(outdir.join("group.structure.extra")).unwrap();
     let mut buf = vec![];
     let mut removed = snf.removed.clone();
     removed.reverse();
     let mut skipped = 0;
+    let n = g.invariants.len();
     'extra: for (p, rel) in removed.iter() {
-        let mut dlog = vec![I256::ZERO; ds.len()];
+        let mut dlog = vec![I256::ZERO; n];
         for (l, e) in rel {
             if !coords.contains_key(l) {
                 skipped += 1;
                 continue 'extra;
             }
             let v = coords.get(l).unwrap();
-            for idx in 0..ds.len() {
+            for idx in 0..n {
                 dlog[idx] += I256::from(*e).checked_mul(I256::from(v[idx])).unwrap();
             }
         }
-        for idx in 0..ds.len() {
-            dlog[idx] = dlog[idx].rem_euclid(I256::from(ds[idx]));
+        for idx in 0..n {
+            let d = g.invariants[idx];
+            dlog[idx] = dlog[idx].rem_euclid(I256::from(d));
         }
-        let dl: Vec<i128> = dlog.into_iter().map(i128::cast_from).collect();
+        let dl: Vec<u128> = dlog.into_iter().map(u128::cast_from).collect();
         write!(&mut buf, "{p}").unwrap();
-        for (x, &d) in dl.iter().zip(&ds) {
-            if d != 1 {
-                write!(&mut buf, " {x}").unwrap();
-            }
+        for x in &dl {
+            write!(&mut buf, " {x}").unwrap();
         }
         buf.push(b'\n');
         coords.insert(*p, dl);
@@ -696,5 +700,4 @@ fn write_group_structure(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) -> 
         eprintln!("{skipped} discrete logs skipped due to missing relations");
     }
     w.write(&buf[..]).unwrap();
-    group
 }
