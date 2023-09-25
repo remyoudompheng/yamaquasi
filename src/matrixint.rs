@@ -715,13 +715,13 @@ impl SmithNormalForm {
                             // Swap columns i and j, reduce.
                             self.colswap(i, j);
                         }
+                        // Changes may create nonzero entries elsewhere.
+                        needs_more = true;
                     }
                     if self.rows[i][i] != 0 && self.rows[j][j] % self.rows[i][i] != 0 {
                         // Enforce divisibility relation.
                         self.colsub(j, i, 1);
                         self.colswap(i, j);
-                    }
-                    if self.rows[i][j] != 0 {
                         needs_more = true;
                     }
                 }
@@ -812,7 +812,7 @@ impl SmithNormalForm {
                 if yi == 0 && yj == 0 {
                     continue;
                 }
-                if self.h > 0 && self.h < 1 << 64 {
+                if self.h > 0 && self.h < 1 << 63 {
                     self.rows[j][idx] = self.modh128(yj - m * yi);
                 } else {
                     let x = I256::from(yj) - I256::from(m) * I256::from(yi);
@@ -828,7 +828,7 @@ impl SmithNormalForm {
                 if x == 0 && y == 0 {
                     continue;
                 }
-                if self.h > 0 && self.h < 1 << 64 {
+                if self.h > 0 && self.h < 1 << 63 {
                     let xx = a * x + b * y;
                     let yy = c * x + d * y;
                     self.rows[i][idx] = xx.rem_euclid(self.h as i128);

@@ -651,13 +651,36 @@ fn test_estimate() {
     assert!(h1 <= 1.783978e32 && 1.783978e32 <= h2);
 }
 
-#[allow(unused)]
-fn failing_test_classgroup() {
-    fn parse_int(s: &'static str) -> Int {
-        use std::str::FromStr;
-        Int::from_str(s).unwrap()
+#[cfg(test)]
+fn parse_int(s: &'static str) -> Int {
+    use std::str::FromStr;
+    Int::from_str(s).unwrap()
+}
+
+#[test]
+fn test_classgroup() {
+    let prefs = Preferences::default();
+    // A few failing tests for non necessarily difficult numbers.
+
+    // Coordinates should be non zero (indicates bug in Smith normal form).
+    let d = Int::from(-103142932);
+    let g = classgroup(&d, &prefs, None).unwrap();
+    for (_, c) in &g.gens {
+        assert!(c.iter().any(|&x| x != 0));
     }
 
+    // Affected by incorrect Smith normal form.
+    let d = parse_int("-131675478501979154852");
+    classgroup(&d, &prefs, None);
+
+    // Close to 128 bits: edge case for 64-bit overflow.
+    let d = parse_int("-277747586393177609383447877774824905287");
+    classgroup(&d, &prefs, None);
+}
+
+#[allow(unused)]
+#[cfg(test)]
+fn failing_test_classgroup() {
     let prefs = Preferences::default();
     // Worst case inputs with various sizes.
     let d = parse_int("-5625246009237013252");

@@ -54,6 +54,8 @@ def main():
                     check_group(D, h, invs, gens)
                 if args.v:
                     print("OK", D, h, f"{dt:.5f}s")
+            except KeyboardInterrupt:
+                break
             except BaseException as err:
                 print("KO", int(D), err)
                 fails += 1
