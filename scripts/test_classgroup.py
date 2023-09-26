@@ -15,19 +15,50 @@ from gmpy2 import mpz, next_prime, is_prime, legendre, invert
 def main():
     argp = argparse.ArgumentParser()
     argp.add_argument("--check", action="store_true")
-    argp.add_argument("--exec", action="store_true")
+    argp.add_argument(
+        "--impl",
+        default="pymqs",
+        choices=("pymqs", "exec", "pari", "parishanks"),
+        help="Implementation to be tested (exec: invoke ymcls binary, PARI: quadclassunit function)",
+    )
     argp.add_argument("-v", action="store_true")
-    argp.add_argument("MODE", choices=("worst", "average", "best"))
+    argp.add_argument("MODE", choices=("worst", "average", "best", "all"))
     argp.add_argument("N_BITS", type=int)
-    argp.add_argument("ITERS", type=int)
+    argp.add_argument("ITERS", nargs="?", type=int)
     args = argp.parse_args()
+
+    if args.MODE == "all":
+        Ds = genalldisc(args.N_BITS)
+    else:
+        assert args.ITERS > 0
+        Ds = [gendisc(args.MODE, args.N_BITS) for _ in range(args.ITERS)]
 
     t0 = time.time()
     fails = 0
-    if args.exec:
+    if args.impl == "pari":
+        import cypari2
+
+        pari = cypari2.Pari(sizemax=2 << 30)
+        for D in Ds:
+            start = time.time()
+            _ = pari.quadclassunit(D)
+            dt = time.time() - start
+            if args.v:
+                print("OK", D, h, f"{dt:.5f}s")
+    elif args.impl == "parishanks":
+        import cypari2
+
+        pari = cypari2.Pari(sizemax=2 << 30)
+        for D in Ds:
+            start = time.time()
+            _ = pari.qfbclassno(D)
+            dt = time.time() - start
+            if args.v:
+                print("OK", D, h, f"{dt:.5f}s")
+
+    elif args.impl == "exec":
         with tempfile.TemporaryDirectory() as tmpdir:
-            for _ in range(args.ITERS):
-                D = gendisc(args.MODE, args.N_BITS)
+            for D in Ds:
                 proc = subprocess.Popen(
                     ["bin/ymcls", str(D), tmpdir],
                     encoding="utf-8",
@@ -36,7 +67,8 @@ def main():
                 )
                 out, err = proc.communicate()
                 if proc.returncode == 0:
-                    print("OK", D)
+                    if args.v:
+                        print("OK", D)
                 else:
                     print(err)
                     print(out)
@@ -44,8 +76,7 @@ def main():
     else:
         import pymqs
 
-        for _ in range(args.ITERS):
-            D = gendisc(args.MODE, args.N_BITS)
+        for D in Ds:
             try:
                 start = time.time()
                 h, invs, gens = pymqs.quadratic_classgroup(int(D))
@@ -55,13 +86,36 @@ def main():
                 if args.v:
                     print("OK", D, h, f"{dt:.5f}s")
             except KeyboardInterrupt:
-                break
+                print("interrupted")
+                return
             except BaseException as err:
                 print("KO", int(D), err)
                 fails += 1
 
-    print(args.ITERS, f"tested in {time.time()-t0:.3}s")
+    print(len(Ds), f"tested in {time.time()-t0:.3}s")
     print(fails, "failures")
+
+
+def genalldisc(size):
+    assert size < 28
+
+    # All odd numbers
+    B = 1 << size
+    Ds = set(range(1, B, 2))
+    # Multiples of 9
+    for k in range(9, B, 9):
+        Ds.discard(k)
+    for p in range(7, B, 6):
+        if p * p > B:
+            break
+        for k in range(p * p, B, p * p):
+            Ds.discard(k)
+    for p in range(5, B, 6):
+        if p * p > (B):
+            break
+        for k in range(p * p, B, p * p):
+            Ds.discard(k)
+    return [-d if d & 3 == 3 else -4 * d for d in sorted(Ds)]
 
 
 def gendisc(mode, size):
