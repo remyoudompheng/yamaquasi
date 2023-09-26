@@ -561,6 +561,16 @@ pub fn estimate(d: &Int) -> (f64, f64) {
     // ~0.1s for bound 10^7
     // ~1s for bound 10^8
     // ~5s for bound 10^9
+
+    let dabs = d.unsigned_abs();
+    // When the group of units is non trivial, the formula is different.
+    if dabs.bits() <= 3 {
+        if dabs.low_u64() == 4 {
+            return (1.0, 1.0);
+        } else if dabs.low_u64() == 3 {
+            return (1.0, 1.0);
+        }
+    }
     let fbsize = clsgrp_fb_size(d.unsigned_abs().bits(), true);
     // enough to get 4 decimal digits
     let bound = std::cmp::min(100_000_000, fbsize * fbsize);
@@ -568,7 +578,6 @@ pub fn estimate(d: &Int) -> (f64, f64) {
     let mut logmin = f64::MAX;
     let mut logmax = f64::MIN;
     let mut s = fbase::PrimeSieve::new();
-    let dabs = d.unsigned_abs();
     'primeloop: loop {
         let block = s.next();
         for &p in block {
@@ -627,6 +636,13 @@ fn legendre(d: &Uint, p: u32) -> i32 {
 #[test]
 fn test_estimate() {
     use std::str::FromStr;
+
+    let (h1, h2) = estimate(&Int::from(-4));
+    assert!(0.9 <= h1 && h2 <= 1.1, "h1={h1} h2={h2}");
+    let (h1, h2) = estimate(&Int::from(-3));
+    assert!(0.9 <= h1 && h2 <= 1.1, "h1={h1} h2={h2}");
+    let (h1, h2) = estimate(&Int::from(-163));
+    assert!(0.9 <= h1 && h2 <= 1.1);
 
     // D = 1-8k
     let d =
