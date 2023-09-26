@@ -150,6 +150,7 @@ const MPQS_FBSIZES: &'static [(u32, u32, u32)] = &[
 /// cost below sieving.
 const CLASSGROUP_FBSIZES: &'static [(u32, u32, u32)] = &[
     (16, 16, 16),
+    (32, 24, 24),
     (60, 32, 24),
     (80, 50, 30),
     (120, 100, 80),

@@ -7,6 +7,7 @@
 //! This is used for class group computations, for medium-sized
 //! matrices (at most size 1000).
 
+use std::cmp::max;
 use std::collections::BTreeMap;
 
 use bnum::cast::CastFrom;
@@ -407,61 +408,69 @@ const LATTICE_MINDIST: f64 = 0.1;
 /// Estimates are given as loose lower/upper bounds.
 pub fn compute_lattice_index(rows: &Vec<Vec<i64>>, hmin: f64, hmax: f64) -> u128 {
     // The bounds can be very approximate.
-    let hmin = 0.95 * hmin;
-    let hmax = 1.05 * hmax;
-    assert!(hmin < hmax);
+    let prec = (hmax - hmin).abs();
+    let hmin = (0.9 * hmin).max(hmin - 3.0 * prec);
+    let hmax = (1.1 * hmax).min(hmax + 3.0 * prec);
+    if rows.len() == 0 {
+        // The determinant of the empty matrix is 1.
+        assert!(hmin <= 1.0 && 1.0 <= hmax);
+        return 1;
+    }
+    assert!(hmin <= hmax);
     assert!(hmax / hmin < 1.5);
     assert!(hmax.log2() < 126.0);
     let mut rows: Vec<&[i64]> = rows.iter().map(|v| &v[..]).collect();
     rows.sort_by_cached_key(|x| x.iter().map(|&y| y * y).sum::<i64>());
     let dim = rows[0].len();
-    let mut g = GramBuilder::default();
-    let mut builder = None;
-    let mut indices = vec![];
-    g.threshold = Some(LATTICE_MINDIST * LATTICE_MINDIST);
     let mut gcd = I4096::ZERO;
-    for idx in 0..rows.len() {
-        if g.rank() == dim - 1 {
-            if builder.is_none() {
-                let mat: Vec<&[i64]> = indices.iter().map(|&idx| rows[idx]).collect();
-                builder = Some(CRTDetBuilder::new(mat));
-            }
-            let b = builder.as_mut().unwrap();
-            let mut gg = g.clone();
-            if gg.add(&rows[idx]) {
-                indices.push(idx);
-                let logest = gg.detlog2_estimate();
-                let det = b.det(&rows[idx], logest);
-                //eprintln!("det={} log2={:.6}", det, logest);
-                //eprintln!("indices = {indices:?}");
-                indices.pop();
-                // Analyse candidates
-                gcd = Integer::gcd(&gcd, &det);
-                let gcd_f = gcd.to_f64().unwrap();
-                if gcd_f / hmin > 1e4 {
-                    continue;
+    for idx_start in 0..max(3, rows.len()) - 3 {
+        // Try several start rows if needed
+        let mut g = GramBuilder::default();
+        let mut builder = None;
+        let mut indices = vec![];
+        g.threshold = Some(LATTICE_MINDIST * LATTICE_MINDIST);
+        for idx in idx_start..rows.len() {
+            if g.rank() == dim - 1 {
+                if builder.is_none() {
+                    let mat: Vec<&[i64]> = indices.iter().map(|&idx| rows[idx]).collect();
+                    builder = Some(CRTDetBuilder::new(mat));
                 }
-                let m1 = (gcd_f / hmax).round() as i64;
-                let m2 = (gcd_f / hmin).round() as i64;
-                let mut candidates = vec![];
-                for m in m1..m2 + 1 {
-                    if m <= 0 {
+                let b = builder.as_mut().unwrap();
+                let mut gg = g.clone();
+                if gg.add(&rows[idx]) {
+                    indices.push(idx);
+                    let logest = gg.detlog2_estimate();
+                    let det = b.det(&rows[idx], logest);
+                    //eprintln!("det={} log2={:.6}", det, logest);
+                    //eprintln!("indices = {indices:?}");
+                    indices.pop();
+                    // Analyse candidates
+                    gcd = Integer::gcd(&gcd, &det);
+                    let gcd_f = gcd.to_f64().unwrap();
+                    if gcd_f / hmin > 1e4 {
                         continue;
                     }
-                    let (q, r) = gcd.div_rem(&I4096::from(m));
-                    let qf = q.to_f64().unwrap();
-                    if r.is_zero() && hmin <= qf && qf <= hmax {
-                        candidates.push(q)
+                    let m1 = (gcd_f / hmax).round() as i64;
+                    let m2 = (gcd_f / hmin).round() as i64;
+                    let mut candidates = vec![];
+                    for m in m1..m2 + 1 {
+                        if m <= 0 {
+                            continue;
+                        }
+                        let (q, r) = gcd.div_rem(&I4096::from(m));
+                        let qf = q.to_f64().unwrap();
+                        if r.is_zero() && 0.9 * hmin <= qf && qf <= 1.1 * hmax {
+                            candidates.push(q)
+                        }
+                    }
+                    if candidates.len() == 1 {
+                        return u128::cast_from(candidates[0]);
                     }
                 }
-                //eprintln!("gcd={gcd} h in {:?}", &candidates);
-                if candidates.len() == 1 {
-                    return u128::cast_from(candidates[0]);
+            } else {
+                if g.add(&rows[idx]) {
+                    indices.push(idx);
                 }
-            }
-        } else {
-            if g.add(&rows[idx]) {
-                indices.push(idx);
             }
         }
     }

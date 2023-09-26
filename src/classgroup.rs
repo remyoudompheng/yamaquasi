@@ -116,8 +116,8 @@ pub fn classgroup(
     let (a_count, nfacs) = a_params(adjsize);
     let factors = select_siqs_factors(&fbase, &dred, nfacs as usize, mm as usize, prefs.verbosity);
     let a_ints = select_a(&factors, a_count as usize, prefs.verbosity);
-    let polys_per_a = 1 << (nfacs - 1);
-    if prefs.verbose(Verbosity::Info) {
+    let polys_per_a = if nfacs > 1 { 1 << (nfacs - 1) } else { 1 };
+    if prefs.verbose(Verbosity::Info) && nfacs > 0 {
         eprintln!(
         "Generated {} values of A with {} factors in {}..{} ({} polynomials each, spread={:.2}%)",
         a_ints.len(),
@@ -249,7 +249,11 @@ impl<'a> ClSieve<'a> {
 // The total number of ideals will be values * 2^(factors-1)
 fn a_params(sz: u32) -> (u32, u32) {
     match sz {
-        0..=64 => (8, 2),
+        // sqrt(|D|)/M is less than 1
+        // The optimal polynomial is the unit binary form.
+        0..=32 => (1, 0),
+        // We can use non-unit ideals if D is large enough
+        33..=64 => (8, 2),
         65..=80 => (2 * (sz - 60), 3),
         81..=99 => (10 * (sz - 77), 3),
         100..=119 => (40 * (sz - 95), 4),   // 200..1000 x8
@@ -268,7 +272,10 @@ fn a_params(sz: u32) -> (u32, u32) {
 // Factor base is much smaller, so interval size must be much smaller too.
 fn interval_size(sz: u32) -> u32 {
     let nblocks = match sz {
-        0..=32 => 1,
+        // We use a single unit polynomial.
+        // Sieving will stop after enough blocks are sieved.
+        0..=32 => 16,
+        // We have multiple polynomials
         33..=64 => 2,
         65..=128 => 3,
         129..=180 => 4,
@@ -284,7 +291,8 @@ fn interval_size(sz: u32) -> u32 {
 fn large_prime_factor(sz: u32) -> u64 {
     let sz = sz as u64;
     match sz {
-        0..=160 => sz,
+        0..=32 => 2,
+        33..=160 => sz,
         161.. => 2 * sz - 160,
     }
 }
@@ -313,7 +321,7 @@ fn sieve_a(s: &ClSieve, a_int: &Uint, factors: &Factors) {
         eprintln!("Sieving A={}", a.description());
     }
     let nfacs = a.len();
-    let polys_per_a = 1 << (nfacs - 1);
+    let polys_per_a = if nfacs > 1 { 1 << (nfacs - 1) } else { 1 };
     let mut pol = Poly::first(&s.qs, a);
     // Storage for recycled resources.
     let mut recycled = None;
@@ -372,6 +380,10 @@ fn siqs_sieve_poly(
         sieve_block_poly(s, pol, a, &mut state);
     }
     while state.offset < end_offset {
+        if s.rels.read().unwrap().done() {
+            // Exit early if finished.
+            break;
+        }
         sieve_block_poly(s, pol, a, &mut state);
         state.next_block();
     }
@@ -573,7 +585,10 @@ pub fn estimate(d: &Int) -> (f64, f64) {
     }
     let fbsize = clsgrp_fb_size(d.unsigned_abs().bits(), true);
     // enough to get 4 decimal digits
-    let bound = std::cmp::min(100_000_000, fbsize * fbsize);
+    let mut bound = std::cmp::min(100_000_000, fbsize * fbsize);
+    if bound < 1000 {
+        bound = 1000; // try to reach a reasonable precision.
+    }
     let mut logprod = 0f64;
     let mut logmin = f64::MAX;
     let mut logmax = f64::MIN;
@@ -685,13 +700,23 @@ fn test_classgroup() {
         assert!(c.iter().any(|&x| x != 0));
     }
 
+    // May be difficult to choose between h=60 (correct) and h=66
+    let d = Int::from(-10148);
+    classgroup(&d, &prefs, None).unwrap();
+
+    // Extremely small and smooth class number (64)
+    // Relations are very rare and may not generate the full lattice.
+    //let d = Int::from(-424708);
+    //let g = classgroup(&d, &prefs, None).unwrap();
+    //assert_eq!(g.h, 64);
+
     // Affected by incorrect Smith normal form.
     let d = parse_int("-131675478501979154852");
-    classgroup(&d, &prefs, None);
+    classgroup(&d, &prefs, None).unwrap();
 
     // Close to 128 bits: edge case for 64-bit overflow.
     let d = parse_int("-277747586393177609383447877774824905287");
-    classgroup(&d, &prefs, None);
+    classgroup(&d, &prefs, None).unwrap();
 }
 
 #[allow(unused)]

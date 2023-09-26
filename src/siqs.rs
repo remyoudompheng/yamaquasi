@@ -566,6 +566,15 @@ pub fn select_siqs_factors<'a>(
     mm: usize,
     v: Verbosity,
 ) -> Factors<'a> {
+    if nfacs == 0 {
+        return Factors {
+            n: *n,
+            target: U256::ONE,
+            nfacs: 0,
+            factors: vec![],
+            inverses: vec![],
+        };
+    }
     // For interval [-M,M] the target is sqrt(2N) / M, see [Pomerance].
     // Note that if N=1 mod 4, the target can be sqrt(N/2)/M
     // giving smaller numbers.
@@ -702,7 +711,9 @@ pub fn select_a(f: &Factors, want: usize, v: Verbosity) -> Vec<Uint> {
     // We usually don't need more than 1000 values.
     //
     // We are going to select ~2^W best products of W primes among 2W
-
+    if f.nfacs == 0 {
+        return vec![Uint::ONE];
+    }
     let mut div = a_tolerance_divisor(&f.n.unsigned_abs());
     assert!(div >= 3);
     let mut amin = f.target - f.target / div as u64;
@@ -918,6 +929,10 @@ pub fn prepare_a<'a>(f: &Factors<'a>, a: &Uint, fbase: &FBase, start_offset: i64
         }
         deltas_mod_p.push(deltas);
     }
+    // Special case for A=1.
+    if afactors.is_empty() && polytype(&f.n) == PolyType::Type2 {
+        root0 = Uint::ONE;
+    }
     debug_assert!((Int::cast_from(root0 * root0) - f.n) % Int::cast_from(*a) == Int::ZERO);
     // Compute root0 - rp[i] - start_offset
     let mut root0_mod_p = Vec::with_capacity(fbase.len());
@@ -1001,6 +1016,10 @@ impl Poly {
         res
     }
 
+    pub fn is_unit(&self) -> bool {
+        self.a.is_one()
+    }
+
     // Returns v, y such that:
     // P(x) = v
     // y^2 = 4 A P(x) mod n
@@ -1028,11 +1047,57 @@ impl Poly {
     /// First polynomial in the family determined by A.
     #[doc(hidden)]
     pub fn first(s: &SieveSIQS, a: &A) -> Poly {
+        let typ = polytype(&s.n);
+        if a.factors.is_empty() {
+            // The unit ideal is represented by:
+            // x + D' for D=-4D' (type 1)
+            // x^2 + x + D' for D=1-4D' (type 2)
+            assert!(s.n.unsigned_abs().bits() < 128);
+            let r1p = a.root0_mod_p.clone();
+            let mut r2p = r1p.clone();
+            for i in 0..s.fbase.len() {
+                let p = s.fbase.p(i);
+                r2p[i] += 2 * a.rp[i];
+                while r2p[i] >= p {
+                    r2p[i] -= p;
+                }
+            }
+            // Handle p=2
+            if s.fbase.p(0) == 2 && typ == PolyType::Type2 {
+                r2p[0] = r1p[0] + 1;
+            }
+            if typ == PolyType::Type1 {
+                return Poly {
+                    idx: 0,
+                    kind: typ,
+                    a: I256::ONE,
+                    b: I256::ZERO,
+                    c: -I256::cast_from(s.n),
+                    root: 0,
+                    r1p: r1p.into_boxed_slice(),
+                    r2p: r2p.into_boxed_slice(),
+                    n: s.n,
+                };
+            } else {
+                // Roots are (± sqrt(N) - 1)/2
+                return Poly {
+                    idx: 0,
+                    kind: typ,
+                    a: I256::ONE,
+                    b: I256::ONE,
+                    c: (I256::ONE - I256::cast_from(s.n)) >> 2,
+                    root: 0,
+                    r1p: r1p.into_boxed_slice(),
+                    r2p: r2p.into_boxed_slice(),
+                    n: s.n,
+                };
+            }
+        }
+
         let mut b = I256::ZERO;
         for i in 0..a.factors.len() {
             b += a.roots[i][0];
         }
-        let typ = polytype(&s.n);
         if typ == PolyType::Type2 {
             assert!(b.bit(0));
         }
@@ -1217,8 +1282,12 @@ fn siqs_sieve_poly(
         );
     }
     // Construct initial state.
-    let start_offset: i64 = -(mm as i64) / 2;
-    let end_offset: i64 = (mm as i64) / 2;
+    let start_offset: i64 = if pol.is_unit() { 0 } else { -(mm as i64) / 2 };
+    let end_offset: i64 = if pol.is_unit() {
+        mm as i64
+    } else {
+        (mm as i64) / 2
+    };
     let r1p = &pol.r1p[..];
     let r2p = &pol.r2p[..];
     let mut state = sieve::Sieve::new(start_offset, nblocks, s.fbase, [r1p, r2p], rec);
@@ -1536,6 +1605,46 @@ fn test_poly_prepare() {
                         v.abs().to_bits() % (fb.p(pidx) as u64)
                     );
                 }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_poly_prepare0() {
+    // Test preparation of polynomial with empty factor list.
+    use crate::fbase;
+
+    let ns = [
+        Int::from(-9781991 as i64),      // n = 1-4k
+        Int::from(-50598932 as i64 / 4), // D=-4n
+    ];
+    for &n in &ns {
+        let fb = fbase::FBase::new(n, 100);
+        let mm = 1_usize << 20;
+        let prefs = Preferences::default();
+        let f = select_siqs_factors(&fb, &n, 0, mm, prefs.verbosity);
+        let start_offset = 0;
+        let a_ints = select_a(&f, 10, prefs.verbosity);
+        assert_eq!(a_ints.len(), 1);
+        assert!(a_ints[0].is_one());
+        let a = prepare_a(&f, &a_ints[0], &fb, start_offset);
+        let s = SieveSIQS::new(Int::cast_from(n), &fb, fb.bound() as u64, 0, mm, &prefs);
+        let pol = Poly::first(&s, &a);
+        eprintln!("n={n} {} C={}", pol.description(), pol.c);
+        // Check roots
+        for pidx in 0..fb.len() {
+            // Roots are roots of Ax^2+2Bx+C modulo p.
+            for r in [pol.r1p[pidx], pol.r2p[pidx]] {
+                let v = pol.eval(r as i64).0;
+                assert_eq!(
+                    v.abs().to_bits() % (fb.p(pidx) as u64),
+                    0,
+                    "p={} r={} P(r) mod p={}",
+                    fb.p(pidx),
+                    r,
+                    v.abs().to_bits() % (fb.p(pidx) as u64)
+                );
             }
         }
     }
