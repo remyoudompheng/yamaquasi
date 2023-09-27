@@ -64,17 +64,10 @@ pub fn classgroup(
     let dabs = d.unsigned_abs();
     // Choose factor base. Estimate the smoothness bias to increase/decrease
     // the factor base accordingly.
-    let adjsize_tmp = if dabs.bits() <= 64 {
-        // For very small sizes, adjustment is useless.
-        dabs.bits()
-    } else {
-        let bias = smoothness_bias(d, clsgrp_fb_size(dabs.bits(), dabs.bits() > 180) * 3);
-        (dabs.bits() as i64 - (2.5 * bias).round() as i64) as u32
-    };
-    let use_double = prefs.use_double.unwrap_or(adjsize_tmp > 180);
-    let fb = prefs
-        .fb_size
-        .unwrap_or(clsgrp_fb_size(adjsize_tmp, use_double));
+    let bias = smoothness_bias(d);
+    let adjsize = max(1, dabs.bits() as i64 - (2.5 * bias).round() as i64) as u32;
+    let use_double = prefs.use_double.unwrap_or(adjsize > 180);
+    let fb = prefs.fb_size.unwrap_or(clsgrp_fb_size(adjsize, use_double));
     // WARNING: SIQS doesn't use 4D if D=3 mod 4
     // This creates some redundant *2 /2 operations.
     let dred = if dabs.low_u64() & 3 == 0 { *d >> 2 } else { *d };
@@ -92,21 +85,10 @@ pub fn classgroup(
             conductor_primes.push(pr.p);
         }
     }
-    // Recompute bias and adjusted size again.
-    let adjsize = if dabs.bits() <= 64 {
-        // For very small sizes, adjustment is useless.
-        dabs.bits()
-    } else {
-        let bias = smoothness_bias(d, fbase.bound());
-        let adjsize = (dabs.bits() as i64 - (2.5 * bias).round() as i64) as u32;
-        if prefs.verbose(Verbosity::Info) {
-            eprintln!("Smoothness bias {bias:.3} using parameters for {adjsize} bits");
-        }
-        adjsize
-    };
     // It is fine to have a divisor of D in the factor base.
     let mm = prefs.interval_size.unwrap_or(interval_size(adjsize));
     if prefs.verbose(Verbosity::Info) {
+        eprintln!("Smoothness bias {bias:.3} using parameters for {adjsize} bits");
         eprintln!("Smoothness bound B1={}", fbase.bound());
         eprintln!("Factor base size {} ({:?})", fbase.len(), fbase.smalls(),);
         eprintln!("Sieving interval size {}k", mm >> 10);
@@ -153,7 +135,7 @@ pub fn classgroup(
     let target_rels = if qs.fbase.len() < 100 {
         qs.fbase.len() + 64
     } else {
-        qs.fbase.len() * max(2, (dabs.bits() as usize - 100) / 20)
+        qs.fbase.len() * max(2, (dabs.bits() as isize - 100) / 20) as usize
     };
     let relfilepath = prefs
         .outdir
@@ -292,7 +274,8 @@ fn large_prime_factor(sz: u32) -> u64 {
     let sz = sz as u64;
     match sz {
         0..=32 => 2,
-        33..=160 => sz,
+        33..=128 => 4,
+        129..=160 => sz - 120,
         161.. => 2 * sz - 160,
     }
 }
@@ -531,7 +514,7 @@ fn sieve_block_poly(s: &ClSieve, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
 
 /// Compute the amount of extra smoothness expected for a given number.
 /// The result is a floating-point number usually in the -5..5 range.
-fn smoothness_bias(d: &Int, maxfb: u32) -> f64 {
+fn smoothness_bias(d: &Int) -> f64 {
     // The contribution of 2 is:
     // +1 if D % 8 == 1
     // -0.5 for the 4D case
@@ -542,18 +525,13 @@ fn smoothness_bias(d: &Int, maxfb: u32) -> f64 {
         _ => panic!("impossible"),
     };
     // The contribution of a prime is (1 + (D|p)) log(p)/p
-    // One block of primes is enough to compute an estimate.
-    let mut s = fbase::PrimeSieve::new();
-    let block = s.next();
+    // Small primes are enough to compute an estimate.
     let dabs = d.unsigned_abs();
-    for &p in block {
+    for p in fbase::SMALL_PRIMES {
         if p == 2 {
             continue;
         }
-        if p > maxfb {
-            break;
-        }
-        let mut l = legendre(&dabs, p);
+        let mut l = legendre(&dabs, p as u32);
         if p % 4 == 3 {
             l = -l;
         }

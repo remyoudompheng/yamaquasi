@@ -149,12 +149,15 @@ const MPQS_FBSIZES: &'static [(u32, u32, u32)] = &[
 /// bases are considerably smaller to keep linear algebra
 /// cost below sieving.
 const CLASSGROUP_FBSIZES: &'static [(u32, u32, u32)] = &[
+    // For small inputs, linear algebra is fast, we can use
+    // parameters similar to factoring.
     (16, 16, 16),
     (32, 24, 24),
-    (60, 32, 24),
-    (80, 50, 30),
-    (120, 100, 80),
-    (150, 300, 200),
+    (60, 64, 48),
+    (80, 100, 80),
+    (120, 250, 150),
+    (150, 700, 400),
+    // For larger inputs, we need to keep factor base very small.
     (200, 1500, 800),
     (220, 3000, 1500),
     (250, 7000, 3500),
