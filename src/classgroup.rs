@@ -695,6 +695,10 @@ fn test_classgroup() {
     // Close to 128 bits: edge case for 64-bit overflow.
     let d = parse_int("-277747586393177609383447877774824905287");
     classgroup(&d, &prefs, None).unwrap();
+
+    // Affected by spurious relations p^2 = product(pi^ei)
+    let d = parse_int("-10607235129657707");
+    classgroup(&d, &prefs, None).unwrap();
 }
 
 #[allow(unused)]

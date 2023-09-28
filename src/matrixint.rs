@@ -556,7 +556,54 @@ impl SmithNormalForm {
 
     pub fn reduce(&mut self) {
         self.reduce_rows();
+        // Check that matrix is triangular
+        let mut det: i128 = 1;
+        for i in 0..self.rows.len() {
+            if self.rows[i][i] == 0 {
+                self.rows[i][i] = self.h as i128;
+            }
+            det *= self.rows[i][i];
+            for j in 0..i {
+                assert_eq!(self.rows[i][j], 0, "nonzero@[{i},{j}]");
+            }
+        }
+        // HACK: in rare cases (less than 1/1000) we may be left with
+        // an orphan relation p^e = prod(pi^ei) where p is unusually large
+        // (either due to randomization or to unlucky trimming),
+        // giving too large determinant 2h.
+        // Then if p is large enough, the most probable situation is that
+        // we have correct relations for the smaller pi and we can happily ignore it.
+        //
+        // This situation can happen with rather small p or e > 2 but
+        // we only handle spectacular situations.
+        //
+        // FIXME: we should instead check the actual order of elements
+        // to validate that smaller pi's are generators.
+        if det == 2 * self.h as i128 && self.rows.len() >= 2 && self.rows[0][0] == 2 {
+            if (self.rows.len() >= 3 && self.gens[0] > 20 * self.gens[1] && self.gens[1] > 10)
+                || (self.gens[0] > 100 * self.gens[1])
+            {
+                // Eliminate first generator.
+                if self.verbose {
+                    eprintln!(
+                        "WARNING: spurious orphan generator? ignoring relation {}^{}={:?}^-{:?}",
+                        self.gens[0],
+                        self.rows[0][0],
+                        &self.gens[1..],
+                        &self.rows[0][1..]
+                    );
+                }
+                det /= self.rows[0][0];
+                self.rows.remove(0);
+                self.gens.remove(0);
+                for r in self.rows.iter_mut() {
+                    r.remove(0);
+                }
+            }
+        }
+        assert_eq!(det, self.h as i128, "generators {:?}", &self.gens);
         self.reduce_cols();
+        // Check that matrix is diagonal
         let mut det: i128 = 1;
         for i in 0..self.rows.len() {
             if self.rows[i][i] == 0 {
@@ -564,12 +611,12 @@ impl SmithNormalForm {
             }
             det *= self.rows[i][i];
             for j in 0..self.rows.len() {
-                if i != j {
+                if j != i {
                     assert_eq!(self.rows[i][j], 0, "nonzero@[{i},{j}]");
                 }
             }
         }
-        assert_eq!(det, self.h as i128);
+        assert_eq!(det, self.h as i128, "generators {:?}", &self.gens);
     }
 
     #[allow(unused)]
