@@ -790,14 +790,28 @@ impl SmithNormalForm {
 
     // Normalize coefficient M[i,k] to divide h.
     fn normalize(&mut self, i: usize, k: usize) {
+        let h = self.h as i128;
         // Make sure we have a divisor of h
-        let e = Integer::extended_gcd(&self.rows[i][k], &(self.h as i128));
+        let mut e = Integer::extended_gcd(&self.rows[i][k], &h);
         if self.rows[i][k] == e.gcd {
             return;
         }
-        if self.h > 0 && self.h < 1 << 64 {
-            for vi in self.rows[i].iter_mut() {
-                *vi = (*vi * e.x).rem_euclid(self.h as i128);
+        // It is only coprime to h/gcd but it must be coprime to h.
+        let m = h / e.gcd;
+        debug_assert!(Integer::gcd(&e.x, &m) == 1);
+        while Integer::gcd(&e.gcd, &e.x) != 1 {
+            e.x += h / e.gcd;
+        }
+        e.x = e.x.rem_euclid(h);
+        debug_assert!(
+            Integer::gcd(&e.x, &h) == 1,
+            "normalize factor d={} is not invertible",
+            Integer::gcd(&e.x, &h)
+        );
+        if self.h > 0 && self.h < 1 << 63 {
+            for k in 0..self.gens.len() {
+                let vi = self.rows[i][k];
+                self.rows[i][k] = self.modh128(vi * e.x);
             }
         } else {
             for k in 0..self.gens.len() {
@@ -815,7 +829,7 @@ impl SmithNormalForm {
         for idx in 0..self.gens.len() {
             let (yi, yj) = (self.rows[idx][i], self.rows[idx][j]);
             let (qi, qj) = (self.q[idx][i], self.q[idx][j]);
-            if self.h > 0 && self.h < 1 << 64 {
+            if self.h > 0 && self.h < 1 << 63 {
                 self.rows[idx][i] = self.modh128(yi - k * yj);
                 self.q[idx][i] = self.modh128(qi - k * qj);
             } else {

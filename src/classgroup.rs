@@ -691,9 +691,15 @@ fn test_classgroup() {
     // Affected by incorrect Smith normal form.
     let d = parse_int("-131675478501979154852");
     classgroup(&d, &prefs, None).unwrap();
+    // Can trigger an incorrect Smith normal form due to very smooth h.
+    let d = parse_int("-4133106580052");
+    let g = classgroup(&d, &prefs, None).unwrap();
+    assert_eq!(g.h, 615040);
 
-    // Close to 128 bits: edge case for 64-bit overflow.
+    // Close to 128 bits: edge cases for 64-bit overflow.
     let d = parse_int("-277747586393177609383447877774824905287");
+    classgroup(&d, &prefs, None).unwrap();
+    let d = parse_int("-1547792612939506766277963208426820605844");
     classgroup(&d, &prefs, None).unwrap();
 
     // Affected by spurious relations p^2 = product(pi^ei)
