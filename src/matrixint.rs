@@ -440,7 +440,13 @@ pub fn compute_lattice_index(rows: &Vec<Vec<i64>>, hmin: f64, hmax: f64) -> u128
                 if gg.add(&rows[idx]) {
                     indices.push(idx);
                     let logest = gg.detlog2_estimate();
-                    let det = b.det(&rows[idx], logest);
+                    let det = if logest <= 30.0 {
+                        let d = gg.det_estimate();
+                        assert!((d - d.round()).abs() < 0.0001);
+                        I4096::from(d.round() as i64)
+                    } else {
+                        b.det(&rows[idx], logest)
+                    };
                     //eprintln!("det={} log2={:.6}", det, logest);
                     //eprintln!("indices = {indices:?}");
                     indices.pop();
@@ -453,11 +459,13 @@ pub fn compute_lattice_index(rows: &Vec<Vec<i64>>, hmin: f64, hmax: f64) -> u128
                     let m1 = (gcd_f / hmax).round() as i64;
                     let m2 = (gcd_f / hmin).round() as i64;
                     let mut candidates = vec![];
+                    // GCD is known to be small now.
+                    let gcd = I256::cast_from(gcd);
                     for m in m1..m2 + 1 {
                         if m <= 0 {
                             continue;
                         }
-                        let (q, r) = gcd.div_rem(&I4096::from(m));
+                        let (q, r) = gcd.div_rem(&I256::from(m));
                         let qf = q.to_f64().unwrap();
                         if r.is_zero() && 0.9 * hmin <= qf && qf <= 1.1 * hmax {
                             candidates.push(q)
