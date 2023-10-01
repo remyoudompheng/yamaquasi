@@ -571,36 +571,46 @@ pub fn estimate(d: &Int) -> (f64, f64) {
     }
     let fbsize = clsgrp_fb_size(d.unsigned_abs().bits(), true);
     // enough to get 4 decimal digits
-    let mut bound = std::cmp::min(100_000_000, fbsize * fbsize);
-    if bound < 1000 {
-        bound = 1000; // try to reach a reasonable precision.
-    }
+    let bound = std::cmp::min(100_000_000, fbsize * fbsize);
     let mut logprod = 0f64;
     let mut logmin = f64::MAX;
     let mut logmax = f64::MIN;
-    let mut s = fbase::PrimeSieve::new();
-    'primeloop: loop {
-        let block = s.next();
-        for &p in block {
-            if p == 2 {
-                continue;
-            }
-            // legendre(-d,p) = legendre(d,p) * (-1)^(p-1)/2
-            let mut l = legendre(&dabs, p);
-            if p % 4 == 3 {
-                l = -l;
-            }
-            logprod += -(-l as f64 / p as f64).ln_1p();
-            if p > bound {
-                break 'primeloop;
-            }
-            if p > bound / 2 {
-                // Compute loweR/upper bounds over a window
-                logmin = logmin.min(logprod);
-                logmax = logmax.max(logprod);
+    let mut compute_prime = |p: u32, bound: u32| {
+        if p == 2 {
+            return; // handled separately.
+        }
+        // legendre(-d,p) = legendre(d,p) * (-1)^(p-1)/2
+        let mut l = legendre(&dabs, p);
+        if p % 4 == 3 {
+            l = -l;
+        }
+        logprod += -(-l as f64 / p as f64).ln_1p();
+        if p > bound / 2 {
+            // Compute lower/upper bounds over a window
+            logmin = logmin.min(logprod);
+            logmax = logmax.max(logprod);
+        }
+    };
+    // Faster paths for small bounds
+    if bound < 8000 {
+        let ps = fbase::primes(200 + bound / 8);
+        let bound = ps[ps.len() - 1];
+        for p in ps {
+            compute_prime(p, bound);
+        }
+    } else {
+        let mut s = fbase::PrimeSieve::new();
+        'primeloop: loop {
+            let block = s.next();
+            for &p in block {
+                if p > bound {
+                    break 'primeloop;
+                }
+                compute_prime(p, bound);
             }
         }
     }
+    drop(compute_prime);
     let h = d.to_f64().unwrap().abs().sqrt() / std::f64::consts::PI;
     let h = match d.unsigned_abs().low_u64() & 7 {
         // Only values 7, 4, 3 are valid for fundamental discriminants.

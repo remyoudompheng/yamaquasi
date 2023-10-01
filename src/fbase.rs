@@ -328,7 +328,8 @@ pub fn primes(n: u32) -> Vec<u32> {
     let bound = max(100, n * (32 - n.leading_zeros())) as usize;
     // sieve[i] says that 2i+1 is composite
     let mut sieve = vec![false; bound / 2];
-    let mut primes = vec![2];
+    let mut primes = Vec::with_capacity(n as usize);
+    primes.push(2);
     for i in 1..sieve.len() {
         if !sieve[i] {
             let p = 2 * i + 1;
