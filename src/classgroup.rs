@@ -133,7 +133,7 @@ pub fn classgroup(
     // WARNING: use reduced D again.
     let qs = siqs::SieveSIQS::new(dred, &fbase, maxlarge, maxdouble, mm as usize, prefs);
     let target_rels = if qs.fbase.len() < 100 {
-        qs.fbase.len() + 64
+        qs.fbase.len() + 80
     } else {
         qs.fbase.len() * max(2, (dabs.bits() as isize - 100) / 20) as usize
     };
@@ -299,7 +299,8 @@ fn double_large_factor(n: &Int) -> u64 {
 
 fn sieve_a(s: &ClSieve, a_int: &Uint, factors: &Factors) {
     let mm = s.qs.interval_size;
-    let a = &prepare_a(factors, a_int, s.qs.fbase, -(mm as i64) / 2);
+    let start_offset = if a_int.is_one() { 0 } else { -(mm as i64) / 2 };
+    let a = &prepare_a(factors, a_int, s.qs.fbase, start_offset);
     if s.prefs.verbose(Verbosity::Debug) {
         eprintln!("Sieving A={}", a.description());
     }
@@ -354,8 +355,11 @@ fn siqs_sieve_poly(
         );
     }
     // Construct initial state.
-    let start_offset: i64 = -(mm as i64) / 2;
-    let end_offset: i64 = (mm as i64) / 2;
+    let mut start_offset: i64 = -(mm as i64) / 2;
+    let mut end_offset: i64 = (mm as i64) / 2;
+    if pol.is_unit() {
+        (start_offset, end_offset) = (0, mm as i64);
+    }
     let r1p = &pol.r1p[..];
     let r2p = &pol.r2p[..];
     let mut state = sieve::Sieve::new(start_offset, nblocks, s.qs.fbase, [r1p, r2p], rec);
@@ -506,7 +510,11 @@ fn sieve_block_poly(s: &ClSieve, pol: &Poly, a: &A, st: &mut sieve::Sieve) {
             large1,
             large2,
         };
-        s.rels.write().unwrap().add(rel);
+        let mut rels = s.rels.write().unwrap();
+        rels.add(rel);
+        if rels.done() {
+            break;
+        }
     }
 }
 
@@ -684,9 +692,16 @@ fn test_classgroup() {
 
     // Extremely small and smooth class number (64)
     // Relations are very rare and may not generate the full lattice.
-    //let d = Int::from(-424708);
-    //let g = classgroup(&d, &prefs, None).unwrap();
-    //assert_eq!(g.h, 64);
+    let d = Int::from(-424708);
+    let g = classgroup(&d, &prefs, None).unwrap();
+    assert_eq!(g.h, 64);
+    // Other very unlucky numbers
+    let d = Int::from(-1411012);
+    let g = classgroup(&d, &prefs, None).unwrap();
+    assert_eq!(g.h, 124);
+    let d = Int::from(-2402548);
+    let g = classgroup(&d, &prefs, None).unwrap();
+    assert_eq!(g.h, 176);
 
     // Affected by incorrect Smith normal form.
     let d = parse_int("-131675478501979154852");

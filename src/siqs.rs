@@ -1282,12 +1282,8 @@ fn siqs_sieve_poly(
         );
     }
     // Construct initial state.
-    let start_offset: i64 = if pol.is_unit() { 0 } else { -(mm as i64) / 2 };
-    let end_offset: i64 = if pol.is_unit() {
-        mm as i64
-    } else {
-        (mm as i64) / 2
-    };
+    let start_offset: i64 = -(mm as i64) / 2;
+    let end_offset: i64 = (mm as i64) / 2;
     let r1p = &pol.r1p[..];
     let r2p = &pol.r2p[..];
     let mut state = sieve::Sieve::new(start_offset, nblocks, s.fbase, [r1p, r2p], rec);

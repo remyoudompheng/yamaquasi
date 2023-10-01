@@ -35,7 +35,7 @@ impl FBase {
     pub fn new(n: Int, size: u32) -> Self {
         // We may be very unlucky and not get enough primes, because we keep
         // only those having n as a quadratic residue. So take a few extra primes.
-        let ps = primes(2 * size + 32);
+        let ps = primes(2 * size + 40);
         let mut primes = vec![];
         let mut sqrts = vec![];
         let mut divs = vec![];
