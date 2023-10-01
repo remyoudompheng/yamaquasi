@@ -4,8 +4,9 @@ It is known that the quadratic sieve provides an efficient
 algorithm to compute the structure of class groups of fields
 Q(sqrt(-D)).
 
-The utility `ymcls` implements the sieve part of this computation.
-Linear algebra is handled by separate scripts using external algebra
+The utility `ymcls` implements the sieve part of this computation,
+and linear algebra for small inputs (D < 2^240). For larger inputs,
+linear algebra is handled by separate scripts using external
 libraries.
 
 This program is a work-in-progress hobby and should not be trusted
@@ -126,27 +127,33 @@ behave as if they were 15-20 bits bigger.
 Approximate execution times for average inputs, depending on discriminant size
 are approximately (for 1 CPU core, Zen2 4 GHz):
 
-| Input size | Sieve time | Linear algebra time | Dense linalg |
-| ---------- | ---------- | ------------------- | ------------ |
-|  100 bits  |    50 ms  |     —     |  5ms  |
-|  120 bits  |   150 ms  |     —     | 10ms  |
-|  140 bits  |   300 ms  |     —     | 40ms  |
-|  160 bits  |   1 s     |     5s    | 200ms |
-|  180 bits  |   3 s     |    5-10s  |  1s   |
-|  200 bits  |   15 s    |   10-15s  |  2-3s |
-|  220 bits  |   1 min   |    30s    |  20s  |
-|  240 bits  |   5 mins  |   2 mins  | 100-150s |
-|  260 bits  |  15 mins  |   5 mins  | — |
-|  280 bits  |  60 mins  |  15 mins  | — |
-|  300 bits  |   3 hours |  1 hour   | — |
-|  320 bits  |10-20 hours|  2 hours  | — |
+| Input size | Sieve time | Python time (sparse matrix) | Combined time (dense matrix) | PARI |
+| ---------- | ---------- | ------------------- | ------------ | ---- |
+|   30 bits  |     0.3 ms|     —     |  0.6ms| 0.25ms|
+|   40 bits  |     0.5 ms|     —     |  0.8ms| 0.6ms |
+|   60 bits  |     1 ms  |     —     |  1.5ms|  15ms |
+|   80 bits  |     3 ms  |     —     |  4ms  | 150ms |
+|  100 bits  |    10 ms  |     —     | 15ms  |   1s  |
+|  120 bits  |    40 ms  |     —     | 50ms  |  10s  |
+|  140 bits  |   200 ms  |     —     | 250ms |  80s  |
+|  160 bits  |   1 s     |     5s    |  1s   | 500s  |
+|  180 bits  |   3 s     |    5-10s  |  5s   | >1 hour |
+|  200 bits  |   15 s    |   10-15s  |  20s | — |
+|  220 bits  |   1 min   |    30s    | 100s | — |
+|  240 bits  |   4 mins  |   2 mins  | 300s | — |
+|  260 bits  |  15 mins  |   5 mins  | — | — |
+|  280 bits  |  60 mins  |  15 mins  | — | — |
+|  300 bits  |   3 hours |  1 hour   | — | — |
+|  320 bits  |10-20 hours|  2 hours  | — | — |
 
 The sieving step and the computation of the class number can use multiple cores.
 The output of the sieve is usually less than 250 MiB even for 100-digit inputs.
 
 Some computer algebra systems like PARI implement the Buchmann-McCurley
-algorithm which tries to find smooth ideals by random sampling.
-This is slower for large discriminants (above 64-80 bits).
+algorithm which tries to find smooth ideals by random sampling,
+the Shanks baby-step-giant-step algorithm, which is very fast for very
+small discriminants. They are slower than quadratic sieve
+for large discriminants (above 40-45 bits).
 
 ## Linear algebra
 
