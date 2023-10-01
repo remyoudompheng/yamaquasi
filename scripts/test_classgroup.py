@@ -92,7 +92,10 @@ def main():
                 print("KO", int(D), err)
                 fails += 1
 
-    print(len(Ds), f"tested in {time.time()-t0:.3}s")
+    elapsed = time.time() - t0
+    avg = elapsed / len(Ds)
+    avgstr = f"{avg:.3f}s" if avg > 0.1 else f"{1000*avg:.3f}ms"
+    print(len(Ds), f"tested in {time.time()-t0:.3}s (average {avgstr})")
     print(fails, "failures")
 
 
