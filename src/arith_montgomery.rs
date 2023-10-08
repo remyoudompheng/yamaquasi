@@ -13,6 +13,7 @@ use std::borrow::Borrow;
 use bnum::cast::CastFrom;
 use bnum::BUint;
 
+use crate::arith;
 use crate::arith_gcd;
 use crate::Uint;
 
@@ -57,6 +58,16 @@ pub fn mg_redc(n: u64, ninv: u64, x: u128) -> u64 {
     } else {
         xhi + mhi + 1
     }
+}
+
+/// Inverse of Montgomery representation:
+/// input is xR mod p, output is R/x mod p
+pub fn mg_inv(n: u64, ninv: u64, r2: u64, x: u64) -> Option<u64> {
+    // mm = m/R
+    let mm = mg_redc(n, ninv, x as u128);
+    let mminv = arith::inv_mod64(mm, n)?;
+    // minv = R/mm = R^2/m
+    Some(mg_mul(n, ninv, mminv, r2))
 }
 
 /// Context for modular Montgomery arithmetic for large (512-bit) moduli

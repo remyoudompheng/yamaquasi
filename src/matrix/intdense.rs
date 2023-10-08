@@ -148,7 +148,8 @@ fn crt(modp: &[u64]) -> I4096 {
 
 /// Builder for echelonized bases over finite field GF(p).
 /// Modulus is usually around 60 bits.
-struct GFpEchelonBuilder {
+#[doc(hidden)]
+pub struct GFpEchelonBuilder {
     p: u64,
     pinv: u64,
     r: u64,  // 2^64 % p
@@ -228,7 +229,8 @@ const PRIMES: [u64; 64] = [
 ];
 
 impl GFpEchelonBuilder {
-    fn new(p: u64) -> Self {
+    #[doc(hidden)]
+    pub fn new(p: u64) -> Self {
         let pinv = mg_2adic_inv(p);
         let r = (1u128 << 64).rem_euclid(p as u128) as u64;
         let r2 = (r as u128 * r as u128).rem_euclid(p as u128) as u64;
@@ -249,7 +251,7 @@ impl GFpEchelonBuilder {
         self.factors.truncate(n);
     }
 
-    fn add(&mut self, v: &[i64]) -> bool {
+    pub fn add(&mut self, v: &[i64]) -> bool {
         if self.basis.len() > 0 {
             assert_eq!(v.len(), self.basis[0].len());
         }
@@ -312,7 +314,7 @@ impl GFpEchelonBuilder {
         }
     }
 
-    fn det(&self) -> u64 {
+    pub fn det(&self) -> u64 {
         assert!(self.factors.len() == self.basis[0].len());
         // The determinant sign depends on the order of echelon indices.
         let mut ind = self.indices.clone();

@@ -49,6 +49,10 @@ name = "matrix"
 harness = false
 
 [[bench]]
+name = "matrixint"
+harness = false
+
+[[bench]]
 name = "pm1"
 harness = false
 

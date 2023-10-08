@@ -4,3 +4,4 @@
 
 pub mod gf2;
 pub mod intdense;
+pub mod intsparse;
