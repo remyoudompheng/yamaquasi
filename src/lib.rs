@@ -22,7 +22,6 @@ pub mod arith_montgomery;
 pub mod arith_poly;
 pub mod fbase;
 pub mod matrix;
-pub mod matrixint;
 pub mod params;
 pub mod relations;
 

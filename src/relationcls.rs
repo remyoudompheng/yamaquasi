@@ -24,7 +24,7 @@ use std::time::Instant;
 use bnum::cast::CastFrom;
 use bnum::types::I256;
 
-use crate::matrixint;
+use crate::matrix::intdense as matdense;
 use crate::{Int, Verbosity};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -345,7 +345,7 @@ pub fn group_structure(
             t0.elapsed().as_secs_f64()
         );
     }
-    let mut r = matrixint::SmithNormalForm::new(&r.rows, r.removed, hest.0, hest.1);
+    let mut r = matdense::SmithNormalForm::new(&r.rows, r.removed, hest.0, hest.1);
     r.verbose = v >= Verbosity::Info;
     if v >= Verbosity::Info {
         eprintln!("Class number is {}", r.h);
@@ -647,7 +647,7 @@ impl RelFilterSparse {
     }
 }
 
-fn write_relations(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) {
+fn write_relations(snf: &matdense::SmithNormalForm, outdir: &PathBuf) {
     let mut removed = snf.removed.clone();
     removed.reverse();
     let mut buf = vec![];
@@ -664,7 +664,7 @@ fn write_relations(snf: &matrixint::SmithNormalForm, outdir: &PathBuf) {
     }
 }
 
-fn write_extra_group_structure(snf: &matrixint::SmithNormalForm, g: &ClassGroup, outdir: &PathBuf) {
+fn write_extra_group_structure(snf: &matdense::SmithNormalForm, g: &ClassGroup, outdir: &PathBuf) {
     let mut coords = BTreeMap::<u32, Vec<u128>>::new();
     for (p, v) in &g.gens {
         coords.insert(*p, v.clone());

@@ -19,7 +19,7 @@ use num_traits::One;
 use crate::arith::{pow_mod, Num, U512};
 use crate::arith_montgomery::ZmodN;
 use crate::fbase::FBase;
-use crate::matrix;
+use crate::matrix::gf2 as matrix;
 use crate::{Int, Uint, Verbosity};
 
 /// Number of extra relations that must be collected for factoring.

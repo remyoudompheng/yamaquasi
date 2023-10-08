@@ -1,6 +1,6 @@
 use brunch::Bench;
 use rand::{self, Fill};
-use yamaquasi::{matrix, Verbosity};
+use yamaquasi::{matrix::gf2 as matrix, Verbosity};
 
 fn main() {
     let mut rng = rand::thread_rng();

@@ -19,7 +19,7 @@ use std::time::Instant;
 use bitvec_simd::BitVec;
 use rand::{self, Rng};
 
-use yamaquasi::matrix;
+use yamaquasi::matrix::gf2 as matrix;
 use yamaquasi::Verbosity;
 
 fn main() {
