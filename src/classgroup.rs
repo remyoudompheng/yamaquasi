@@ -194,17 +194,14 @@ pub fn classgroup(
         panic!("not enough polynomials to sieve")
     }
     drop(rels);
-    if hmax.log2() < 126.0 && fbase.len() < EXTERNAL_LINALG_THRESHOLD {
-        let crels = s.result();
-        use crate::relationcls;
-        let outdir = prefs.outdir.as_ref().map(PathBuf::from);
-        relationcls::group_structure(crels, (hmin, hmax), prefs.verbosity, outdir)
-    } else {
-        None
-    }
+    let use_sparse = Some(hmax.log2() >= 128.0 || fbase.len() > SPARSE_LINALG_THRESHOLD);
+    let crels = s.result();
+    use crate::relationcls;
+    let outdir = prefs.outdir.as_ref().map(PathBuf::from);
+    relationcls::group_structure(crels, use_sparse, (hmin, hmax), prefs.verbosity, outdir)
 }
 
-const EXTERNAL_LINALG_THRESHOLD: usize = 3000;
+const SPARSE_LINALG_THRESHOLD: usize = 800;
 
 struct ClSieve<'a> {
     // A negative discriminant
@@ -679,9 +676,8 @@ fn test_estimate() {
 }
 
 #[cfg(test)]
-fn parse_int(s: &'static str) -> Int {
-    use std::str::FromStr;
-    Int::from_str(s).unwrap()
+const fn parse_int(s: &'static str) -> Int {
+    Int::parse_str_radix(s, 10)
 }
 
 #[test]
@@ -704,14 +700,14 @@ fn test_classgroup() {
     // Relations are very rare and may not generate the full lattice.
     let d = Int::from(-424708);
     let g = classgroup(&d, &prefs, None).unwrap();
-    assert_eq!(g.h, 64);
+    assert_eq!(g.h, 64_u64.into());
     // Other very unlucky numbers
     let d = Int::from(-1411012);
     let g = classgroup(&d, &prefs, None).unwrap();
-    assert_eq!(g.h, 124);
+    assert_eq!(g.h, 124_u64.into());
     let d = Int::from(-2402548);
     let g = classgroup(&d, &prefs, None).unwrap();
-    assert_eq!(g.h, 176);
+    assert_eq!(g.h, 176_u64.into());
 
     // Affected by incorrect Smith normal form.
     let d = parse_int("-131675478501979154852");
@@ -719,7 +715,7 @@ fn test_classgroup() {
     // Can trigger an incorrect Smith normal form due to very smooth h.
     let d = parse_int("-4133106580052");
     let g = classgroup(&d, &prefs, None).unwrap();
-    assert_eq!(g.h, 615040);
+    assert_eq!(g.h, 615040_u64.into());
 
     // Close to 128 bits: edge cases for 64-bit overflow.
     let d = parse_int("-277747586393177609383447877774824905287");

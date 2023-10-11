@@ -219,7 +219,7 @@ impl SparseMat {
             if det != det_ {
                 det = det_;
             } else {
-                eprintln!("final {det}");
+                //eprintln!("final {det}");
                 return det;
             }
         }

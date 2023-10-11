@@ -12,6 +12,12 @@
 //! to perform matrix filtering.
 //! We still keep track of the largest connected component of the
 //! large prime graph, but emit relations instead of combining them.
+//!
+//! This module also implements the computation of the class group
+//! structure from the set of relations. It uses both dense and sparse
+//! linear algebra, and assumes that the class number is always less
+//! than 256 bits (which is true if the input number does not exceed
+//! 500 bits).
 
 use std::cmp::min;
 use std::collections::{BTreeMap, BTreeSet};
@@ -25,7 +31,8 @@ use bnum::cast::CastFrom;
 use bnum::types::I256;
 
 use crate::matrix::intdense as matdense;
-use crate::{Int, Verbosity};
+use crate::matrix::intsparse as matsparse;
+use crate::{Int, Uint, Verbosity};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CRelation {
@@ -297,14 +304,37 @@ impl CRelationSet {
 }
 
 pub struct ClassGroup {
-    pub h: u128,
+    pub h: Uint,
     pub invariants: Vec<u128>,
     /// A list of (p, vs) where vs are the coordinates of [p]
     /// in the class group.
     pub gens: Vec<(u32, Vec<u128>)>,
 }
 
+/// Compute class group structure from a set of relations obtained by sieving.
+///
+/// A class number estimate is provided through approximate bounds `hest`.
+/// The bounds are allowed to be slightly incorrect.
+///
+/// The choice of sparse/dense linear algebra can be overridden by `use_sparse`.
 pub fn group_structure(
+    rels: Vec<CRelation>,
+    use_sparse: Option<bool>,
+    hest: (f64, f64),
+    v: Verbosity,
+    outdir: Option<PathBuf>,
+) -> Option<ClassGroup> {
+    // Sparse linear algebra is used for discriminants above 200 bits.
+    // The caller can adjust this using the knowledge of actual factor base.
+    let use_sparse = use_sparse.unwrap_or(hest.1.log2() > 100.0);
+    if use_sparse {
+        group_structure_sparse(rels, hest, v, outdir)
+    } else {
+        group_structure_dense(rels, hest, v, outdir)
+    }
+}
+
+fn group_structure_dense(
     rels: Vec<CRelation>,
     hest: (f64, f64),
     v: Verbosity,
@@ -314,13 +344,13 @@ pub fn group_structure(
     let mut r = RelFilterSparse::new(rels);
     while let Some(_) = r.pivot_one() {
         if r.weight.len() % 64 == 0 {
-            let nrows = r.rows.iter().filter(|r| r.len() > 0).count();
+            let nrows = r.nonzero_rows;
             if v >= Verbosity::Debug {
                 eprintln!(
                     "{} columns {} rows {} coefs",
                     r.weight.len(),
                     nrows,
-                    r.nonzero.len()
+                    r.nonzero_coeffs
                 );
             }
             let nc = r.weight.len();
@@ -348,7 +378,11 @@ pub fn group_structure(
     let mut r = matdense::SmithNormalForm::new(&r.rows, r.removed, hest.0, hest.1);
     r.verbose = v >= Verbosity::Info;
     if v >= Verbosity::Info {
-        eprintln!("Class number is {}", r.h);
+        eprintln!(
+            "Class number is {} elapsed {:.3}s",
+            r.h,
+            t0.elapsed().as_secs_f64()
+        );
     }
     if let Some(outdir) = outdir.as_ref() {
         let mut w = fs::File::create(outdir.join("classnumber")).unwrap();
@@ -360,7 +394,7 @@ pub fn group_structure(
         write_relations(&r, outdir);
     }
     let mut g = ClassGroup {
-        h: r.h as u128,
+        h: Uint::cast_from(r.h),
         invariants: vec![],
         gens: vec![],
     };
@@ -394,6 +428,144 @@ pub fn group_structure(
     Some(g)
 }
 
+pub fn group_structure_sparse(
+    rels: Vec<CRelation>,
+    hest: (f64, f64),
+    v: Verbosity,
+    outdir: Option<PathBuf>,
+) -> Option<ClassGroup> {
+    let t0 = Instant::now();
+    let mut r = RelFilterSparse::new(rels);
+    let dsize = 2 * hest.1.log2().round() as usize + 1;
+    let maxweight = dsize / 2;
+    let mut lasttrim = (2, r.weight.len());
+    while let Some(_) = r.pivot_one() {
+        let nrows = r.nonzero_rows;
+        let nonzero = r.nonzero_coeffs;
+        if nonzero > nrows * maxweight {
+            break;
+        }
+        let avg = nonzero as f64 / nrows as f64;
+        if r.wmin > lasttrim.0 && r.weight.len() + 64 < lasttrim.1 {
+            lasttrim = (r.wmin, r.weight.len());
+            if v >= Verbosity::Debug {
+                eprintln!("{} columns {} rows avg {:.1}", r.weight.len(), nrows, avg);
+            }
+            // During merge keep a large number of rows.
+            let nc = r.weight.len();
+            let want = 3 * nc + 128;
+            if nrows > want {
+                let trimmed = r.trim(nrows - want);
+                if v >= Verbosity::Debug && trimmed > 0 {
+                    eprintln!("{trimmed} extra relations trimmed");
+                }
+            }
+        }
+    }
+    // Now eliminate duplicates
+    let mut dups = 0;
+    for j in 0..r.rows.len() {
+        if r.rows[j].is_empty() {
+            continue;
+        }
+        for i in 0..j {
+            if r.rows[i] == r.rows[j] {
+                r.remove_row(j);
+                dups += 1;
+                break;
+            }
+        }
+    }
+    if v >= Verbosity::Info {
+        eprintln!("Removed {dups} duplicate rows");
+    }
+    // Trim again to keep a small row excess.
+    let nc = r.weight.len();
+    let want = nc + 2 * dsize + 128;
+    if r.nonzero_rows > want {
+        let trimmed = r.trim(r.nonzero_rows - want);
+        if v >= Verbosity::Debug && trimmed > 0 {
+            eprintln!("{trimmed} extra relations trimmed");
+        }
+    }
+    if let Some(outdir) = outdir.as_ref() {
+        r.write_files(outdir);
+    }
+    for i in 0..r.rows.len() {
+        while i < r.rows.len() {
+            let j = r.rows.len() - 1 - i;
+            if r.rows[j].is_empty() {
+                r.rows.swap_remove(j);
+            } else {
+                break;
+            }
+        }
+    }
+    let nrows = r.rows.len();
+    let n_coeffs = r.rows.iter().map(|r| r.len()).sum::<usize>();
+    let avgw = n_coeffs as f64 / nrows as f64;
+    if v >= Verbosity::Info {
+        eprintln!(
+            "Filtered matrix has {} columns {} rows average weight {avgw:.1} (elapsed: {:.3}s)",
+            r.weight.len(),
+            nrows,
+            t0.elapsed().as_secs_f64()
+        );
+    }
+
+    let mut gens = BTreeSet::new();
+    for r in &r.rows {
+        for &(p, e) in r {
+            if e != 0 {
+                gens.insert(p);
+            }
+        }
+    }
+    let gens: Vec<u32> = gens.into_iter().collect();
+    //eprintln!("{gens:?}");
+    let rows2: Vec<Vec<(u32, i32)>> = r
+        .rows
+        .iter()
+        .map(|r| {
+            let mut row = Vec::with_capacity(r.len());
+            for (p, e) in r {
+                let pidx = gens.binary_search(p).unwrap();
+                row.push((pidx as u32, *e));
+            }
+            row
+        })
+        .collect();
+    let h = matsparse::compute_lattice_index(gens.len(), &rows2, hest.0, hest.1);
+    if v >= Verbosity::Info {
+        eprintln!(
+            "Class number {h} elapsed {:.3}s",
+            t0.elapsed().as_secs_f64()
+        );
+    }
+    if let Some(outdir) = outdir.as_ref() {
+        let mut w = fs::File::create(outdir.join("classnumber")).unwrap();
+        writeln!(w, "{}", h).unwrap();
+    }
+    // Now factor class number and compute class group structure.
+    // The class number is small.
+    let factors = {
+        let mut prefs = crate::Preferences::default();
+        prefs.verbosity = Verbosity::Silent;
+        crate::factor(Uint::cast_from(h), crate::Algo::Auto, &prefs)
+    }
+    .unwrap();
+    if v >= Verbosity::Info {
+        eprintln!("Class number factors {:?}", factors);
+    }
+    // FIXME: structure is incomplete.
+    let g = ClassGroup {
+        h: Uint::cast_from(h),
+        invariants: vec![],
+        gens: vec![],
+    };
+    Some(g)
+}
+
 /// A structure to filter relations when they are sparse.
 /// It implements a simple form of structured Gauss elimination.
 struct RelFilterSparse {
@@ -412,6 +584,9 @@ struct RelFilterSparse {
     skip: BTreeSet<u32>,
     // Min weight
     wmin: usize,
+    // Stats
+    nonzero_rows: usize,
+    nonzero_coeffs: usize,
 }
 
 impl RelFilterSparse {
@@ -427,14 +602,19 @@ impl RelFilterSparse {
             }
             row.sort();
             //eprintln!("got {row:?}");
-            rows.push(row);
+            if !row.is_empty() {
+                rows.push(row);
+            }
         }
         let mut weight = BTreeMap::new();
+        let nonzero_rows = rows.len();
+        let mut nonzero_total: usize = 0;
         for r in &rows {
             for &(p, _) in r {
                 let w: &mut u32 = weight.entry(p).or_default();
                 *w += 1;
             }
+            nonzero_total += r.len();
         }
         let mut nonzero = BTreeMap::new();
         for (&p, &w) in &weight {
@@ -452,6 +632,8 @@ impl RelFilterSparse {
             removed: vec![],
             skip: BTreeSet::new(),
             wmin: 0,
+            nonzero_rows,
+            nonzero_coeffs: nonzero_total,
         }
     }
 
@@ -550,18 +732,24 @@ impl RelFilterSparse {
             self.rowsub(j, idx as usize, cj * ci)?;
         }
         let ri = self.rows[idx as usize].clone();
-        self.rows[idx as usize].clear();
+        self.remove_row(idx as usize);
         // update indices
         self.weight.remove(&p);
         self.nonzero.remove(&p);
-        // pop p
-        let mut rel = ri;
+        self.save_removed(p, ri);
+        Some(())
+    }
+
+    fn save_removed(&mut self, p: u32, rel: Vec<(u32, i32)>) {
+        let mut rel = rel;
+        let mut ci = 0;
         for i in 0..rel.len() {
             if rel[i].0 == p {
-                rel.remove(i);
+                ci = rel.remove(i).1;
                 break;
             }
         }
+        assert!(ci.unsigned_abs() == 1);
         if ci == 1 {
             // p + sum(ei [li]) == 0
             // => p = sum(-ei [li])
@@ -570,7 +758,6 @@ impl RelFilterSparse {
             }
         }
         self.removed.push((p, rel));
-        Some(())
     }
 
     fn trim(&mut self, count: usize) -> usize {
@@ -589,9 +776,9 @@ impl RelFilterSparse {
                 break;
             }
         }
-        for r in self.rows.iter_mut() {
-            if r.len() >= threshold {
-                r.clear();
+        for idx in 0..self.rows.len() {
+            if self.rows[idx].len() >= threshold {
+                self.remove_row(idx);
             }
         }
         trimmed
@@ -600,6 +787,15 @@ impl RelFilterSparse {
     fn add_index(&mut self, idx: usize, p: u32) {
         self.nonzero.entry(p).and_modify(|v| v.push(idx as u32));
         self.weight.entry(p).and_modify(|w| *w += 1);
+    }
+
+    fn remove_row(&mut self, idx: usize) {
+        if self.rows[idx].is_empty() {
+            return;
+        }
+        self.nonzero_rows -= 1;
+        self.nonzero_coeffs -= self.rows[idx].len();
+        self.rows[idx].clear();
     }
 
     // Apply operation row[i]-=c*row[j]
@@ -641,6 +837,11 @@ impl RelFilterSparse {
                 ii += 1;
                 jj += 1;
             }
+        }
+        self.nonzero_coeffs += res.len();
+        self.nonzero_coeffs -= li;
+        if res.len() == 0 {
+            self.nonzero_rows -= 1;
         }
         self.rows[i] = res;
         Some(())

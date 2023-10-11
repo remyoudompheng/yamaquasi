@@ -12,6 +12,7 @@ use pyo3::ffi::PyLong_FromString;
 use pyo3::prelude::*;
 use pyo3::pyfunction;
 use pyo3::types::{PyList, PyLong};
+use pyo3::FromPyPointer;
 
 use yamaquasi::{self, Algo, Int, Preferences, Uint, Verbosity};
 
@@ -115,18 +116,21 @@ fn factor(
     };
     let l = PyList::empty(py);
     for f in factors {
-        // Use string for conversion.
-        // FIXME: this is ugly.
-        let s = CString::new(f.to_string()).unwrap();
-        let sptr = s.as_ptr();
-        let nullptr: *mut *mut c_char = std::ptr::null::<*mut c_char>() as *mut _;
-        let obj = unsafe {
-            let obj_ptr = PyLong_FromString(sptr, nullptr, 0);
-            PyObject::from_owned_ptr(py, obj_ptr)
-        };
-        l.append(obj)?;
+        l.append(uint_to_py(py, &f))?;
     }
     Ok(l.into())
+}
+
+fn uint_to_py<'py>(py: Python<'py>, n: &Uint) -> &'py PyLong {
+    // Use string for conversion.
+    // FIXME: this is ugly.
+    let s = CString::new(n.to_string()).unwrap();
+    let sptr = s.as_ptr();
+    let nullptr: *mut *mut c_char = std::ptr::null::<*mut c_char>() as *mut _;
+    unsafe {
+        let obj_ptr = PyLong_FromString(sptr, nullptr, 0);
+        PyLong::from_owned_ptr(py, obj_ptr)
+    }
 }
 
 #[pyfunction]
@@ -252,5 +256,5 @@ fn quadratic_classgroup(
             )))
         }
     };
-    Ok((grp.h, grp.invariants, grp.gens).into_py(py))
+    Ok((uint_to_py(py, &grp.h), grp.invariants, grp.gens).into_py(py))
 }
