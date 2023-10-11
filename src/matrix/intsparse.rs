@@ -405,6 +405,10 @@ pub fn berlekamp_massey(p: u64, seq: &[u64]) -> Vec<u64> {
     let r = (1u128 << 64).rem_euclid(p as u128) as u64;
     let r2 = (r as u128 * r as u128).rem_euclid(p as u128) as u64;
     let mulp = |a: u64, b: u64| mg_mul(p, pinv, a, b);
+    let dotp = |a: u64, b: u64, c: u64, d: u64| {
+        let ab_cd: u128 = a as u128 * b as u128 + c as u128 * d as u128;
+        mg_redc(p, pinv, ab_cd)
+    };
     let invp = |a: u64| mg_inv(p, pinv, r2, a).unwrap();
     debug_assert!(mulp(2, invp(2)) == r);
     let subp = |a: &mut u64, b: u64| {
@@ -420,6 +424,7 @@ pub fn berlekamp_massey(p: u64, seq: &[u64]) -> Vec<u64> {
     let n = seq.len();
     let mut u = vec![0; n]; // 1
     u[0] = 1;
+    let mut du = 0;
     let mut f = seq.to_vec();
     let mut df = n - 1;
     while f[df] == 0 && df > 0 {
@@ -431,6 +436,7 @@ pub fn berlekamp_massey(p: u64, seq: &[u64]) -> Vec<u64> {
     // g = x^d f mod x^n
     let mut v = vec![0; n]; // x
     v[n - df] = 1;
+    let mut dv = n - df;
     let mut g = vec![0; n];
     g[n - df..].copy_from_slice(&f[0..df]);
     let mut dg = n - 1;
@@ -444,6 +450,7 @@ pub fn berlekamp_massey(p: u64, seq: &[u64]) -> Vec<u64> {
     for _ in 0..2 * n {
         if df > dg {
             (u, v) = (v, u);
+            (du, dv) = (dv, du);
             (f, g) = (g, f);
             (df, dg) = (dg, df);
         }
@@ -453,6 +460,7 @@ pub fn berlekamp_massey(p: u64, seq: &[u64]) -> Vec<u64> {
             // Note that we are in Montgomery arithmetic!
             // but output is expected in natural representation.
             // FIXME: divide by x^v??
+            assert!(u[0] != 0);
             let q = mg_redc(p, pinv, invp(u[0]) as u128);
             for i in 0..n {
                 u[i] = mulp(u[i], q);
@@ -460,18 +468,55 @@ pub fn berlekamp_massey(p: u64, seq: &[u64]) -> Vec<u64> {
             return u;
         }
         // Divide g by f (dg >= df)
-        let q = mulp(g[dg], invp(f[df]));
-        let d = dg - df;
-        for i in 0..=df {
-            subp(&mut g[i + d], mulp(q, f[i]));
+        if dg > df && df > 1 {
+            // g -= (q1 x + q0) x^d * f
+            // Quotient of power series:
+            // 1/(f0 + f1 t) = 1/f0 - f1/f0² t + o(t²)
+            // q1 + q0 t = g0/f0 + (g1/f0 - g0f1/f0²) t + o(t²)
+            let invf0 = invp(f[df]);
+            let invf1 = mulp(f[df - 1], invf0);
+            let q1 = mulp(g[dg], invf0);
+            let mut q0 = mulp(g[dg - 1], invf0);
+            subp(&mut q0, mulp(q1, invf1));
+            let d = dg - df - 1;
+            subp(&mut g[d], mulp(f[0], q0));
+            for i in 1..=df {
+                subp(&mut g[i + d], dotp(f[i], q0, f[i - 1], q1));
+            }
+            subp(&mut g[dg], mulp(f[df], q1));
+            assert_eq!(g[dg], 0);
+            assert_eq!(g[dg - 1], 0);
+            // v -= (q1 x + q0) x^d u
+            subp(&mut v[d], mulp(u[0], q0));
+            for i in 1..=du {
+                subp(&mut v[i + d], dotp(u[i], q0, u[i - 1], q1));
+            }
+            subp(&mut v[d + du + 1], mulp(u[du], q1));
+            for i in dv..=(du + d + 1) {
+                if v[i] != 0 {
+                    dv = i
+                }
+            }
+        } else {
+            // g -= q x^d * f
+            let q = mulp(g[dg], invp(f[df]));
+            let d = dg - df;
+            for i in 0..=df {
+                subp(&mut g[i + d], mulp(q, f[i]));
+            }
+            assert_eq!(g[dg], 0);
+            // v -= q x^d u
+            for i in 0..=du {
+                subp(&mut v[i + d], mulp(q, u[i]));
+            }
+            for i in dv..=(du + d) {
+                if v[i] != 0 {
+                    dv = i
+                }
+            }
         }
-        assert_eq!(g[dg], 0);
         while g[dg] == 0 && dg > 0 {
             dg -= 1
-        }
-        for i in 0..n - d {
-            // FIXME: correct bound
-            subp(&mut v[i + d], mulp(q, u[i]));
         }
     }
     unreachable!()

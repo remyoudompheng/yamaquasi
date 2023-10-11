@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use yamaquasi::matrix::gf2::make_test_sparsemat;
 use yamaquasi::matrix::intdense::GFpEchelonBuilder;
-use yamaquasi::matrix::intsparse::SparseMat;
+use yamaquasi::matrix::intsparse::{berlekamp_massey, SparseMat};
 
 fn main() {
     let p: u64 = 1_000_000_000_000_037;
@@ -17,6 +17,17 @@ fn main() {
     for size in [30, 100, 200, 500, 1000, 2000, 5000, 10000, 20000] {
         let logsize = u32::BITS - u32::leading_zeros(size);
         let density = 10 + 2 * logsize;
+
+        let mut v = vec![0; 2 * size as usize];
+        for i in 0..2 * size as usize {
+            v[i] = p.wrapping_mul((i * i + 1) as u64) >> 32;
+        }
+        let start = Instant::now();
+        berlekamp_massey(p, &v);
+        eprintln!(
+            "size={size} berlekamp_massey (vector 2N) {:.3}s",
+            start.elapsed().as_secs_f64()
+        );
 
         let mat = make_sparse_matrix(size as usize, density as usize);
         let start = Instant::now();
