@@ -420,13 +420,7 @@ pub fn berlekamp_massey(p: u64, seq: &[u64]) -> Vec<u64> {
     let n = seq.len();
     let mut u = vec![0; n]; // 1
     u[0] = 1;
-    let mut v = vec![0; n]; // x
-    v[1] = 1;
     let mut f = seq.to_vec();
-    let mut g = vec![0; n];
-    // xf mod x^n
-    g[1..].copy_from_slice(&f[0..n - 1]);
-
     let mut df = n - 1;
     while f[df] == 0 && df > 0 {
         df -= 1
@@ -434,6 +428,11 @@ pub fn berlekamp_massey(p: u64, seq: &[u64]) -> Vec<u64> {
     if f[df] == 0 {
         return vec![];
     }
+    // g = x^d f mod x^n
+    let mut v = vec![0; n]; // x
+    v[n - df] = 1;
+    let mut g = vec![0; n];
+    g[n - df..].copy_from_slice(&f[0..df]);
     let mut dg = n - 1;
     while g[dg] == 0 && dg > 0 {
         dg -= 1
@@ -498,6 +497,12 @@ fn test_berlekamp_massey() {
     for t in taps {
         want.push(p - t);
     }
+    assert_eq!(&out[..want.len()], &want[..]);
+    // Also if last element is zero
+    let v = vec![
+        25063, 456, 789, 1, 2, 3, 4, 18825, 40304, 10105, 63795, 57513, 53235, 0,
+    ];
+    let out = berlekamp_massey(p, &v);
     assert_eq!(&out[..want.len()], &want[..]);
 }
 
