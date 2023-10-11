@@ -584,6 +584,8 @@ struct RelFilterSparse {
     skip: BTreeSet<u32>,
     // Min weight
     wmin: usize,
+    // List of candidates for next elimination
+    nextelims: Vec<u32>,
     // Stats
     nonzero_rows: usize,
     nonzero_coeffs: usize,
@@ -632,6 +634,7 @@ impl RelFilterSparse {
             removed: vec![],
             skip: BTreeSet::new(),
             wmin: 0,
+            nextelims: vec![],
             nonzero_rows,
             nonzero_coeffs: nonzero_total,
         }
@@ -670,28 +673,37 @@ impl RelFilterSparse {
     }
 
     fn pivot_one(&mut self) -> Option<()> {
-        let mut p = 0;
-        'mainloop: while self.wmin < self.rows.len() {
-            for (&q, &wq) in self.weight.iter() {
-                if wq as usize <= self.wmin && !self.skip.contains(&q) {
-                    let Some(nz) = self.nonzero.get(&q) else {
-                        continue;
-                    };
-                    for &idx in nz {
-                        if self.coeff(idx as usize, q).unsigned_abs() == 1 {
-                            p = q;
-                            break 'mainloop;
-                        }
+        while self.wmin < self.rows.len() {
+            if self.nextelims.is_empty() {
+                // Fetch next low weight candidates
+                if self.wmin < 50 {
+                    self.wmin += 1;
+                } else {
+                    self.wmin += 2;
+                }
+                for (&q, &wq) in self.weight.iter() {
+                    if wq as usize <= self.wmin && !self.skip.contains(&q) {
+                        self.nextelims.push(q);
                     }
-                    self.skip.insert(q);
                 }
             }
-            self.wmin += 1;
+            'qloop: while let Some(q) = self.nextelims.pop() {
+                // Largest primes are eliminated first.
+                if let Some(nz) = self.nonzero.get(&q) {
+                    if nz.len() > self.wmin {
+                        // Too many rows containing this prime.
+                        continue 'qloop;
+                    }
+                    for &idx in nz {
+                        if self.coeff(idx as usize, q).unsigned_abs() == 1 {
+                            return self.pivot(q);
+                        }
+                    }
+                }
+                self.skip.insert(q);
+            }
         }
-        if p == 0 {
-            return None;
-        }
-        self.pivot(p)
+        return None;
     }
 
     /// Eliminate p from all relations.
