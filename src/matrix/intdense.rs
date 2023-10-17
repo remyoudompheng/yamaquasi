@@ -85,13 +85,20 @@ pub fn det_matz(mat: Vec<&[i64]>, log2estimate: f64) -> I4096 {
     let bits = log2estimate.round();
     assert!(bits >= 1.0);
     assert!(
-        bits <= 63.0 * PRIMES.len() as f64,
+        bits <= 63.0 * 64.0,
         "determinant is too large {log2estimate:.1} bits"
     );
     let bits = bits as usize;
     let mut modp = vec![];
-    'crtloop: while 60 * modp.len() < bits && modp.len() < PRIMES.len() {
-        let p = PRIMES[modp.len()];
+    let mut primes = vec![];
+    let mut p: u64 = ((1 << 62) / 30) * 30 - 1;
+    'crtloop: while 60 * modp.len() < bits {
+        // Previous prime
+        p -= 30;
+        while !crate::isprime64(p) {
+            p -= 30;
+        }
+        primes.push(p);
         let mut mp = GFpEchelonBuilder::new(p);
         for v in mat.iter() {
             if !mp.add(v) {
@@ -106,7 +113,7 @@ pub fn det_matz(mat: Vec<&[i64]>, log2estimate: f64) -> I4096 {
     }
     // Now apply CRT
     assert!(63 * modp.len() >= bits + 2);
-    let det = crt(&modp);
+    let det = crt(&modp, &primes);
     // Check result using floating-point estimate.
     if det.to_f64().unwrap().is_finite() {
         let diff = det.to_f64().unwrap().abs().log2() - log2estimate;
@@ -115,22 +122,22 @@ pub fn det_matz(mat: Vec<&[i64]>, log2estimate: f64) -> I4096 {
     det
 }
 
-fn crt(modp: &[u64]) -> I4096 {
+fn crt(modp: &[u64], primes: &[u64]) -> I4096 {
     let mut crt_basis = vec![I4096::ONE; modp.len()];
     for i in 0..modp.len() {
         let mut inv: u64 = 1;
-        let pi = PRIMES[i];
+        let pi = primes[i];
         for j in 0..modp.len() {
             if i != j {
-                crt_basis[i] *= I4096::from(PRIMES[j]);
-                let inv_j = arith::inv_mod64(PRIMES[j], pi).unwrap();
+                crt_basis[i] *= I4096::from(primes[j]);
+                let inv_j = arith::inv_mod64(primes[j], pi).unwrap();
                 inv = ((inv as u128 * inv_j as u128) % (pi as u128)) as u64;
             }
         }
         crt_basis[i] *= I4096::from(inv);
     }
     let mut prod = I4096::ONE;
-    for &p in &PRIMES[..modp.len()] {
+    for &p in &primes[..modp.len()] {
         prod *= I4096::from(p);
     }
     let mut det = I4096::ZERO;
@@ -154,79 +161,12 @@ pub struct GFpEchelonBuilder {
     pinv: u64,
     r: u64,  // 2^64 % p
     r2: u64, // 2^128 % p
+    // The column elimination order, a permutation of 0..n
     indices: Vec<usize>,
     // All values are stored in Montgomery form.
     basis: Vec<Vec<u64>>,
     factors: Vec<u64>,
 }
-
-// A few large 63-bit primes, enough to compute 1024-bit determinants.
-const PRIMES: [u64; 64] = [
-    0x7fffffffffffffe7,
-    0x7fffffffffffff5b,
-    0x7ffffffffffffefd,
-    0x7ffffffffffffed3,
-    0x7ffffffffffffe89,
-    0x7ffffffffffffe7d,
-    0x7ffffffffffffe79,
-    0x7ffffffffffffe67,
-    0x7ffffffffffffe37,
-    0x7ffffffffffffe29,
-    0x7ffffffffffffdfb,
-    0x7ffffffffffffdef,
-    0x7ffffffffffffddb,
-    0x7ffffffffffffd8d,
-    0x7ffffffffffffd77,
-    0x7ffffffffffffd63,
-    0x7ffffffffffffd39,
-    0x7ffffffffffffd21,
-    0x7ffffffffffffd11,
-    0x7ffffffffffffcaf,
-    0x7ffffffffffffc99,
-    0x7ffffffffffffc85,
-    0x7ffffffffffffc6d,
-    0x7ffffffffffffc0d,
-    0x7ffffffffffffbd3,
-    0x7ffffffffffffbb9,
-    0x7ffffffffffffb97,
-    0x7ffffffffffffb65,
-    0x7ffffffffffffb3b,
-    0x7ffffffffffffb2b,
-    0x7ffffffffffffb1f,
-    0x7ffffffffffffaef,
-    0x7ffffffffffffaed,
-    0x7ffffffffffffae3,
-    0x7ffffffffffffab3,
-    0x7ffffffffffffa8d,
-    0x7ffffffffffffa45,
-    0x7ffffffffffffa2f,
-    0x7ffffffffffffa23,
-    0x7ffffffffffffa05,
-    0x7ffffffffffff9f1,
-    0x7ffffffffffff9e7,
-    0x7ffffffffffff9d9,
-    0x7ffffffffffff9b7,
-    0x7ffffffffffff9a3,
-    0x7ffffffffffff99d,
-    0x7ffffffffffff925,
-    0x7ffffffffffff8ef,
-    0x7ffffffffffff8d9,
-    0x7ffffffffffff8c1,
-    0x7ffffffffffff88b,
-    0x7ffffffffffff86b,
-    0x7ffffffffffff817,
-    0x7ffffffffffff787,
-    0x7ffffffffffff739,
-    0x7ffffffffffff735,
-    0x7ffffffffffff70f,
-    0x7ffffffffffff703,
-    0x7ffffffffffff6f1,
-    0x7ffffffffffff6e5,
-    0x7ffffffffffff6c3,
-    0x7ffffffffffff6b5,
-    0x7ffffffffffff69f,
-    0x7ffffffffffff669,
-];
 
 impl GFpEchelonBuilder {
     #[doc(hidden)]
@@ -247,13 +187,15 @@ impl GFpEchelonBuilder {
 
     fn truncate(&mut self, n: usize) {
         self.basis.truncate(n);
-        self.indices.truncate(n);
         self.factors.truncate(n);
+        // Indices must be a permutation of columns, not rows.
     }
 
     pub fn add(&mut self, v: &[i64]) -> bool {
         if self.basis.len() > 0 {
             assert_eq!(v.len(), self.basis[0].len());
+        } else {
+            self.indices = (0..v.len()).collect();
         }
         let mut vp = vec![0u64; v.len()];
         let p = self.p as i64;
@@ -267,13 +209,63 @@ impl GFpEchelonBuilder {
             }
             vp[i] = mg_mul(self.p, self.pinv, vi as u64, self.r2);
         }
+        let submul = |a, b, c| {
+            // return a - b * c
+            let bc = mg_mul(self.p, self.pinv, b, c);
+            if a >= bc {
+                a - bc
+            } else {
+                a + self.p - bc
+            }
+        };
         // Eliminate
-        for (&idx, b) in self.indices.iter().zip(&self.basis) {
+        // Invariant: in row[i], all columns from indices[..i] are eliminated.
+        let mut i = 0;
+        while i < self.basis.len() {
+            let idx = self.indices[i];
             let vi = vp[idx];
             if vi == 0 {
+                i += 1;
                 continue;
             }
-            self.submul(&mut vp, b, vi);
+            if i + 8 < self.basis.len() {
+                // Subtract a block of 4 rows at a time (faster)
+                let idxs: [usize; 8] = self.indices[i..i + 8].try_into().unwrap();
+                let mut vs = [
+                    vp[idxs[0]],
+                    vp[idxs[1]],
+                    vp[idxs[2]],
+                    vp[idxs[3]],
+                    vp[idxs[4]],
+                    vp[idxs[5]],
+                    vp[idxs[6]],
+                    vp[idxs[7]],
+                ];
+                for a in 1..8 {
+                    for b in 0..a {
+                        vs[a] = submul(vs[a], vs[b], self.basis[i + b][idxs[a]]);
+                    }
+                }
+                self.submul_n(
+                    &mut vp,
+                    [
+                        &self.basis[i],
+                        &self.basis[i + 1],
+                        &self.basis[i + 2],
+                        &self.basis[i + 3],
+                        &self.basis[i + 4],
+                        &self.basis[i + 5],
+                        &self.basis[i + 6],
+                        &self.basis[i + 7],
+                    ],
+                    vs,
+                    i,
+                );
+                i += 8;
+            } else {
+                self.submul(&mut vp, &self.basis[i], vi);
+                i += 1;
+            }
         }
         // Find next echelon index
         for i in 0..vp.len() {
@@ -281,7 +273,9 @@ impl GFpEchelonBuilder {
             if vi != 0 {
                 self.div(&mut vp, vi);
                 assert_eq!(vp[i], self.r);
-                self.indices.push(i);
+                // Swap index i to be the next one.
+                let idx = self.indices.iter().position(|&x| x == i).unwrap();
+                self.indices.swap(idx, self.basis.len());
                 self.basis.push(vp);
                 self.factors.push(vi);
                 return true;
@@ -304,12 +298,35 @@ impl GFpEchelonBuilder {
 
     fn submul(&self, v: &mut [u64], w: &[u64], m: u64) {
         let p = self.p;
+        if m == 0 {
+            return;
+        }
         for (i, vi) in v.iter_mut().enumerate() {
+            if w[i] == 0 {
+                continue;
+            }
             let mw = mg_mul(self.p, self.pinv, m, w[i]);
             if *vi >= mw {
                 *vi -= mw;
             } else {
                 *vi += p - mw;
+            }
+        }
+    }
+
+    // Same as `submul` but with N rows.
+    fn submul_n<const N: usize>(&self, v: &mut [u64], ws: [&[u64]; N], ms: [u64; N], start: usize) {
+        let p = self.p;
+        for &i in &self.indices[start..] {
+            let mut mw: u128 = ws[0][i] as u128 * ms[0] as u128;
+            for j in 1..N {
+                mw += ws[j][i] as u128 * ms[j] as u128;
+            }
+            let mw = mg_redc(self.p, self.pinv, mw);
+            if v[i] >= mw {
+                v[i] -= mw;
+            } else {
+                v[i] += p - mw;
             }
         }
     }
@@ -365,16 +382,21 @@ impl<'a> CRTDetBuilder<'a> {
         let bits = log2estimate.round();
         assert!(bits >= 1.0);
         assert!(
-            bits <= 63.0 * PRIMES.len() as f64,
+            bits <= 63.0 * 64.0,
             "determinant is too large {log2estimate:.1} bits"
         );
         let bits = bits as usize;
+        let mut primes = vec![];
         let mut modp = vec![];
-        'crtloop: while 60 * modp.len() < bits && modp.len() < PRIMES.len() {
-            if self.echelons.len() <= modp.len() {
-                let p = PRIMES[modp.len()];
-                self.echelons.push(GFpEchelonBuilder::new(p));
+        let mut p: u64 = ((1 << 61) / 30) * 30 - 1;
+        'crtloop: while 60 * modp.len() < bits {
+            // Previous prime
+            p -= 30;
+            while !crate::isprime64(p) {
+                p -= 30;
             }
+            primes.push(p);
+            self.echelons.push(GFpEchelonBuilder::new(p));
             let mp = &mut self.echelons[modp.len()];
             if mp.basis.len() > self.rows.len() {
                 mp.truncate(self.rows.len());
@@ -391,8 +413,8 @@ impl<'a> CRTDetBuilder<'a> {
             modp.push(dp);
         }
         // Now apply CRT
-        assert!(63 * modp.len() >= bits + 2);
-        let det = crt(&modp);
+        assert!(61 * modp.len() >= bits + 2);
+        let det = crt(&modp, &primes);
         // Check result using floating-point estimate.
         if det.to_f64().unwrap().is_finite() {
             let diff = det.to_f64().unwrap().abs().log2() - log2estimate;

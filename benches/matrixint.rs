@@ -37,7 +37,7 @@ fn main() {
             start.elapsed().as_secs_f64()
         );
 
-        if size > 3000 {
+        if size > 8000 {
             continue;
         }
         // Compute dense determinant
