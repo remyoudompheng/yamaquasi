@@ -9,6 +9,7 @@
 
 use std::cmp::max;
 use std::collections::BTreeMap;
+use std::ops::Range;
 
 use bnum::cast::CastFrom;
 use bnum::types::{I256, I4096, U256};
@@ -672,37 +673,40 @@ impl SmithNormalForm {
     fn reduce_rows(&mut self) {
         // Make matrix triangular
         let n = self.gens.len();
-        for j in 0..n {
+        for i in 0..n {
             // Invariant
             // for i in 0..j
             // row[i,i] = Di
-            // row[k>i,i] = 0
-            for i in j..self.rows.len() {
-                for jj in 0..j {
-                    self.eliminate(jj, i, jj);
-                    assert_eq!(self.rows[i][jj], 0);
-                }
-                if self.rows[i][j] != 0 {
-                    //eprintln!("using row {i} for step {j}");
-                    self.rows.swap(j, i);
-                    break;
+            // row[i,j<i] = 0
+            if self.rows[i][i] == 0 {
+                // A non zero coefficient is better.
+                for j in i + 1..self.rows.len() {
+                    if self.rows[j][i] & 1 == 1 {
+                        self.rows.swap(i, j);
+                        break;
+                    }
                 }
             }
+            // Eliminate coefficients before i.
+            self.eliminate_block(i, 0..i, false);
             //eprintln!("reduction {j} {:?}", self.rows[j]);
-            if self.rows[j][j] != 0 {
-                self.normalize(j, j);
+            if self.rows[i][i] != 0 {
+                self.normalize(i, i);
+            } else {
+                self.rows[i][i] = self.h as i128;
+            }
+            for j in 0..i {
+                if self.rows[i][j] == self.h as i128 {
+                    self.rows[i][j] = 0;
+                }
+                assert_eq!(self.rows[i][j], 0);
             }
         }
         //let diag: Vec<i128> = (0..n).map(|j| self.rows[j][j]).collect();
         //eprintln!("diag {diag:?}")
         // Add some vectors to reduce until class number is reached.
         for i in n..self.rows.len() {
-            for j in 0..n {
-                if self.rows[i][j] == 0 {
-                    continue;
-                }
-                self.eliminate(j, i, j);
-            }
+            self.eliminate_block(i, 0..n, false);
             if self.rows[n - 1][n - 1] == 0 {
                 self.rows[n - 1][n - 1] = self.h as i128;
             }
@@ -729,12 +733,9 @@ impl SmithNormalForm {
             if self.rows[j][j] != 0 {
                 self.normalize(j, j);
             }
-            let nj = self.rows[j][j];
-            for i in 0..j {
-                if nj == 1 || (nj > 0 && self.rows[i][j] % nj == 0) {
-                    self.eliminate(j, i, j);
-                }
-            }
+        }
+        for j in 0..n {
+            self.eliminate_block(j, j + 1..n, true);
         }
 
         // Extract redundant relations (coefficient=1).
@@ -766,6 +767,40 @@ impl SmithNormalForm {
         }
         self.gens = cols.iter().map(|&idx| self.gens[idx]).collect();
         assert_eq!(self.rows.len(), self.gens.len());
+    }
+
+    // Reduce row j w.r.t. rows i1..i2, assumed to be in echelon form
+    // already.
+    //
+    // If `upper` is true, we are eliminating above the diagonal,
+    // and we don't want to modify diagonal values.
+    fn eliminate_block(&mut self, j: usize, ii: Range<usize>, upper: bool) {
+        // Eliminate coefficients before i.
+        let mut i = ii.start;
+        while i < ii.end {
+            const B: usize = 8;
+            if self.rows[j][i] == 0 {
+                i += 1;
+                continue;
+            } else if i + B < ii.end && (i..i + B).all(|_i| self.rows[_i][_i] == 1) {
+                let mut ms: [_; B] = self.rows[j][i..i + B].try_into().unwrap();
+                for b in 1..B {
+                    for c in 0..b {
+                        let x = I256::from(ms[b])
+                            - I256::from(ms[c]) * I256::from(self.rows[i + c][i + b]);
+                        ms[b] = self.modh256(x);
+                    }
+                }
+                self.submul_n(j, i, &ms);
+                i += B
+            } else {
+                let di = self.rows[i][i];
+                if !upper || di == 1 || (di > 0 && self.rows[j][i] % di == 0) {
+                    self.eliminate(i, j, i);
+                }
+                i += 1;
+            }
+        }
     }
 
     /// Reduce columns to obtain the final Smith normal form
@@ -898,6 +933,37 @@ impl SmithNormalForm {
         }
     }
 
+    /// Subtract row[i] - sum(m[x]*row[j+x])
+    /// It is assumed that rows j..j+N are already echelonized.
+    fn submul_n<const N: usize>(&mut self, i: usize, j: usize, m: &[i128; N]) {
+        for k in 0..N {
+            debug_assert!(
+                (0..j + k)
+                    .all(|_j| self.rows[j + k][_j] == 0 || self.rows[j + k][_j] == self.h as i128),
+                "j={j} k={k} {:?}",
+                &self.rows[j + k]
+            );
+        }
+        assert!(j + N <= self.gens.len());
+        if self.h > 0 && self.h < ((1 << 63) / N) as u128 {
+            for idx in j..self.gens.len() {
+                let mut x = self.rows[i][idx];
+                for k in 0..N {
+                    x -= m[k] * self.rows[j + k][idx];
+                }
+                self.rows[i][idx] = self.modh128(x);
+            }
+        } else {
+            for idx in j..self.gens.len() {
+                let mut x = I256::from(self.rows[i][idx]);
+                for k in 0..N {
+                    x -= I256::from(m[k]) * I256::from(self.rows[j + k][idx]);
+                }
+                self.rows[i][idx] = self.modh256(x);
+            }
+        }
+    }
+
     /// Eliminate coefficient M[j,k] using a combination with nonzero M[i,k].
     fn eliminate(&mut self, i: usize, j: usize, k: usize) {
         assert!(i != j);
@@ -909,18 +975,7 @@ impl SmithNormalForm {
         if xi == 1 || (xi != 0 && xj % xi == 0) {
             // Common situation
             let m = xj / xi;
-            for idx in 0..self.gens.len() {
-                let (yi, yj) = (self.rows[i][idx], self.rows[j][idx]);
-                if yi == 0 && yj == 0 {
-                    continue;
-                }
-                if self.h > 0 && self.h < 1 << 63 {
-                    self.rows[j][idx] = self.modh128(yj - m * yi);
-                } else {
-                    let x = I256::from(yj) - I256::from(m) * I256::from(yi);
-                    self.rows[j][idx] = self.modh256(x);
-                };
-            }
+            self.submul_n(j, i, &[m]);
         } else {
             let e = Integer::extended_gcd(&xi, &xj);
             assert!(e.gcd != 0);
