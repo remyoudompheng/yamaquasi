@@ -40,7 +40,7 @@ def classno(datadir: Path, meta, nthreads):
     print(f"Approximate class number is {happ:.6e}")
 
     M, primes, maxw = read_matrix(datadir / "relations.filtered")
-    avgw = M.count_nonzero() / M.shape[1]
+    avgw = M.count_nonzero() / M.shape[0]
     print(repr(M))
     print(f"average row weight {avgw:.1f} max sum(row) {maxw}")
     N = len(primes)
