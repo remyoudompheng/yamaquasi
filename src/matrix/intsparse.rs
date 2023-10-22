@@ -19,8 +19,11 @@
 
 use std::cmp::max;
 
+use num_integer::Integer;
+use num_traits::Euclid;
+
 use bnum::cast::CastFrom;
-use bnum::types::U256;
+use bnum::types::{I256, U256, U512};
 use bnum::{BInt, BUint};
 
 use rand::rngs::StdRng;
@@ -202,6 +205,43 @@ impl SparseMat {
         }
     }
 
+    /// Variant of mulp for scalar vectors modulo a (possibly large) prime.
+    fn mulpbig<U, I>(&self, p: U, v: &[U], out: &mut [U])
+    where
+        U: Copy + CastFrom<I>,
+        I: Integer + Euclid + CastFrom<U> + CastFrom<i32>,
+    {
+        assert!(v.len() == self.size);
+        assert!(out.len() == self.size);
+        for i in 0..self.size {
+            let mut x = I::zero();
+            unsafe {
+                let idx1 = *self.indices_p1.get_unchecked(i) as usize;
+                let idx2 = *self.indices_p1.get_unchecked(i + 1) as usize;
+                for idx in idx1..idx2 {
+                    let j = *self.values_p1.get_unchecked(idx);
+                    let vj = v.get_unchecked(j as usize);
+                    x = x + I::cast_from(*vj);
+                }
+                let idx1 = *self.indices_m1.get_unchecked(i) as usize;
+                let idx2 = *self.indices_m1.get_unchecked(i + 1) as usize;
+                for idx in idx1..idx2 {
+                    let j = *self.values_m1.get_unchecked(idx);
+                    let vj = v.get_unchecked(j as usize);
+                    x = x - I::cast_from(*vj);
+                }
+                let idx1 = *self.indices_x.get_unchecked(i) as usize;
+                let idx2 = *self.indices_x.get_unchecked(i + 1) as usize;
+                for idx in idx1..idx2 {
+                    let (j, mij) = *self.values_x.get_unchecked(idx);
+                    let vj = v.get_unchecked(j as usize);
+                    x = x + I::cast_from(mij) * I::cast_from(*vj);
+                }
+                out[i] = U::cast_from(x.rem_euclid(&I::cast_from(p)));
+            }
+        }
+    }
+
     /// Matrix determinant over the integers. The computations
     /// uses CRT and determinant modulo word-size primes.
     pub fn detz(&self) -> IntLarge {
@@ -311,54 +351,100 @@ impl SparseMat {
         dets
     }
 
-    /// Kernel modulo p.
+    /// Kernel modulo large p.
     /// This assumes that the rank modulo p is exactly n-1.
-    pub fn ker_p64(&self, p: u64) -> Vec<u64> {
-        assert!(p < i64::MAX as u64 / self.norm());
-        let mut v = vec![[0]; self.size];
-        let mut w = vec![[0]; self.size];
+    pub fn ker_p256(&self, p: U256) -> Option<Vec<U256>> {
+        // FIXME: return an error?
+        let norm = self.norm();
+        let k = if p.bits() < 56 && norm < 256 {
+            self.ker_pbig::<u64, i64, u128>(u64::cast_from(p))?
+                .iter()
+                .map(|&x| U256::cast_from(x))
+                .collect()
+        } else if p.bits() < 120 && norm < 256 {
+            self.ker_pbig::<u128, i128, U256>(u128::cast_from(p))?
+                .iter()
+                .map(|&x| U256::cast_from(x))
+                .collect()
+        } else if p.bits() < 182 && norm < 1024 {
+            self.ker_pbig::<BUint<3>, BInt<3>, BUint<6>>(BUint::cast_from(p))?
+                .iter()
+                .map(|&x| U256::cast_from(x))
+                .collect()
+        } else {
+            self.ker_pbig::<U256, I256, U512>(p)?
+        };
+        Some(k)
+    }
+
+    fn ker_pbig<U, I, UU>(&self, p: U) -> Option<Vec<U>>
+    where
+        U: std::fmt::Debug
+            + Copy
+            + Integer
+            + CastFrom<I>
+            + CastFrom<UU>
+            + CastFrom<U256>
+            + From<u64>,
+        UU: Copy + Integer + CastFrom<U>,
+        I: Integer + Euclid + CastFrom<U> + CastFrom<i32>,
+        U256: CastFrom<U>,
+    {
+        let mut v = vec![U::zero(); self.size];
+        let mut w = vec![U::zero(); self.size];
         // Fill vector pseudorandomly using a Fibonacci sequence.
         let (mut x, mut y) = (0, 1);
         for j in 0..self.size {
             (x, y) = (y, (x + y) % 65537);
-            v[j] = [y];
+            v[j] = y.into();
         }
         // Compute Krylov sequence
         let mut seq = Vec::with_capacity(2 * self.size);
         loop {
-            seq.push(v[0][0]);
+            seq.push(v[0]);
             if seq.len() == 2 * self.size {
                 break;
             }
-            self.mulp([p], &v, &mut w);
+            self.mulpbig::<U, I>(p, &v, &mut w);
             (v, w) = (w, v);
         }
-        let charpoly = berlekamp_massey(p, &seq);
+        let charpoly = berlekamp_massey_big::<U, UU>(p, &seq);
         let c0 = charpoly[self.size];
-        assert_eq!(c0, 0);
+        assert!(c0.is_zero());
+        if charpoly[self.size - 1].is_zero() {
+            // Characteristic polynomial has a double root
+            return None;
+        }
         // FIXME: what if degree != n.
         // Now evaluate a kernel vector using Horner rule.
-        let mut v0 = vec![[0]; self.size];
+        let mut v0 = vec![U::zero(); self.size];
         let mut rng = StdRng::seed_from_u64(163);
-        for x in v0.iter_mut() {
-            x[0] = rng.gen_range(0..p);
+        if U256::cast_from(p).bits() <= 64 {
+            let p64 = u64::cast_from(U256::cast_from(p));
+            for x in v0.iter_mut() {
+                *x = rng.gen_range(1..p64).into();
+            }
+        } else {
+            for x in v0.iter_mut() {
+                *x = rng.gen::<u64>().into();
+            }
         }
         v.copy_from_slice(&v0);
         for i in 1..self.size {
             // Map V to M V + a V0
-            self.mulp([p], &v, &mut w);
-            let ci = charpoly[i] as u128;
+            self.mulpbig::<U, I>(p, &v, &mut w);
+            let ci = UU::cast_from(charpoly[i]);
             for j in 0..self.size {
-                let wj = w[j][0] as u128 + ci * v0[j][0] as u128;
-                w[j][0] = (wj % p as u128) as u64;
+                let wj = UU::cast_from(w[j]) + ci * UU::cast_from(v0[j]);
+                w[j] = U::cast_from(wj % UU::cast_from(p));
             }
             (v, w) = (w, v);
         }
         // Check that we obtained an actual kernel element.
-        self.mulp([p], &v, &mut w);
-        assert!(w.iter().all(|&x| x == [0]));
-        assert!(v.iter().any(|&x| x != [0]));
-        v.iter().map(|x| x[0]).collect()
+        self.mulpbig::<U, I>(p, &v, &mut w);
+        assert!(w.iter().all(|&x| x.is_zero()));
+        assert!(v.iter().any(|&x| !x.is_zero()));
+        Some(v)
     }
 }
 
@@ -522,6 +608,102 @@ pub fn berlekamp_massey(p: u64, seq: &[u64]) -> Vec<u64> {
     unreachable!()
 }
 
+/// Same as `berlekamp_massey` but for larger integers.
+///
+/// Type parameter `UU` must be a integer type twice larger than `U`
+pub fn berlekamp_massey_big<U, UU>(p: U, seq: &[U]) -> Vec<U>
+where
+    U: std::fmt::Debug + Integer + Copy + CastFrom<UU> + CastFrom<U256> + From<u64>,
+    UU: Integer + CastFrom<U>,
+    U256: CastFrom<U>,
+{
+    let mulp = |a: U, b: U| {
+        let ab = UU::cast_from(a) * UU::cast_from(b);
+        U::cast_from(ab % UU::cast_from(p))
+    };
+    let invp = |a: U| -> U {
+        U::cast_from(arith_gcd::inv_mod(&U256::cast_from(a), &U256::cast_from(p)).unwrap())
+    };
+    let subp = |a: &mut U, b: U| {
+        if &*a >= &b {
+            *a = *a - b
+        } else {
+            *a = *a + p - b
+        }
+    };
+    // Loop invariants:
+    // u * seq = f mod x^N
+    // v * seq = g mod x^N
+    let n = seq.len();
+    let mut u = vec![U::zero(); n]; // 1
+    u[0] = U::from(1);
+    let mut v = vec![U::zero(); n]; // x
+    v[1] = U::from(1);
+    let (mut du, mut dv) = (0, 1);
+    let mut f = seq.to_vec();
+    let mut df = n - 1;
+    while f[df].is_zero() && df > 0 {
+        df -= 1
+    }
+    if f[df].is_zero() {
+        return vec![];
+    }
+    let mut g = vec![U::zero(); n];
+    // g = x^d f mod x^n
+    g[n - df..].copy_from_slice(&f[0..df]);
+
+    let mut dg = n - 1;
+    while g[dg].is_zero() && dg > 0 {
+        dg -= 1
+    }
+    // Not supposed to happen
+    if g[dg].is_zero() {
+        return vec![];
+    }
+    for _ in 0..2 * n {
+        if df > dg {
+            (u, v) = (v, u);
+            (du, dv) = (dv, du);
+            (f, g) = (g, f);
+            (df, dg) = (dg, df);
+        }
+        if df < n / 2 {
+            // seq = f / u + o(x^n)
+            // Normalize to u = 1 + ...
+            // Note that we are in Montgomery arithmetic!
+            // but output is expected in natural representation.
+            // FIXME: divide by x^v??
+            assert!(!u[0].is_zero());
+            let q = invp(u[0]);
+            for i in 0..n {
+                u[i] = mulp(u[i], q);
+            }
+            return u;
+        }
+        // Divide g by f (dg >= df)
+        // g -= q x^d * f
+        let q = mulp(g[dg], invp(f[df]));
+        let d = dg - df;
+        for i in 0..=df {
+            subp(&mut g[i + d], mulp(q, f[i]));
+        }
+        assert!(g[dg].is_zero());
+        // v -= q x^d u
+        for i in 0..=du {
+            subp(&mut v[i + d], mulp(q, u[i]));
+        }
+        for i in dv..=(du + d) {
+            if !v[i].is_zero() {
+                dv = i
+            }
+        }
+        while g[dg].is_zero() && dg > 0 {
+            dg -= 1
+        }
+    }
+    unreachable!()
+}
+
 #[test]
 fn test_berlekamp_massey() {
     let p = 65537;
@@ -623,5 +805,5 @@ fn test_kernel() {
     }
     let mat = SparseMat::new(rows);
     // Check done by function.
-    mat.ker_p64(p);
+    mat.ker_p256(p.into());
 }
