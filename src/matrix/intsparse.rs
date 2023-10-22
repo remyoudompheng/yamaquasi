@@ -18,9 +18,12 @@
 //! For class group computations, matrix dimension will usually be at most 40000.
 
 use std::cmp::max;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::RwLock;
 
 use num_integer::Integer;
 use num_traits::Euclid;
+use rayon::prelude::*;
 
 use bnum::cast::CastFrom;
 use bnum::types::{I256, U256, U512};
@@ -44,6 +47,7 @@ pub fn compute_lattice_index(
     rows: &Vec<Vec<(u32, i32)>>,
     hmin: f64,
     hmax: f64,
+    tpool: Option<&rayon::ThreadPool>,
 ) -> U256 {
     // The bounds can be very approximate.
     let prec = (hmax - hmin).abs();
@@ -65,7 +69,7 @@ pub fn compute_lattice_index(
             .map(|v| &v[..])
             .collect();
         let mat = SparseMat::new(selrows);
-        let det = mat.detz();
+        let det = mat.detz(tpool);
         //eprintln!("det over Z = {det}");
         if det.is_zero() {
             continue;
@@ -244,26 +248,71 @@ impl SparseMat {
 
     /// Matrix determinant over the integers. The computations
     /// uses CRT and determinant modulo word-size primes.
-    pub fn detz(&self) -> IntLarge {
+    pub fn detz(&self, tpool: Option<&rayon::ThreadPool>) -> IntLarge {
         let moduli = self.select_crtprimes();
-        let mut modp = vec![];
-        let mut det = IntLarge::ZERO;
-        for p4 in moduli.chunks_exact(4) {
-            let p = [p4[0], p4[1], p4[2], p4[3]];
-            let d = self.detp4(p);
-            //eprintln!("det {d:?} mod {p:?}");
-            for k in 0..4 {
-                modp.push(d[k]);
-            }
-            let det_ = crt(&modp, &moduli);
-            if det != det_ {
-                det = det_;
-            } else {
-                //eprintln!("final {det}");
-                return det;
-            }
+        struct Result {
+            modp: Vec<u64>,
+            p: Vec<u64>, // moduli may be reordered
+            det: IntLarge,
         }
-        unreachable!()
+        let mut res = Result {
+            modp: vec![],
+            p: vec![],
+            det: IntLarge::ZERO,
+        };
+        if let Some(pool) = tpool {
+            // Parallel computation: chunks of small primes
+            // are processed independently.
+            let done = AtomicBool::new(false);
+            let res = RwLock::new(res);
+            pool.install(|| {
+                moduli.par_chunks_exact(4).for_each(|p4| {
+                    if done.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    let Some(d) = self._detp4(p4.try_into().unwrap(), Some(&done)) else {
+                        return;
+                    };
+                    let mut res = res.write().unwrap();
+                    res.modp.extend_from_slice(&d);
+                    res.p.extend_from_slice(p4);
+                    let det_ = crt(&res.modp, &res.p);
+                    if res.det == det_ {
+                        done.store(true, Ordering::SeqCst);
+                    } else {
+                        res.det = det_
+                    }
+                    //eprintln!(
+                    //    "{} moduli done {} bits elapsed {:.3}s",
+                    //    res.modp.len(),
+                    //    det_.unsigned_abs().bits(),
+                    //    t0.elapsed().as_secs_f64(),
+                    //);
+                });
+            });
+            assert!(done.load(Ordering::SeqCst));
+            let res = res.read().unwrap();
+            res.det
+        } else {
+            for p4 in moduli.chunks_exact(4) {
+                let d = self.detp4(p4.try_into().unwrap());
+                res.modp.extend_from_slice(&d);
+                res.p.extend_from_slice(p4);
+                let det_ = crt(&res.modp, &res.p);
+                //eprintln!(
+                //    "{} moduli done {} bits elapsed {:.3}s",
+                //    res.modp.len(),
+                //    det_.unsigned_abs().bits(),
+                //    t0.elapsed().as_secs_f64(),
+                //);
+                if res.det != det_ {
+                    res.det = det_;
+                } else {
+                    return res.det;
+                }
+            }
+            unreachable!()
+        }
     }
 
     /// The norm is of the matrix is an upper bound N
@@ -314,6 +363,14 @@ impl SparseMat {
     /// Matrix determinant over finite field GF(p).
     /// Computed using Wiedemann algorithm.
     pub fn detp4(&self, p: [u64; 4]) -> [u64; 4] {
+        self._detp4(p, None).unwrap()
+    }
+
+    /// Determinant modulo a 4-tuple of prime moduli.
+    ///
+    /// The computation is interruptible using the optional
+    /// `done` boolean flag.
+    pub fn _detp4(&self, p: [u64; 4], done: Option<&AtomicBool>) -> Option<[u64; 4]> {
         let mut v = vec![[0; 4]; self.size];
         let mut w = vec![[0; 4]; self.size];
         // Fill vector pseudorandomly using a Fibonacci sequence.
@@ -334,6 +391,12 @@ impl SparseMat {
             if seq[0].len() == 2 * self.size {
                 break;
             }
+            if let Some(b) = done {
+                if b.load(Ordering::SeqCst) {
+                    // Interrupted.
+                    return None;
+                }
+            }
             self.mulp(p, &v, &mut w);
             (v, w) = (w, v);
         }
@@ -348,7 +411,7 @@ impl SparseMat {
                 c0
             };
         }
-        dets
+        Some(dets)
     }
 
     /// Kernel modulo large p.
@@ -790,7 +853,7 @@ fn test_sparse_det() {
         rows.push(row);
     }
     let mat = SparseMat::new(rows);
-    eprintln!("{}", mat.detz());
+    eprintln!("{}", mat.detz(None));
     let p2 = 100_000_000_000_031;
     assert_eq!(
         mat.detp4([p, p2, p, p2]),

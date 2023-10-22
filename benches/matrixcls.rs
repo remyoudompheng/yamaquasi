@@ -11,6 +11,10 @@ use yamaquasi::Verbosity;
 
 fn main() -> io::Result<()> {
     let dir = std::env::args().nth(1).unwrap();
+    let threads = || -> Option<usize> {
+        let s = std::env::args().nth(2)?;
+        str::parse::<usize>(&s).ok()
+    }();
     let dirpath = PathBuf::from(dir);
     // Read parameters
     let f = fs::File::open(dirpath.join("args.json"))?;
@@ -64,6 +68,16 @@ fn main() -> io::Result<()> {
         line.clear();
     }
     eprintln!("{} relations loaded", rels.len());
-    relationcls::group_structure(rels, None, (hmin, hmax), Verbosity::Debug, None);
+    // Use thread pool if requested.
+    let tpool: Option<rayon::ThreadPool> = threads.map(|t| {
+        eprintln!("Using a pool of {t} threads");
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(t)
+            .build()
+            .expect("cannot create thread pool")
+    });
+    let tpool = tpool.as_ref();
+
+    relationcls::group_structure(rels, None, (hmin, hmax), Verbosity::Debug, None, tpool);
     Ok(())
 }

@@ -323,12 +323,13 @@ pub fn group_structure(
     hest: (f64, f64),
     v: Verbosity,
     outdir: Option<PathBuf>,
+    tpool: Option<&rayon::ThreadPool>,
 ) -> Option<ClassGroup> {
     // Sparse linear algebra is used for discriminants above 200 bits.
     // The caller can adjust this using the knowledge of actual factor base.
     let use_sparse = use_sparse.unwrap_or(hest.1.log2() > 100.0);
     if use_sparse {
-        group_structure_sparse(rels, hest, v, outdir)
+        group_structure_sparse(rels, hest, v, outdir, tpool)
     } else {
         group_structure_dense(rels, hest, v, outdir)
     }
@@ -433,6 +434,7 @@ pub fn group_structure_sparse(
     hest: (f64, f64),
     v: Verbosity,
     outdir: Option<PathBuf>,
+    tpool: Option<&rayon::ThreadPool>,
 ) -> Option<ClassGroup> {
     let t0 = Instant::now();
     let mut r = RelFilterSparse::new(rels);
@@ -535,7 +537,7 @@ pub fn group_structure_sparse(
             row
         })
         .collect();
-    let h = matsparse::compute_lattice_index(gens.len(), &rows2, hest.0, hest.1);
+    let h = matsparse::compute_lattice_index(gens.len(), &rows2, hest.0, hest.1, tpool);
     if v >= Verbosity::Info {
         eprintln!(
             "Class number {h} elapsed {:.3}s",

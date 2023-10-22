@@ -198,7 +198,14 @@ pub fn classgroup(
     let crels = s.result();
     use crate::relationcls;
     let outdir = prefs.outdir.as_ref().map(PathBuf::from);
-    relationcls::group_structure(crels, use_sparse, (hmin, hmax), prefs.verbosity, outdir)
+    relationcls::group_structure(
+        crels,
+        use_sparse,
+        (hmin, hmax),
+        prefs.verbosity,
+        outdir,
+        tpool,
+    )
 }
 
 const SPARSE_LINALG_THRESHOLD: usize = 800;
