@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use bnum::cast::CastFrom;
@@ -189,7 +189,7 @@ impl CRelationSet {
                 self.n_doubles += 1;
                 self.add_path(p, q, r);
             }
-            _ => return,
+            _ => (),
         }
     }
 
@@ -293,7 +293,7 @@ impl CRelationSet {
             self.file
                 .as_mut()
                 .expect("Output file not open")
-                .write(&line)
+                .write_all(&line)
                 .unwrap();
         }
         if clen > 0 {
@@ -640,7 +640,7 @@ impl RelFilterSparse {
         }
     }
 
-    fn write_files(&self, outdir: &PathBuf) {
+    fn write_files(&self, outdir: &Path) {
         let mut buf = vec![];
         for row in &self.rows {
             if row.len() == 0 {
@@ -660,7 +660,7 @@ impl RelFilterSparse {
             buf.push(b'\n');
         }
         let mut w = fs::File::create(outdir.join("relations.filtered")).unwrap();
-        w.write(&buf[..]).unwrap();
+        w.write_all(&buf[..]).unwrap();
     }
 
     fn coeff(&self, idx: usize, p: u32) -> i32 {
@@ -703,7 +703,7 @@ impl RelFilterSparse {
                 self.skip.insert(q);
             }
         }
-        return None;
+        None
     }
 
     /// Eliminate p from all relations.
@@ -860,7 +860,7 @@ impl RelFilterSparse {
     }
 }
 
-fn write_relations(snf: &matdense::SmithNormalForm, outdir: &PathBuf) {
+fn write_relations(snf: &matdense::SmithNormalForm, outdir: &Path) {
     let mut removed = snf.removed.clone();
     removed.reverse();
     let mut buf = vec![];
@@ -873,11 +873,11 @@ fn write_relations(snf: &matdense::SmithNormalForm, outdir: &PathBuf) {
     }
     {
         let mut w = fs::File::create(outdir.join("relations.removed")).unwrap();
-        w.write(&buf[..]).unwrap();
+        w.write_all(&buf[..]).unwrap();
     }
 }
 
-fn write_extra_group_structure(snf: &matdense::SmithNormalForm, g: &ClassGroup, outdir: &PathBuf) {
+fn write_extra_group_structure(snf: &matdense::SmithNormalForm, g: &ClassGroup, outdir: &Path) {
     let mut coords = BTreeMap::<u32, Vec<u128>>::new();
     for (p, v) in &g.gens {
         coords.insert(*p, v.clone());
@@ -916,5 +916,5 @@ fn write_extra_group_structure(snf: &matdense::SmithNormalForm, g: &ClassGroup, 
     if skipped > 0 {
         eprintln!("{skipped} discrete logs skipped due to missing relations");
     }
-    w.write(&buf[..]).unwrap();
+    w.write_all(&buf[..]).unwrap();
 }

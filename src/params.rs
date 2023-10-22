@@ -79,7 +79,7 @@ fn select_fb_size(bitsize: u32, use_double: bool, table: &'static [(u32, u32, u3
 }
 
 /// Preferred sizes for factor bases in classical quadratic sieve.
-const QS_FBSIZES: &'static [(u32, u32, u32)] = &[
+const QS_FBSIZES: &[(u32, u32, u32)] = &[
     // Bit size, Factor base (no double large prime), Factor base (with double large prime)
     (16, 16, 16),
     (70, 120, 60),
@@ -106,7 +106,7 @@ const QS_FBSIZES: &'static [(u32, u32, u32)] = &[
 
 /// Preferred sizes for factor bases in MPQS.
 /// The polynomial roots computation is costly so smaller factor bases (compared to SIQS).
-const MPQS_FBSIZES: &'static [(u32, u32, u32)] = &[
+const MPQS_FBSIZES: &[(u32, u32, u32)] = &[
     // Bit size, Factor base (no double large prime), Factor base (with double large prime)
     (16, 16, 16),
     (70, 100, 60),
@@ -148,7 +148,7 @@ const MPQS_FBSIZES: &'static [(u32, u32, u32)] = &[
 /// We follow the growth of SIQS parameters but the factor
 /// bases are considerably smaller to keep linear algebra
 /// cost below sieving.
-const CLASSGROUP_FBSIZES: &'static [(u32, u32, u32)] = &[
+const CLASSGROUP_FBSIZES: &[(u32, u32, u32)] = &[
     // For small inputs, linear algebra is fast, we can use
     // parameters similar to factoring.
     (16, 16, 16),

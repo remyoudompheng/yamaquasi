@@ -428,7 +428,7 @@ impl Inverter {
             return x % 2;
         }
         debug_assert!(div.p >> 28 == 0);
-        let p = div.p as u32;
+        let p = div.p;
         assert!(x != 0);
         // Similar to binary GCD, with invariants:
         // rx = -u*2^k, sx = v*2^k, gcd(u,v)=gcd(x,p)=1

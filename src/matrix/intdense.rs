@@ -37,8 +37,8 @@ impl GramBuilder {
             if self.norms[i] < 1e-9 {
                 continue;
             }
-            let mu = dotf(&g, &v) / self.norms[i];
-            submulf(&mut v, &g, mu);
+            let mu = dotf(g, &v) / self.norms[i];
+            submulf(&mut v, g, mu);
         }
         let n = normf(&v);
         if let Some(thr) = self.threshold {

@@ -46,7 +46,7 @@ pub fn classgroup(
     prefs: &Preferences,
     tpool: Option<&rayon::ThreadPool>,
 ) -> Option<ClassGroup> {
-    let (hmin, hmax) = estimate(&d);
+    let (hmin, hmax) = estimate(d);
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Estimate by class number formula {hmin:.5e}-{hmax:.5e}")
     }
