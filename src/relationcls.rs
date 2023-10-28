@@ -464,44 +464,44 @@ pub fn group_structure_sparse(
             }
         }
     }
-    // Now eliminate duplicates
-    let mut dups = 0;
-    for j in 0..r.rows.len() {
-        if r.rows[j].is_empty() {
-            continue;
-        }
-        for i in 0..j {
-            if r.rows[i] == r.rows[j] {
-                r.remove_row(j);
-                dups += 1;
-                break;
-            }
+    // Remove empty rows.
+    for i in 0..r.rows.len() {
+        while i < r.rows.len() && r.rows[i].is_empty() {
+            r.rows.swap_remove(i);
         }
     }
+    // Now eliminate duplicates
+    // The sign is normalized so that pairs (r,-r) can also be eliminated.
+    let l = r.rows.len();
+    for row in r.rows.iter_mut() {
+        if matches!(row.first(), Some(&(_, e)) if e < 0) {
+            let neg: Vec<_> = row.iter().map(|&(p, e)| (p, -e)).collect();
+            assert_eq!(row.len(), neg.len());
+            *row = neg;
+        }
+    }
+    r.rows.sort();
+    r.rows.dedup();
+    let dups = l - r.rows.len();
     if v >= Verbosity::Info {
         eprintln!("Removed {dups} duplicate rows");
     }
     // Trim again to keep a small row excess.
     let nc = r.weight.len();
     let want = nc + 2 * dsize + 128;
-    if r.nonzero_rows > want {
-        let trimmed = r.trim(r.nonzero_rows - want);
+    if r.rows.len() > want {
+        let trimmed = r.trim(r.rows.len() - want);
         if v >= Verbosity::Debug && trimmed > 0 {
             eprintln!("{trimmed} extra relations trimmed");
         }
     }
+    for i in 0..r.rows.len() {
+        while i < r.rows.len() && r.rows[i].is_empty() {
+            r.rows.swap_remove(i);
+        }
+    }
     if let Some(outdir) = outdir.as_ref() {
         r.write_files(outdir);
-    }
-    for i in 0..r.rows.len() {
-        while i < r.rows.len() {
-            let j = r.rows.len() - 1 - i;
-            if r.rows[j].is_empty() {
-                r.rows.swap_remove(j);
-            } else {
-                break;
-            }
-        }
     }
     let nrows = r.rows.len();
     let n_coeffs = r.rows.iter().map(|r| r.len()).sum::<usize>();
