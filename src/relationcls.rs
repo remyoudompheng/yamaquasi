@@ -364,6 +364,10 @@ fn group_structure_dense(
             }
         }
     }
+    let dups = r.remove_duplicates();
+    if v >= Verbosity::Info {
+        eprintln!("Removed {dups} duplicate rows");
+    }
     if let Some(outdir) = outdir.as_ref() {
         r.write_files(outdir);
     }
@@ -464,25 +468,7 @@ pub fn group_structure_sparse(
             }
         }
     }
-    // Remove empty rows.
-    for i in 0..r.rows.len() {
-        while i < r.rows.len() && r.rows[i].is_empty() {
-            r.rows.swap_remove(i);
-        }
-    }
-    // Now eliminate duplicates
-    // The sign is normalized so that pairs (r,-r) can also be eliminated.
-    let l = r.rows.len();
-    for row in r.rows.iter_mut() {
-        if matches!(row.first(), Some(&(_, e)) if e < 0) {
-            let neg: Vec<_> = row.iter().map(|&(p, e)| (p, -e)).collect();
-            assert_eq!(row.len(), neg.len());
-            *row = neg;
-        }
-    }
-    r.rows.sort();
-    r.rows.dedup();
-    let dups = l - r.rows.len();
+    let dups = r.remove_duplicates();
     if v >= Verbosity::Info {
         eprintln!("Removed {dups} duplicate rows");
     }
@@ -782,6 +768,30 @@ impl RelFilterSparse {
             }
         }
         self.removed.push((p, rel));
+    }
+
+    // Eliminate duplicate relations where r1=±r2.
+    // Indexes are no longer valid after this operation.
+    fn remove_duplicates(&mut self) -> usize {
+        // Remove empty rows.
+        for i in 0..self.rows.len() {
+            while i < self.rows.len() && self.rows[i].is_empty() {
+                self.rows.swap_remove(i);
+            }
+        }
+        // Now eliminate duplicates
+        // The sign is normalized so that pairs (r,-r) can also be eliminated.
+        let l = self.rows.len();
+        for row in self.rows.iter_mut() {
+            if matches!(row.first(), Some(&(_, e)) if e < 0) {
+                let neg: Vec<_> = row.iter().map(|&(p, e)| (p, -e)).collect();
+                assert_eq!(row.len(), neg.len());
+                *row = neg;
+            }
+        }
+        self.rows.sort();
+        self.rows.dedup();
+        l - self.rows.len()
     }
 
     fn trim(&mut self, count: usize) -> usize {
