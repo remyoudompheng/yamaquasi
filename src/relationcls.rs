@@ -575,6 +575,7 @@ struct RelFilterSparse {
     // vectors of (prime, exponent).
     rows: Vec<Vec<(u32, i32)>>,
     // How many times each given prime appears.
+    // It may be larger than the actual number, but never smaller.
     weight: BTreeMap<u32, u32>,
     // Set of nonzero indices prime => [row index]
     // We never remove elements, except when a prime is eliminated.
@@ -692,14 +693,23 @@ impl RelFilterSparse {
             'qloop: while let Some(q) = self.nextelims.pop() {
                 // Largest primes are eliminated first.
                 if let Some(nz) = self.nonzero.get(&q) {
-                    if nz.len() > self.wmin {
+                    let mut can_pivot = false;
+                    let mut weight = 0;
+                    for &idx in nz {
+                        let c = self.coeff(idx as usize, q);
+                        if c.unsigned_abs() == 1 {
+                            can_pivot = true;
+                        }
+                        if c != 0 {
+                            weight += 1;
+                        }
+                    }
+                    if weight > self.wmin {
                         // Too many rows containing this prime.
                         continue 'qloop;
                     }
-                    for &idx in nz {
-                        if self.coeff(idx as usize, q).unsigned_abs() == 1 {
-                            return self.pivot(q);
-                        }
+                    if can_pivot {
+                        return self.pivot(q);
                     }
                 }
                 self.skip.insert(q);
@@ -806,6 +816,11 @@ impl RelFilterSparse {
     fn remove_row(&mut self, idx: usize) {
         if self.rows[idx].is_empty() {
             return;
+        }
+        for &(p, _) in &self.rows[idx] {
+            self.weight
+                .entry(p)
+                .and_modify(|w| *w = w.checked_sub(1).unwrap());
         }
         self.nonzero_rows -= 1;
         self.nonzero_coeffs -= self.rows[idx].len();
