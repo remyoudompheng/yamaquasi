@@ -413,10 +413,9 @@ pub(crate) fn a_value_count(n: &Uint) -> usize {
         0..=48 => 8,
         49..=71 => 12,
         // We are using small intervals until 200 bits, many As are needed.
-        72..=150 => sz - 52,          // 20..100
-        151..=199 => 20 * (sz - 145), // 100..1000
+        72..=150 => 2 * sz - 100,     // 40..200
+        151..=199 => 20 * (sz - 140), // 200..1000
         200.. => 100 * (sz - 190),    // 1000..5000 (sz=256).. 17000 (sz=360)
-        _ => unreachable!("impossible"),
     }
 }
 

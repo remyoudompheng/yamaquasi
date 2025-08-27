@@ -656,6 +656,12 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     let n = Uint::from_str("88024704953957052509918444604606608564924960423")?;
     factor(n, Algo::Auto, &Preferences::default()).unwrap();
 
+    // 148-bit number, no small factors
+    // Requires P-1 with B1=1000 B2=2100 or ECM with enough curves
+    // SIQS factor base is very sparse: [2, 3, 7, 13, 37, 71, 73, 103, 107, 109]
+    let n = Uint::from_str("223986131066668467510118179315296601602386513")?;
+    factor(n, Algo::Auto, &Preferences::default()).unwrap();
+
     // Could trigger an infinite loop after failing to factor due to
     // 223 being in the factor base.
     // 223*28579484042221159639852413780078523
