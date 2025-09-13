@@ -1,0 +1,24 @@
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "pymqs"
+version = "0.2.0"
+authors = [ { name="Rémy Oudompheng", email="remyoudompheng@gmail.com" } ]
+description = "Integer factoring library"
+readme = "README.md"
+requires-python = ">=3.7"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+
+[project.urls]
+homepage = "https://github.com/remyoudompheng/yamaquasi"
+documentation = "https://github.com/remyoudompheng/yamaquasi"
+
+[tool.maturin]
+profile = "release"
+manifest-path = "pymqs/Cargo.toml"
+bindings = "pyo3"
+strip = true
+sdist-generator = "cargo"
