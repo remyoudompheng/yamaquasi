@@ -56,10 +56,12 @@ An experimental Python module is available. You can build it
 with `maturin`:
 
 ```
-maturin build -r -m pymqs/Cargo.toml -o OUTDIR
+source venv/bin/activate
+cd pymqs
+maturin develop --release
 ```
 
-It has a single function `factor`:
+It has a function `factor` and other more specific APIs (`ecm` and `quadratic_classgroup`):
 
 ```python
 >>> import pymqs
