@@ -945,7 +945,7 @@ impl SmithNormalForm {
             );
         }
         assert!(j + N <= self.gens.len());
-        if self.h > 0 && self.h < ((1 << 63) / N) as u128 {
+        if self.h > 0 && self.h < ((1u64 << 63) / N as u64) as u128 {
             for idx in j..self.gens.len() {
                 let mut x = self.rows[i][idx];
                 for k in 0..N {
