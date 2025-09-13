@@ -70,7 +70,8 @@ jobs:
           macos-15,
           #macos-26-arm64,
         ]
-        python-version: ['3.7', '3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
+        # Python 3.7 is not available on all runners
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
 
     steps:
       - uses: actions/checkout@v5
@@ -84,7 +85,7 @@ jobs:
           merge-multiple: true
 
       # gmpy2 is missing binary wheels for Linux arm
-      - run: sudo apt-get install libmpfr-dev
+      - run: sudo apt-get install libmpfr-dev libmpc-dev
         if: ${{ startsWith( matrix.os , 'ubuntu' ) }}
 
       - run: pip install gmpy2
