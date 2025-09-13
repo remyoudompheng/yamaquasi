@@ -32,6 +32,14 @@ args = p.parse_args()
 if args.threads is None:
     args.threads = 1 if args.algo.startswith("sage") else os.cpu_count()
 
+
+def randbits(bitsize):
+    if bitsize <= 0:
+        # Python <= 3.8 rejects random.getrandbits(0)
+        return 0
+    return random.getrandbits(bitsize)
+
+
 print(f"Test using {args.threads} threads")
 for sz in range(args.minsize, args.maxsize + 1):
     numbers = []
@@ -50,13 +58,13 @@ for sz in range(args.minsize, args.maxsize + 1):
             # Try (nonzero) both squarefree and non-squarefree integers
             if i % 10 == 0:
                 exp = random.randint(2, 10)
-                x = 1 + random.getrandbits(sz // 2 // exp)
-                y = 1 + random.getrandbits(sz - (x**exp).bit_length())
+                x = 1 + randbits(sz // 2 // exp)
+                y = 1 + randbits(sz - (x**exp).bit_length())
                 n = y * x**exp
-                adj = "non squarefree "
+                # adj = "non squarefree "
             else:
                 n = 1 + random.getrandbits(sz)
-                adj = ""
+                # adj = ""
             numbers.append(n)
 
     def test_number(n):
