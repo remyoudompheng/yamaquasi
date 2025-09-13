@@ -19,6 +19,7 @@ use yamaquasi::{self, Algo, Int, Preferences, Uint, Verbosity};
 #[pymodule]
 fn pymqs(_: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(factor, m)?)?;
+    m.add_function(wrap_pyfunction!(factor_smooth, m)?)?;
     m.add_function(wrap_pyfunction!(ecm, m)?)?;
     m.add_function(wrap_pyfunction!(quadratic_classgroup, m)?)?;
     Ok(())
@@ -29,7 +30,7 @@ fn pymqs(_: Python<'_>, m: &PyModule) -> PyResult<()> {
     signature = (n, /, algo = "auto",
                 qs_fb_size = None, qs_interval_size = None, qs_use_double = None,
                 verbose = "silent", timeout = None, threads = None),
-    text_signature = "(n: int, /, algo: str, verbose: str, timeout=None, threads=None, qs_fb_size=None, qs_interval_size=None, qs_use_double=None) -> List[int]",
+    text_signature = "(n: int, /, algo: str, verbose: str, timeout=None, threads=None, qs_fb_size=None, qs_interval_size=None, qs_use_double=None) -> list[int]",
 )]
 /// Factors an integer into prime factors. The result is a list
 /// whose product is the input argument.
@@ -135,8 +136,39 @@ fn uint_to_py<'py>(py: Python<'py>, n: &Uint) -> &'py PyLong {
 
 #[pyfunction]
 #[pyo3(
+    signature = (n, factor_bits),
+    text_signature = "(n: int, factor_bits: int) -> list[int]",
+)]
+/// Partially factors an integer to find all prime factors below size `factor_bits`.
+/// The result is a list whose product is the input argument.
+fn factor_smooth(
+    py: Python<'_>,
+    n: &PyLong,
+    factor_bits: usize,
+) -> PyResult<Py<PyList>> {
+    // FIXME: handle interrupts?
+    let n = Uint::from_str(&n.to_string()).map_err(|_| {
+        PyValueError::new_err(format!(
+            "Yamaquasi only accepts positive integers with at most 150 decimal digits"
+        ))
+    })?;
+    if n.bits() > 512 {
+        return Err(PyValueError::new_err(format!(
+            "Yamaquasi only accepts positive integers with at most 150 decimal digits"
+        )));
+    }
+    let factors = py.allow_threads(|| yamaquasi::factor_smooth(n, factor_bits));
+    let l = PyList::empty(py);
+    for f in factors {
+        l.append(uint_to_py(py, &f))?;
+    }
+    Ok(l.into())
+}
+
+#[pyfunction]
+#[pyo3(
     signature = (n, curves, b1, b2, /, verbose = "silent", threads = None),
-    text_signature = "(n: int, curves: int, b1: int, b2: float, /, verbose=\"silent\", threads=None) -> List[int]"
+    text_signature = "(n: int, curves: int, b1: int, b2: float, /, verbose=\"silent\", threads=None) -> list[int]"
 )]
 fn ecm(
     py: Python<'_>,
@@ -202,7 +234,7 @@ fn ecm(
 #[pyfunction]
 #[pyo3(
     signature = (d, /, verbose = "silent", threads = None),
-    text_signature = "(d: int, /, verbose=\"silent\", threads=None) -> Tuple[int, List[int], List[Tuple[int,List[int]]]]"
+    text_signature = "(d: int, /, verbose=\"silent\", threads=None) -> tuple[int, list[int], list[tuple[int,list[int]]]]"
 )]
 /// Compute the class group of Q(sqrt(d)) where d is a negative integer
 /// such that d % 4 == 0 or 1.

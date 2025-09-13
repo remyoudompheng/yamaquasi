@@ -53,6 +53,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use arith::Num;
 use arith_montgomery::{MInt, ZmodN};
+use bnum::cast::CastFrom;
 use num_integer::Integer;
 
 const DEBUG: bool = false;
@@ -210,10 +211,39 @@ pub fn factor(n: Uint, alg: Algo, prefs: &Preferences) -> Result<Vec<Uint>, Fact
     };
     let tpool = tpool.as_ref();
     factor_impl(nred, alg, prefs, &mut factors, tpool);
-
     check_factors(&n, &factors)?;
     factors.sort();
     Ok(factors)
+}
+
+/// Partially factorize an integer heuristically finding
+/// all factors with bit length less than a specified size,
+/// with expected probability at least 99%.
+///
+/// Algorithm selection is automatic and multithreading is not used.
+pub fn factor_smooth(n: Uint, factor_bits: usize) -> Vec<Uint> {
+    if n.is_zero() {
+        return vec![n];
+    }
+    let mut factors = vec![];
+    let mut nred = n;
+    for (&p, div) in fbase::SMALL_PRIMES
+        .iter()
+        .zip(&fbase::SMALL_PRIMES_DIVIDERS)
+    {
+        loop {
+            let (q, r) = div.divmod_uint(&nred);
+            if r != 0 {
+                break;
+            }
+            nred = q;
+            factors.push(p.into());
+        }
+    }
+    factor_smooth_impl(nred, factor_bits, &mut factors);
+    // No primality testing of factors.
+    factors.sort();
+    factors
 }
 
 fn factor_impl(
@@ -504,6 +534,115 @@ fn factor_impl(
             factors.push(f);
         }
     }
+}
+
+fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
+    if n.is_one() {
+        return;
+    }
+    let is_perfect_power = {
+        if n.bits() <= 64 {
+            // Use native arithmetic is possible.
+            arith::perfect_power(n.low_u64()).map(|_pk @ (p, k)| (p.into(), k))
+        } else {
+            arith::perfect_power(n)
+        }
+    };
+    if let Some((p, k)) = is_perfect_power {
+        let mut facs = vec![];
+        factor_smooth_impl(p, factor_bits, &mut facs);
+        for _ in 0..k {
+            factors.extend_from_slice(&facs[..]);
+        }
+        return;
+    } else if pseudoprime(n) {
+        factors.push(n);
+        return;
+    }
+    let mut prefs = Preferences::default();
+    prefs.verbosity = Verbosity::Silent;
+    // Always try Pollard rho to clear very small factors
+    // 1024 iterations will catch 99% of 16-bit factors.
+    let mut nred: Uint = n;
+    let rho_iters = 1024;
+    if n.bits() <= 63 {
+        if let Some((a, b)) = pollard_rho::rho64(n.low_u64(), 2, rho_iters) {
+            factor_impl(a.into(), Algo::Rho, &prefs, factors, None);
+            nred = b.into();
+        }
+    } else {
+        if let Some((a_s, b)) = pollard_rho::rho_impl(&n, 2, rho_iters, prefs.verbosity) {
+            // Force rho for recursion
+            for a in a_s {
+                factor_impl(a, Algo::Rho, &prefs, factors, None);
+            }
+            nred = b;
+        }
+    }
+    if factor_bits <= 16 || pseudoprime(nred) {
+        factors.push(nred);
+        return;
+    }
+    // Settings finding ~99% of 32-bit factors (see ecm128::ecm128)
+    let (curves, b1, b2) = match factor_bits {
+        0..20 => (6, 40, 1080.),
+        20..24 => (8, 50, 1920.),
+        24..28 => (16, 100, 3000.),
+        _ => (20, 180, 7.7e3), // 28..32
+    };
+    if nred.bits() < 128 {
+        while let Some((a, b)) = ecm128::ecm(u128::cast_from(nred), curves, b1, b2, prefs.verbosity)
+        {
+            factor_impl(a.into(), Algo::Rho, &prefs, factors, None);
+            nred = b.into();
+            if pseudoprime(nred) {
+                factors.push(nred);
+                return;
+            }
+        }
+    } else {
+        // Try ECM
+        while let Some((a, b)) = ecm::ecm(nred, curves, b1 as usize, b2, &prefs, None) {
+            factor_impl(a.into(), Algo::Rho, &prefs, factors, None);
+            nred = b.into();
+            if pseudoprime(nred) {
+                factors.push(nred);
+                return;
+            }
+        }
+    }
+    if factor_bits < 32 {
+        return;
+    }
+    if factor_bits as f64 / nred.bits() as f64 > 0.4 {
+        // This is equivalent to full factoring
+        factor_impl(nred, Algo::Auto, &prefs, factors, None);
+        return;
+    }
+    // Otherwise keep using ECM
+    let (curves, b1, b2) = match factor_bits {
+        0..36 => (24, 350, 13.2e3),
+        36..40 => (60, 600, 20e3),
+        40..48 => (30, 1500, 81e3),
+        48..56 => (70, 3600, 181e3),
+        // Parameters from ecm::ecm_only
+        56..64 => (100, 10000, 554e3),
+        64..80 => (100, 100_000, 19e6),
+        80..96 => (200, 300_000, 156e6),
+        96..120 => (600, 3_000_000, 10e9),
+        120..144 => (2000, 15_000_000, 136e9),
+        144..168 => (10000, 60_000_000, 1500e9),
+        _ => (15000, 350_000_000, 49e12),
+    };
+    while let Some((a, b)) = ecm::ecm(nred, curves, b1 as usize, b2, &prefs, None) {
+        factor_impl(a.into(), Algo::Rho, &prefs, factors, None);
+        nred = b.into();
+        if pseudoprime(nred) {
+            factors.push(nred);
+            return;
+        }
+    }
+    factors.push(nred);
 }
 
 fn check_factors(n: &Uint, factors: &[Uint]) -> Result<(), FactoringFailure> {
@@ -867,6 +1006,53 @@ fn test_factor_ecm_edgecases() -> Result<(), bnum::errors::ParseIntError> {
     assert_eq!(fs[0] * fs[1], n);
 
     Ok(())
+}
+
+#[test]
+fn test_factor_smooth_random() {
+    // Test that factor_smooth catches almost all factor
+    // of advertised size.
+    // In debug mode, it is very slow, 1 sample per size is good enough.
+    const SAMPLES: usize = 1;
+    //const SAMPLES: usize = 20;
+    //const SAMPLES: usize = 1000;
+    for pbits in [12, 16, 20, 24, 32, 40, 48, 56, 63] {
+        for qbits in [std::cmp::min(pbits + 8, 63), 64, 127] {
+            let mut seed = 1234567_u128;
+            let mut ps = vec![];
+            let mut qs = vec![];
+            while ps.len() < SAMPLES || qs.len() < SAMPLES {
+                seed = seed.wrapping_mul(123456789_123456789);
+                let p = seed % (1 << pbits);
+                if isprime64(p as u64) {
+                    ps.push(p as u64);
+                }
+                seed = seed.wrapping_mul(123456789_123456789);
+                let q = seed % (1 << qbits);
+                if pseudoprime(q.into()) {
+                    qs.push(q);
+                }
+            }
+            let mut ok = 0;
+            let start = std::time::Instant::now();
+            //let mut prefs = Preferences::default();
+            //prefs.verbosity = Verbosity::Silent;
+            for i in 0..SAMPLES {
+                let n = Uint::from(ps[i]) * Uint::from(qs[i]);
+                let facs = factor_smooth(n, pbits);
+                //let facs = factor(n, Algo::Auto, &prefs).unwrap();
+                let mut expect = [ps[i] as u128, qs[i]].map(Uint::from);
+                expect.sort();
+                if facs.len() == 2 {
+                    assert!(facs == expect, "facs={facs:?} p={} q={}", ps[i], qs[i]);
+                    ok += 1;
+                }
+            }
+            let elapsed = start.elapsed().as_secs_f64() * 1000.;
+            eprintln!("{pbits}+{qbits} bits, factored {ok}/{SAMPLES} semiprimes in {elapsed:.2}ms");
+            assert!(ok >= SAMPLES - SAMPLES / 6);
+        }
+    }
 }
 
 #[test]

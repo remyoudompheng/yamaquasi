@@ -21,6 +21,7 @@ def factor(
     qs_use_double: bool | None = None,
 ) -> list[int]: ...
 
+def factor_smooth(n: int, factor_bits: int) -> list[int]: ...
 
 def quadratic_classgroup(
     d: int, /, verbose: str = "silent", threads: int | None = None
