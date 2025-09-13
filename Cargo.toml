@@ -1,9 +1,9 @@
 [package]
 name = "yamaquasi"
-version = "0.2.0"
+version = "0.2.1"
 rust-version = "1.65"
 edition = "2021"
-description = "A toy implementation of multiple polynomial quadratic sieve"
+description = "An integer factoring utility"
 license = "BSD3"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

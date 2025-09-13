@@ -7,21 +7,30 @@ articles when applicable.
 
 Yamaquasi can be used as a general-purpose factoring utility through command `ymqs`.
 
+It provides heuristics to factor small integers (below 128 bits) faster
+than some common computer algebra systems.
+
 It implements several variants of the Quadratic sieve factoring method with light
 boilerplate allowing it to completely factor most integers with fewer than
 110 decimal digits. In many cases larger numbers (up to 150 digits) can also
 be factored thanks to the ECM method.
 
-There is no guarantee to obtain a successful factorization even when input size
-is small enough due to edge cases (non squarefree integers, small factors,
-many factors), but most integers will be processed successfully.
-
 Utilities like YAFU (https://github.com/bbuhrow/yafu) can be used for more
-reliable or efficient factoring.
+reliable or efficient factoring especially for larger numbers.
 
 Yamaquasi can also be used to compute class groups of imaginary quadratic fields
-on a laptop, for discriminants up to 110 decimal digits.
+for discriminants up to 110 decimal digits.
 See [README_classgroup.md](README_classgroup.md) for details.
+
+# Changelog
+
+Version 0.2.1 (14 Sep 2025): this version includes fixes for a few failures,
+and a new `factor_smooth` API. The Python bindings (`pymqs`) can now be installed
+with pip and benefit from automated Github builds.
+
+Version 0.2.0 (Oct 2023): partial support for class group computations.
+
+Version 0.1.0 (Mar 2023): implementation of various factoring algorithms.
 
 # Usage
 
@@ -52,13 +61,19 @@ $ bin/ymqs --mode ecm 8034690221294951377709810461705813012611014968913964176506
 
 # Python module
 
-An experimental Python module is available. You can build it
-with `maturin`:
+A Python module (`pymqs`) is available to use yamaquasi capabilities in Python scripts.
+It can be installed directly from the Github URL:
+
+```
+uv pip install git+https://github.com/remyoudompheng/yamaquasi
+```
+
+Or manually from a checkout:
 
 ```
 source venv/bin/activate
 cd pymqs
-maturin develop --release
+pip install .
 ```
 
 It has a function `factor` and other more specific APIs (`ecm` and `quadratic_classgroup`):
@@ -79,6 +94,10 @@ The Python API returns factors as a list of Python integers. This is similar
 to SageMath API `ecm.factor()` but not SageMath `factor()` which returns
 a factorization object. When not using a timeout, the elements of the list
 are expected to be pseudoprimes.
+
+The `factor_smooth` function can be used to partially factor a number
+and obtain all prime factors below a given size with very high probability
+(at least 99%).
 
 # Available factoring algorithms
 

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "pymqs"
-version = "0.2.0"
+version = "0.2.1"
 authors = [ { name="Rémy Oudompheng", email="remyoudompheng@gmail.com" } ]
 description = "Integer factoring library"
 readme = "README.md"
