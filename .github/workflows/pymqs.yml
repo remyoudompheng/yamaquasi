@@ -5,7 +5,7 @@ name: pymqs
 on: [push, pull_request]
 
 jobs:
-  build_wheels:
+  build:
     name: Build wheels on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     continue-on-error: true
@@ -34,8 +34,8 @@ jobs:
       # Current min version for Rust
       MACOSX_DEPLOYMENT_TARGET: 10.12
 
-  build_sdist:
-    name: Build sdist
+  sdist:
+    name: Source tarball
     runs-on: ubuntu-24.04
 
     steps:
@@ -51,3 +51,42 @@ jobs:
         with:
           name: sdist
           path: dist/*.tar.gz
+
+  test:
+    needs: build
+    name: Test Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [
+          ubuntu-22.04,
+          ubuntu-24.04,
+          ubuntu-24.04-arm,
+          windows-2022,
+          windows-2025,
+          macos-13,
+          macos-14,
+          macos-15,
+          #macos-26-arm64,
+        ]
+        python-version: ['3.7', '3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          allow-prereleases: false
+      - uses: actions/download-artifact@v5
+        with:
+          path: wheelhouse
+          merge-multiple: true
+
+      # gmpy2 is missing binary wheels for Linux arm
+      - run: sudo apt-get install libmpfr-dev
+        if: ${{ startsWith( matrix.os , 'ubuntu' ) }}
+
+      - run: pip install gmpy2
+      - run: pip install --no-index --find-links wheelhouse pymqs
+      - run: python scripts/test_general.py -j1 1 120
