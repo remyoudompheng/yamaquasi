@@ -39,9 +39,9 @@ dependencies = [
 
 [[package]]
 name = "brunch"
-version = "0.5.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3932d710d985d35c7b08e7e439a6ac8607aa8f619d373eb1f808578cd3cd56e5"
+checksum = "d59d407be58876d4773a0137272a3bce681f4d2b25f9d4534fc1b70b2881f4b8"
 dependencies = [
  "dactyl",
  "unicode-width",
@@ -86,9 +86,12 @@ checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
 name = "dactyl"
-version = "0.7.4"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ecad1ab94b1336be6cff409436ad9ceedb0afd52a85d54132189c2c3babb049"
+checksum = "2886bf8426c23dfb0559bac6b3c6e36df2d035bee92901607a4f43bf89fb7450"
+dependencies = [
+ "num-traits",
+]
 
 [[package]]
 name = "either"
