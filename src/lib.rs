@@ -567,14 +567,14 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
     let rho_iters = 1024;
     if n.bits() <= 63 {
         if let Some((a, b)) = pollard_rho::rho64(n.low_u64(), 2, rho_iters) {
-            factor_impl(a.into(), Algo::Rho, &prefs, factors, None);
+            factor_impl(a.into(), Algo::Auto, &prefs, factors, None);
             nred = b.into();
         }
     } else {
         if let Some((a_s, b)) = pollard_rho::rho_impl(&n, 2, rho_iters, prefs.verbosity) {
             // Force rho for recursion
             for a in a_s {
-                factor_impl(a, Algo::Rho, &prefs, factors, None);
+                factor_impl(a, Algo::Auto, &prefs, factors, None);
             }
             nred = b;
         }
@@ -593,7 +593,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
     if nred.bits() < 128 {
         while let Some((a, b)) = ecm128::ecm(u128::cast_from(nred), curves, b1, b2, prefs.verbosity)
         {
-            factor_impl(a.into(), Algo::Rho, &prefs, factors, None);
+            factor_impl(a.into(), Algo::Auto, &prefs, factors, None);
             nred = b.into();
             if pseudoprime(nred) {
                 factors.push(nred);
@@ -603,7 +603,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
     } else {
         // Try ECM
         while let Some((a, b)) = ecm::ecm(nred, curves, b1 as usize, b2, &prefs, None) {
-            factor_impl(a.into(), Algo::Rho, &prefs, factors, None);
+            factor_impl(a.into(), Algo::Auto, &prefs, factors, None);
             nred = b.into();
             if pseudoprime(nred) {
                 factors.push(nred);
@@ -612,6 +612,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
         }
     }
     if factor_bits < 32 {
+        factors.push(nred);
         return;
     }
     if factor_bits as f64 / nred.bits() as f64 > 0.4 {
@@ -1005,6 +1006,27 @@ fn test_factor_ecm_edgecases() -> Result<(), bnum::errors::ParseIntError> {
     assert_eq!(fs.len(), 2);
     assert_eq!(fs[0] * fs[1], n);
 
+    Ok(())
+}
+
+#[test]
+fn test_factor_smooth() -> Result<(), bnum::errors::ParseIntError> {
+    let n = Uint::from_str(
+        "12201879382649676470194887538548324244326362954552609354733068712098984100",
+    )?;
+    let fs = factor_smooth(n, 55);
+    assert_eq!(fs.len(), 13);
+
+    let n = Uint::from_str(
+        "24091791282868184848805353591599648198248879500538357141333569815331594788",
+    )?;
+    let fs = factor_smooth(n, 55);
+    assert_eq!(fs.len(), 14);
+
+    let n = Uint::from_str("2491972896696220875515999140704747439734476676")?;
+    let fs = factor_smooth(n, 20);
+    // n = 2*2*3*23*229*443*14341*34883*98221*104123*17396053561176129467
+    assert_eq!(fs.len(), 11);
     Ok(())
 }
 
