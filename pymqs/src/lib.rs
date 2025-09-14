@@ -11,13 +11,13 @@ use pyo3::exceptions::{PyKeyboardInterrupt, PyValueError};
 use pyo3::ffi::PyLong_FromString;
 use pyo3::prelude::*;
 use pyo3::pyfunction;
-use pyo3::types::{PyList, PyLong};
-use pyo3::FromPyPointer;
+use pyo3::types::{PyList, PyInt};
+use pyo3::IntoPyObjectExt;
 
 use yamaquasi::{self, Algo, Int, Preferences, Uint, Verbosity};
 
 #[pymodule]
-fn pymqs(_: Python<'_>, m: &PyModule) -> PyResult<()> {
+fn pymqs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(factor, m)?)?;
     m.add_function(wrap_pyfunction!(factor_smooth, m)?)?;
     m.add_function(wrap_pyfunction!(ecm, m)?)?;
@@ -48,7 +48,7 @@ fn pymqs(_: Python<'_>, m: &PyModule) -> PyResult<()> {
 /// qs_interval_size: size of sieve intervals (a multiple of 32768)
 fn factor(
     py: Python<'_>,
-    n: &PyLong,
+    n: &Bound<'_, PyInt>,
     algo: &str,
     qs_fb_size: Option<u32>,
     qs_interval_size: Option<u32>,
@@ -79,7 +79,7 @@ fn factor(
             if interrupted.load(Ordering::Relaxed) {
                 return true;
             }
-            let sig = Python::with_gil(|py| py.check_signals().is_err());
+            let sig = Python::attach(|py| py.check_signals().is_err());
             if sig {
                 interrupted.store(true, Ordering::Relaxed);
                 if verbosity >= Verbosity::Info {
@@ -100,7 +100,7 @@ fn factor(
             "Yamaquasi only accepts positive integers with at most 150 decimal digits"
         )));
     }
-    let result = py.allow_threads(|| yamaquasi::factor(n, alg, &prefs));
+    let result = py.detach(|| yamaquasi::factor(n, alg, &prefs));
     if timeout.is_some()
         && Some(start.elapsed().as_secs_f64()) >= timeout
         && verbosity >= Verbosity::Info
@@ -122,7 +122,7 @@ fn factor(
     Ok(l.into())
 }
 
-fn uint_to_py<'py>(py: Python<'py>, n: &Uint) -> &'py PyLong {
+fn uint_to_py<'py>(py: Python<'py>, n: &Uint) -> Bound<'py, PyInt> {
     // Use string for conversion.
     // FIXME: this is ugly.
     let s = CString::new(n.to_string()).unwrap();
@@ -130,7 +130,7 @@ fn uint_to_py<'py>(py: Python<'py>, n: &Uint) -> &'py PyLong {
     let nullptr: *mut *mut c_char = std::ptr::null::<*mut c_char>() as *mut _;
     unsafe {
         let obj_ptr = PyLong_FromString(sptr, nullptr, 0);
-        PyLong::from_owned_ptr(py, obj_ptr)
+        Bound::from_owned_ptr(py, obj_ptr).cast_into_unchecked::<PyInt>()
     }
 }
 
@@ -143,7 +143,7 @@ fn uint_to_py<'py>(py: Python<'py>, n: &Uint) -> &'py PyLong {
 /// The result is a list whose product is the input argument.
 fn factor_smooth(
     py: Python<'_>,
-    n: &PyLong,
+    n: &Bound<'_, PyInt>,
     factor_bits: usize,
 ) -> PyResult<Py<PyList>> {
     // FIXME: handle interrupts?
@@ -157,7 +157,7 @@ fn factor_smooth(
             "Yamaquasi only accepts positive integers with at most 150 decimal digits"
         )));
     }
-    let factors = py.allow_threads(|| yamaquasi::factor_smooth(n, factor_bits));
+    let factors = py.detach(|| yamaquasi::factor_smooth(n, factor_bits));
     let l = PyList::empty(py);
     for f in factors {
         l.append(uint_to_py(py, &f))?;
@@ -172,7 +172,7 @@ fn factor_smooth(
 )]
 fn ecm(
     py: Python<'_>,
-    n: &PyLong,
+    n: &Bound<'_, PyInt>,
     curves: u64,
     b1: u64,
     b2: f64,
@@ -205,7 +205,7 @@ fn ecm(
     });
     let tpool = tpool.as_ref();
     let result = py
-        .allow_threads(|| yamaquasi::ecm::ecm(n, curves as usize, b1 as usize, b2, &prefs, tpool));
+        .detach(|| yamaquasi::ecm::ecm(n, curves as usize, b1 as usize, b2, &prefs, tpool));
     let (p, q) = match result {
         Some(t) => t,
         None => {
@@ -224,7 +224,7 @@ fn ecm(
         let nullptr: *mut *mut c_char = std::ptr::null::<*mut c_char>() as *mut _;
         let obj = unsafe {
             let obj_ptr = PyLong_FromString(sptr, nullptr, 0);
-            PyObject::from_owned_ptr(py, obj_ptr)
+            Bound::from_owned_ptr(py, obj_ptr)
         };
         l.append(obj)?;
     }
@@ -245,7 +245,7 @@ fn ecm(
 /// - a list of generators (p, [vi]) where [vi] are the coordinates of p
 fn quadratic_classgroup(
     py: Python<'_>,
-    d: &PyLong,
+    d: &Bound<'_, PyInt>,
     verbose: &str,
     threads: Option<usize>,
 ) -> PyResult<Py<PyAny>> {
@@ -279,7 +279,7 @@ fn quadratic_classgroup(
             .expect("cannot create thread pool")
     });
     let tpool = tpool.as_ref();
-    let result = py.allow_threads(|| yamaquasi::classgroup::classgroup(&d, &prefs, tpool));
+    let result = py.detach(|| yamaquasi::classgroup::classgroup(&d, &prefs, tpool));
     let grp = match result {
         Some(grp) => grp,
         None => {
@@ -288,5 +288,5 @@ fn quadratic_classgroup(
             )))
         }
     };
-    Ok((uint_to_py(py, &grp.h), grp.invariants, grp.gens).into_py(py))
+    (uint_to_py(py, &grp.h), grp.invariants, grp.gens).into_py_any(py)
 }

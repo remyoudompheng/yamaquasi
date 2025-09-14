@@ -10,7 +10,7 @@ name = "pymqs"
 crate-type = ["cdylib"]
  
 [dependencies]
-pyo3 = { version = "0.19", features = ["abi3-py37", "extension-module"] }
+pyo3 = { version = "0.26", features = ["abi3-py37", "extension-module"] }
 rayon = "1.8"
 yamaquasi = { path = ".." }
 
