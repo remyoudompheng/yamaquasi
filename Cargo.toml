@@ -22,7 +22,7 @@ rayon-core = "~1.12" # for MSRV
 wide = "0.7"
 
 [dev-dependencies]
-brunch = "0.4" # MSRV 1.66
+brunch = "0.3.7" # MSRV 1.63
 
 [profile.release]
 debug = 2

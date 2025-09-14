@@ -39,10 +39,11 @@ dependencies = [
 
 [[package]]
 name = "brunch"
-version = "0.4.0"
+version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d59d407be58876d4773a0137272a3bce681f4d2b25f9d4534fc1b70b2881f4b8"
+checksum = "cfded4095b369b7274ce6e4fcace479abd5e40dcd1869eb04ba7bccefa627df6"
 dependencies = [
+ "autocfg",
  "dactyl",
  "unicode-width",
 ]
