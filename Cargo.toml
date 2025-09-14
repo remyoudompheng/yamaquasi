@@ -7,6 +7,8 @@ description = "An integer factoring utility"
 license = "BSD3"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[resolver]
+incompatible-rust-versions = "fallback"
 
 [dependencies]
 arguments = "0.7"
@@ -15,7 +17,8 @@ bnum = { version = "0.8", features = ["numtraits"] }
 num-integer = "0.1"
 num-traits = "0.2"
 rand = "0.8"
-rayon = "1.8"
+rayon = "~1.10" # for MSRV
+rayon-core = "~1.12" # for MSRV
 wide = "0.7"
 
 [dev-dependencies]

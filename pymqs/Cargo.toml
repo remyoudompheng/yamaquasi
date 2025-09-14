@@ -1,6 +1,7 @@
 [package]
 name = "pymqs"
 version = "0.2.1"
+rust-version = "1.74"
 edition = "2021"
 description = "Python bindings for yamaquasi"
 license = "BSD3"
@@ -9,6 +10,9 @@ license = "BSD3"
 name = "pymqs"
 crate-type = ["cdylib"]
  
+[resolver]
+incompatible-rust-versions = "fallback"
+
 [dependencies]
 pyo3 = { version = "0.26", features = ["abi3-py37", "extension-module"] }
 rayon = "1.8"
