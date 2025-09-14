@@ -1,27 +1,32 @@
 name: Rust
 
-on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+on: [push, pull_request]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   build:
-
+    name: Run tests on Rust ${{ matrix.version }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Test MSRV and versions from Ubuntu 22.04, Debian 13
+        version: ["stable", "1.65.0", "1.75.0", "1.85.0"]
 
     steps:
     - uses: actions/checkout@v3
+    - name: Select Rust version
+      run: rustup override set ${{ matrix.version }}
     - name: Build
       run: cargo build --verbose
     - name: Check
       run: cargo check --benches
     - name: Check pymqs
       run: cargo check --manifest-path pymqs/Cargo.toml
+      # pymqs requires Rust 1.74 (pyo3 requirement)
+      if: ${{ matrix.version != '1.65.0' }}
     - name: Run tests
       run: cargo test --verbose
     - name: Run tests (AVX2)
