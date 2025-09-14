@@ -11,7 +11,7 @@ use pyo3::exceptions::{PyKeyboardInterrupt, PyValueError};
 use pyo3::ffi::PyLong_FromString;
 use pyo3::prelude::*;
 use pyo3::pyfunction;
-use pyo3::types::{PyList, PyInt};
+use pyo3::types::{PyInt, PyList};
 use pyo3::IntoPyObjectExt;
 
 use yamaquasi::{self, Algo, Int, Preferences, Uint, Verbosity};
@@ -91,14 +91,14 @@ fn factor(
     }));
     let alg = Algo::from_str(algo).map_err(|e| PyValueError::new_err(e.to_string()))?;
     let n = Uint::from_str(&n.to_string()).map_err(|_| {
-        PyValueError::new_err(format!(
-            "Yamaquasi only accepts positive integers with at most 150 decimal digits"
-        ))
+        PyValueError::new_err(
+            "Yamaquasi only accepts positive integers with at most 150 decimal digits".to_string(),
+        )
     })?;
     if n.bits() > 512 {
-        return Err(PyValueError::new_err(format!(
-            "Yamaquasi only accepts positive integers with at most 150 decimal digits"
-        )));
+        return Err(PyValueError::new_err(
+            "Yamaquasi only accepts positive integers with at most 150 decimal digits".to_string(),
+        ));
     }
     let result = py.detach(|| yamaquasi::factor(n, alg, &prefs));
     if timeout.is_some()
@@ -141,21 +141,17 @@ fn uint_to_py<'py>(py: Python<'py>, n: &Uint) -> Bound<'py, PyInt> {
 )]
 /// Partially factors an integer to find all prime factors below size `factor_bits`.
 /// The result is a list whose product is the input argument.
-fn factor_smooth(
-    py: Python<'_>,
-    n: &Bound<'_, PyInt>,
-    factor_bits: usize,
-) -> PyResult<Py<PyList>> {
+fn factor_smooth(py: Python<'_>, n: &Bound<'_, PyInt>, factor_bits: usize) -> PyResult<Py<PyList>> {
     // FIXME: handle interrupts?
     let n = Uint::from_str(&n.to_string()).map_err(|_| {
-        PyValueError::new_err(format!(
-            "Yamaquasi only accepts positive integers with at most 150 decimal digits"
-        ))
+        PyValueError::new_err(
+            "Yamaquasi only accepts positive integers with at most 150 decimal digits".to_string(),
+        )
     })?;
     if n.bits() > 512 {
-        return Err(PyValueError::new_err(format!(
+        return Err(PyValueError::new_err(
             "Yamaquasi only accepts positive integers with at most 150 decimal digits"
-        )));
+        .to_string()));
     }
     let factors = py.detach(|| yamaquasi::factor_smooth(n, factor_bits));
     let l = PyList::empty(py);
@@ -185,14 +181,14 @@ fn ecm(
     prefs.threads = threads;
     prefs.verbosity = verbosity;
     let n = Uint::from_str(&n.to_string()).map_err(|_| {
-        PyValueError::new_err(format!(
-            "Yamaquasi only accepts positive integers with at most 150 decimal digits"
-        ))
+        PyValueError::new_err(
+            "Yamaquasi only accepts positive integers with at most 150 decimal digits".to_string()
+        )
     })?;
     if n.bits() > 512 {
-        return Err(PyValueError::new_err(format!(
-            "Yamaquasi only accepts positive integers with at most 150 decimal digits"
-        )));
+        return Err(PyValueError::new_err(
+            "Yamaquasi only accepts positive integers with at most 150 decimal digits".to_string()
+        ));
     }
     let tpool: Option<rayon::ThreadPool> = prefs.threads.map(|t| {
         if prefs.verbose(Verbosity::Verbose) {
@@ -204,8 +200,8 @@ fn ecm(
             .expect("cannot create thread pool")
     });
     let tpool = tpool.as_ref();
-    let result = py
-        .detach(|| yamaquasi::ecm::ecm(n, curves as usize, b1 as usize, b2, &prefs, tpool));
+    let result =
+        py.detach(|| yamaquasi::ecm::ecm(n, curves as usize, b1 as usize, b2, &prefs, tpool));
     let (p, q) = match result {
         Some(t) => t,
         None => {
@@ -255,19 +251,19 @@ fn quadratic_classgroup(
     prefs.threads = threads;
     prefs.verbosity = verbosity;
     let d = Int::from_str(&d.to_string()).map_err(|_| {
-        PyValueError::new_err(format!(
-            "Yamaquasi only accepts negative integers with at most 75 decimal digits"
-        ))
+        PyValueError::new_err(
+            "Yamaquasi only accepts negative integers with at most 75 decimal digits".to_string(),
+        )
     })?;
     if !d.is_negative() || d.unsigned_abs().bits() > 250 {
-        return Err(PyValueError::new_err(format!(
+        return Err(PyValueError::new_err(
             "Yamaquasi only accepts negative integers with at most 75 decimal digits"
-        )));
+        .to_string()));
     }
     if d.bit(1) {
-        return Err(PyValueError::new_err(format!(
-            "Discriminant must be 0 or 1 mod 4"
-        )));
+        return Err(PyValueError::new_err(
+            "Discriminant must be 0 or 1 mod 4".to_string()
+        ));
     }
     let tpool: Option<rayon::ThreadPool> = prefs.threads.map(|t| {
         if prefs.verbose(Verbosity::Verbose) {
@@ -283,9 +279,9 @@ fn quadratic_classgroup(
     let grp = match result {
         Some(grp) => grp,
         None => {
-            return Err(PyValueError::new_err(format!(
-                "Classgroup computation failure"
-            )))
+            return Err(PyValueError::new_err(
+                "Classgroup computation failure".to_string()
+            ))
         }
     };
     (uint_to_py(py, &grp.h), grp.invariants, grp.gens).into_py_any(py)
