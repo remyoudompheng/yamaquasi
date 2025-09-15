@@ -566,12 +566,12 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
     let mut nred: Uint = n;
     let rho_iters = 1024;
     if n.bits() <= 63 {
-        if let Some((a, b)) = pollard_rho::rho64(n.low_u64(), 2, rho_iters) {
+        while let Some((a, b)) = pollard_rho::rho64(nred.low_u64(), 2, rho_iters) {
             factor_impl(a.into(), Algo::Auto, &prefs, factors, None);
             nred = b.into();
         }
     } else {
-        if let Some((a_s, b)) = pollard_rho::rho_impl(&n, 2, rho_iters, prefs.verbosity) {
+        if let Some((a_s, b)) = pollard_rho::rho_impl(&nred, 2, rho_iters, prefs.verbosity) {
             // Force rho for recursion
             for a in a_s {
                 factor_impl(a, Algo::Auto, &prefs, factors, None);
@@ -586,8 +586,10 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
     // Settings finding ~99% of 32-bit factors (see ecm128::ecm128)
     let (curves, b1, b2) = match factor_bits {
         0..=19 => (6, 40, 1080.),
-        20..=23 => (8, 50, 1920.),
-        24..=27 => (16, 100, 3000.),
+        20..=21 => (8, 50, 1920.),
+        22..=23 => (10, 70, 1920.),
+        24..=25 => (16, 100, 3000.),
+        26..=27 => (20, 150, 3000.),
         _ => (20, 180, 7.7e3), // 28..32
     };
     if nred.bits() < 128 {
@@ -630,7 +632,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
         52..=55 => (80, 6000, 181e3),
         56..=59 => (100, 10000, 323e3),
         // Parameters from ecm::ecm_only
-        60..=63 => (150, 15_000, 554e3),
+        60..=63 => (200, 15_000, 554e3),
         64..=79 => (100, 100_000, 19e6),
         80..=95 => (200, 300_000, 156e6),
         96..=119 => (600, 3_000_000, 10e9),
@@ -1041,9 +1043,9 @@ fn test_factor_smooth_random() {
     const SAMPLES: usize = 1;
     //const SAMPLES: usize = 20;
     //const SAMPLES: usize = 1000;
+    let mut seed = 1234567_u128;
     for pbits in [12, 16, 20, 24, 32, 40, 48, 56, 63] {
         for qbits in [std::cmp::min(pbits + 8, 63), 64, 127] {
-            let mut seed = 1234567_u128;
             let mut ps = vec![];
             let mut qs = vec![];
             while ps.len() < SAMPLES || qs.len() < SAMPLES {
@@ -1060,12 +1062,9 @@ fn test_factor_smooth_random() {
             }
             let mut ok = 0;
             let start = std::time::Instant::now();
-            //let mut prefs = Preferences::default();
-            //prefs.verbosity = Verbosity::Silent;
             for i in 0..SAMPLES {
                 let n = Uint::from(ps[i]) * Uint::from(qs[i]);
                 let facs = factor_smooth(n, pbits);
-                //let facs = factor(n, Algo::Auto, &prefs).unwrap();
                 let mut expect = [ps[i] as u128, qs[i]].map(Uint::from);
                 expect.sort();
                 if facs.len() == 2 {
@@ -1075,6 +1074,25 @@ fn test_factor_smooth_random() {
             }
             let elapsed = start.elapsed().as_secs_f64() * 1000.;
             eprintln!("{pbits}+{qbits} bits, factored {ok}/{SAMPLES} semiprimes in {elapsed:.2}ms");
+            assert!(ok >= SAMPLES - SAMPLES / 6);
+
+            // Check that adding tiny factors does not affect the success rate.
+            let mut ok = 0;
+            let start = std::time::Instant::now();
+            for i in 0..SAMPLES {
+                let n = Uint::from(ps[i]) * Uint::from(qs[i]) * Uint::from(79608931_u64);
+                let facs = factor_smooth(n, pbits);
+                let mut expect = [67, 733, 1621, ps[i] as u128, qs[i]].map(Uint::from);
+                expect.sort();
+                if facs.len() == 5 {
+                    assert!(facs == expect, "facs={facs:?} p={} q={}", ps[i], qs[i]);
+                    ok += 1;
+                }
+            }
+            let elapsed = start.elapsed().as_secs_f64() * 1000.;
+            eprintln!(
+                "small+{pbits}+{qbits} bits, factored {ok}/{SAMPLES} semiprimes in {elapsed:.2}ms"
+            );
             assert!(ok >= SAMPLES - SAMPLES / 6);
         }
     }
