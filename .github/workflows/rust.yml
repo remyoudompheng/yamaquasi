@@ -33,3 +33,58 @@ jobs:
       env:
         RUSTFLAGS: -C target-cpu=x86-64-v3
       run: cargo test --verbose
+
+  binaries:
+    name: Binaries for ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+          - runner: macos-14
+            target: x86_64-apple-darwin
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v3
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Install musl build tools
+        run: |
+          sudo apt install -y musl-tools pkg-config
+
+      - name: Toolchain
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --target ${{ matrix.target }} --release
+
+      - name: Compress
+        run: xz -kv9 < target/${{ matrix.target }}/release/ymqs.exe > target/${{ matrix.target }}/release/ymqs.xz
+        if: ${{ startsWith( matrix.runner , 'windows' ) }}
+
+      - name: Compress
+        run: xz -kv9 target/${{ matrix.target }}/release/ymqs
+        if: ${{ !startsWith( matrix.runner , 'windows' ) }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ymqs.${{ matrix.target }}.xz
+          path: |
+            target/${{ matrix.target }}/release/ymqs.xz
