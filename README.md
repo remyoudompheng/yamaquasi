@@ -24,9 +24,19 @@ See [README_classgroup.md](README_classgroup.md) for details.
 
 # Changelog
 
-Version 0.2.1 (14 Sep 2025): this version includes fixes for a few failures,
-and a new `factor_smooth` API. The Python bindings (`pymqs`) can now be installed
-with pip and benefit from automated Github builds.
+Version 0.2.2 (20 Sep 2025)
+
+- bug fixes for `factor_smooth` API
+- fix compatibility with MSRV declaration
+- properly package pymqs type hints
+- build ymqs binaries in CI
+
+Version 0.2.1 (14 Sep 2025):
+
+- fixes for a few failures
+- new `factor_smooth` API
+- Python bindings `pymqs` can now be installed with pip
+- build `pymqs` wheels in CI
 
 Version 0.2.0 (Oct 2023): partial support for class group computations.
 
