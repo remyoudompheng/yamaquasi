@@ -1,6 +1,6 @@
 [package]
 name = "yamaquasi"
-version = "0.2.2"
+version = "0.2.3"
 rust-version = "1.65"
 edition = "2021"
 description = "An integer factoring utility"
