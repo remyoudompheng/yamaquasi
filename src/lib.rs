@@ -570,6 +570,11 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
             factor_impl(a.into(), Algo::Auto, &prefs, factors, None);
             nred = b.into();
         }
+    } else if n.bits() <= 128 {
+        while let Some((a, b)) = pollard_rho::rho128(u128::cast_from(nred), 2, rho_iters) {
+            factor_impl(a.into(), Algo::Auto, &prefs, factors, None);
+            nred = b.into();
+        }
     } else {
         if let Some((a_s, b)) = pollard_rho::rho_impl(&nred, 2, rho_iters, prefs.verbosity) {
             // Force rho for recursion
@@ -586,11 +591,12 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
     // Settings finding ~99% of 32-bit factors (see ecm128::ecm128)
     let (curves, b1, b2) = match factor_bits {
         0..=19 => (6, 40, 1080.),
-        20..=21 => (8, 50, 1920.),
-        22..=23 => (10, 70, 1920.),
-        24..=25 => (16, 100, 3000.),
-        26..=27 => (20, 150, 3000.),
-        _ => (20, 180, 7.7e3), // 28..32
+        20..=21 => (8, 60, 1080.),
+        22..=23 => (12, 80, 1920.),
+        24..=25 => (12, 100, 3000.),
+        26..=27 => (16, 150, 3000.),
+        28..=29 => (20, 150, 5040.),
+        _ => (24, 250, 7.7e3), // 30..32
     };
     if nred.bits() < 128 {
         while let Some((a, b)) = ecm128::ecm(u128::cast_from(nred), curves, b1, b2, prefs.verbosity)
