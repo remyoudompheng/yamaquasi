@@ -11,8 +11,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-13 is x86, macos-14 is arm64
-        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, windows-11-arm, macos-13, macos-14]
+        # macos-15-intel is x86, macos-14 is arm64
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, windows-11-arm, macos-15-intel, macos-14]
 
     steps:
       - uses: actions/checkout@v5
@@ -63,9 +63,9 @@ jobs:
           ubuntu-24.04-arm,
           windows-2022,
           windows-2025,
-          macos-13,
           macos-14,
           macos-15,
+          macos-15-intel,
           #macos-26-arm64,
         ]
         # Python 3.7 is not available on all runners
