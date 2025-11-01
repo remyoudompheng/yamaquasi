@@ -30,7 +30,7 @@
 
 use num_integer::Integer;
 
-use crate::arith_montgomery::{gcd_factors, mg_2adic_inv, mg_mul, MInt, ZmodN};
+use crate::arith_montgomery::{gcd_factors, mg_2adic_inv, mg_mul, MInt, ZmodN, M128};
 use crate::{Uint, Verbosity};
 
 /// Attempt to factor a double large prime from quadratic sieve
@@ -106,6 +106,61 @@ pub fn rho64(n: u64, c: u64, iters: u64) -> Option<(u64, u64)> {
         }
     }
     let d = Integer::gcd(&n, &prod);
+    if d > 1 && d < n {
+        return Some((d, n / d));
+    }
+    None
+}
+
+#[doc(hidden)]
+pub fn rho128(n: u128, c: u128, iters: u64) -> Option<(u128, u128)> {
+    let ninv = M128::inv_2adic(n);
+    // Perform x => x^2 + c on the Montgomery representation
+    // So this is actually: xR => x^2 R + c where R=2^128.
+    //
+    // The seed is always 2.
+    //
+    // Invariants:
+    // x1 = f^e1(seed) and x2=f^e2(seed)
+    // 3/2 e1 <= e2 <= 2 e1 - 1
+    let (mut x1, mut x2) = (M128(2_u128), M128(2_u128));
+    let mut prod = M128(1);
+    let mut next_interval_start = 0;
+    let mut next_interval_end = 1;
+    for e2 in 1..iters {
+        x2 = M128::mul(n, ninv, x2, x2);
+        x2.0 += c; // we tolerate x2==n (it will be absorbed by next M128::mul)
+        if e2 < next_interval_start {
+            continue;
+        }
+        // We are in the interval, compare.
+        let prodnext = M128::mul(n, ninv, prod, M128(x1.0.abs_diff(x2.0)));
+        if prodnext.0 == 0 {
+            // Probably the previous value had a nontrivial GCD with n
+            // and the remaining factor was multiplied in.
+            let d = Integer::gcd(&n, &x1.0.abs_diff(x2.0));
+            if d > 1 && d < n {
+                return Some((d, n / d));
+            }
+        }
+        if e2 >= 512 && e2 % 128 == 127 {
+            let d = Integer::gcd(&n, &prod.0);
+            if d > 1 && d < n {
+                return Some((d, n / d));
+            }
+        }
+        prod = prodnext;
+        if e2 == next_interval_end {
+            // Set e1 = e2
+            x1 = x2;
+            // Next interval is (2^k + 2^(k-1), 2^(k+1) - 1) (length 2^(k-1))
+            let pow2k = e2 + 1;
+            debug_assert!(pow2k & (pow2k - 1) == 0);
+            next_interval_start = pow2k + pow2k / 2;
+            next_interval_end = 2 * pow2k - 1;
+        }
+    }
+    let d = Integer::gcd(&n, &prod.0);
     if d > 1 && d < n {
         return Some((d, n / d));
     }

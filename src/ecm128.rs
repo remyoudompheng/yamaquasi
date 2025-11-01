@@ -15,7 +15,7 @@
 use bnum::cast::CastFrom;
 use num_integer::Integer;
 
-use crate::arith_montgomery::{self, ZmodN};
+use crate::arith_montgomery::{ZmodN, M128};
 use crate::ecm;
 use crate::params::stage2_params;
 use crate::{Preferences, Uint, Verbosity};
@@ -258,108 +258,6 @@ fn ecm_curve(
         return Some((d, n / d));
     }
     None
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct M128(u128);
-
-// Montgomery modular arithmetic for 128-bit moduli.
-// If the modulus fits in 64 bits, operations are defined with
-// multiplier 2^64 instead of 2^128.
-impl M128 {
-    fn inv_2adic(n: u128) -> u128 {
-        debug_assert!(n % 2 == 1);
-        // Use 64-bit inverse as starting point.
-        let mut x = arith_montgomery::mg_2adic_inv(n as u64) as u128;
-        if n >> 64 == 0 {
-            return x;
-        }
-        loop {
-            let rem = n.wrapping_mul(x) - 1;
-            if rem == 0 {
-                break;
-            }
-            x += 1 << rem.trailing_zeros();
-        }
-        assert!(n.wrapping_mul(x) == 1);
-        1 + !x
-    }
-
-    // Compute 2^128 and 2^256 modulo n.
-    fn r_r2(n: u128, ninv: u128) -> (M128, M128) {
-        // (2^128 - n) % n
-        let r = M128(0_u128.wrapping_sub(n) % n);
-        if n >> 64 == 0 {
-            return (M128((1 << 64) % n), r);
-        }
-        // 2^256 % n
-        // This is the Montgomery representation of 2^128.
-        let two = M128::add(n, r, r);
-        let mut r2 = two;
-        for _ in 0..7 {
-            r2 = Self::mul(n, ninv, r2, r2);
-        }
-        (r, r2)
-    }
-
-    fn add(n: u128, x: M128, y: M128) -> M128 {
-        let (x, y) = (x.0, y.0);
-        let my = n - y;
-        if x >= my {
-            M128(x - my)
-        } else {
-            M128(x + y)
-        }
-    }
-
-    fn sub(n: u128, x: M128, y: M128) -> M128 {
-        let (x, y) = (x.0, y.0);
-        if x >= y {
-            M128(x - y)
-        } else {
-            M128(x + (n - y))
-        }
-    }
-
-    fn mul(n: u128, ninv: u128, x: M128, y: M128) -> M128 {
-        if n >> 64 == 0 {
-            return M128(
-                arith_montgomery::mg_mul(n as u64, ninv as u64, x.0 as u64, y.0 as u64) as u128,
-            );
-        }
-        fn mul256(x: u128, y: u128) -> (u128, u128) {
-            // Compute the 256-bit product xy.
-            let (x0, x1) = (x as u64, (x >> 64) as u64);
-            let (y0, y1) = (y as u64, (y >> 64) as u64);
-            let mut xy0 = x0 as u128 * y0 as u128;
-            let mut xy1 = x1 as u128 * y1 as u128;
-            let (mid, mut c) = (x0 as u128 * y1 as u128).overflowing_add(x1 as u128 * y0 as u128);
-            if c {
-                xy1 += 1 << 64;
-            }
-            (xy0, c) = xy0.overflowing_add(mid.wrapping_shl(64));
-            xy1 += mid >> 64;
-            if c {
-                xy1 += 1;
-            }
-            (xy0, xy1)
-        }
-        // Apply the REDC algorithm.
-        let (xy0, xy1) = mul256(x.0, y.0);
-        if xy0 == 0 {
-            return M128(xy1);
-        }
-        // mul cannot be zero.
-        let m = xy0.wrapping_mul(ninv);
-        // Return xy1 + 1 + highword(mul * n).
-        let mn1 = mul256(m, n).1;
-        let d = n - mn1 - 1;
-        if xy1 >= d {
-            M128(xy1 - d)
-        } else {
-            M128(xy1 + mn1 + 1)
-        }
-    }
 }
 
 /// An elliptic curve in twisted Edwards form -ax²+y² = 1 + dx²y²
