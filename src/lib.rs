@@ -221,6 +221,8 @@ pub fn factor(n: Uint, alg: Algo, prefs: &Preferences) -> Result<Vec<Uint>, Fact
 /// with expected probability at least 99%.
 ///
 /// Algorithm selection is automatic and multithreading is not used.
+/// Parameters are optimized for the case where many small factors
+/// are expected.
 pub fn factor_smooth(n: Uint, factor_bits: usize) -> Vec<Uint> {
     if n.is_zero() {
         return vec![n];
@@ -564,16 +566,43 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
     // Always try Pollard rho to clear very small factors
     // 1024 iterations will catch 99% of 16-bit factors.
     let mut nred: Uint = n;
-    let rho_iters = 1024;
-    if n.bits() <= 63 {
+    if nred.bits() >= 64 {
+        // Quick Rho run to eliminate small factors.
+        let rho_fast_iters: u64 = 128;
+        if nred.bits() <= 128 {
+            if let Some((a, b)) = pollard_rho::rho128(u128::cast_from(nred), 2, rho_fast_iters) {
+                factor_impl(a.into(), Algo::Auto, &prefs, factors, None);
+                nred = b.into();
+            }
+        } else {
+            if let Some((a_s, b)) = pollard_rho::rho_impl(&nred, 2, rho_fast_iters, prefs.verbosity)
+            {
+                // Force rho for recursion
+                for a in a_s {
+                    factor_impl(a, Algo::Auto, &prefs, factors, None);
+                }
+                nred = b;
+            }
+        }
+    }
+    let rho_iters = 512;
+    if nred.bits() <= 63 {
         while let Some((a, b)) = pollard_rho::rho64(nred.low_u64(), 2, rho_iters) {
             factor_impl(a.into(), Algo::Auto, &prefs, factors, None);
             nred = b.into();
+            if pseudoprime(nred) {
+                factors.push(nred);
+                return;
+            }
         }
-    } else if n.bits() <= 128 {
+    } else if nred.bits() <= 128 {
         while let Some((a, b)) = pollard_rho::rho128(u128::cast_from(nred), 2, rho_iters) {
             factor_impl(a.into(), Algo::Auto, &prefs, factors, None);
             nred = b.into();
+            if pseudoprime(nred) {
+                factors.push(nred);
+                return;
+            }
         }
     } else {
         if let Some((a_s, b)) = pollard_rho::rho_impl(&nred, 2, rho_iters, prefs.verbosity) {
@@ -584,13 +613,15 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
             nred = b;
         }
     }
-    if factor_bits <= 16 || pseudoprime(nred) {
+    if factor_bits <= 14 || pseudoprime(nred) {
         factors.push(nred);
         return;
     }
     // Settings finding ~99% of 32-bit factors (see ecm128::ecm128)
     let (curves, b1, b2) = match factor_bits {
-        0..=19 => (6, 40, 1080.),
+        0..=15 => (4, 20, 660.),
+        16..=17 => (4, 30, 660.),
+        18..=19 => (6, 40, 1080.),
         20..=21 => (8, 60, 1080.),
         22..=23 => (12, 80, 1920.),
         24..=25 => (12, 100, 3000.),
