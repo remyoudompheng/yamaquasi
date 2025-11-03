@@ -266,6 +266,8 @@ fn factor_impl(
         if n.bits() <= 64 {
             // Use native arithmetic is possible.
             arith::perfect_power(n.low_u64()).map(|_pk @ (p, k)| (p.into(), k))
+        } else if n.bits() <= 128 {
+            arith::perfect_power(u128::cast_from(n)).map(|_pk @ (p, k)| (p.into(), k))
         } else {
             arith::perfect_power(n)
         }
@@ -542,22 +544,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
     if n.is_one() {
         return;
     }
-    let is_perfect_power = {
-        if n.bits() <= 64 {
-            // Use native arithmetic is possible.
-            arith::perfect_power(n.low_u64()).map(|_pk @ (p, k)| (p.into(), k))
-        } else {
-            arith::perfect_power(n)
-        }
-    };
-    if let Some((p, k)) = is_perfect_power {
-        let mut facs = vec![];
-        factor_smooth_impl(p, factor_bits, &mut facs);
-        for _ in 0..k {
-            factors.extend_from_slice(&facs[..]);
-        }
-        return;
-    } else if pseudoprime(n) {
+    if pseudoprime(n) {
         factors.push(n);
         return;
     }
@@ -573,6 +560,10 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
             if let Some((a, b)) = pollard_rho::rho128(u128::cast_from(nred), 2, rho_fast_iters) {
                 factor_impl(a.into(), Algo::Auto, &prefs, factors, None);
                 nred = b.into();
+                if pseudoprime(nred) {
+                    factors.push(nred);
+                    return;
+                }
             }
         } else {
             if let Some((a_s, b)) = pollard_rho::rho_impl(&nred, 2, rho_fast_iters, prefs.verbosity)
@@ -582,6 +573,10 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
                     factor_impl(a, Algo::Auto, &prefs, factors, None);
                 }
                 nred = b;
+                if pseudoprime(nred) {
+                    factors.push(nred);
+                    return;
+                }
             }
         }
     }
@@ -611,9 +606,13 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
                 factor_impl(a, Algo::Auto, &prefs, factors, None);
             }
             nred = b;
+            if pseudoprime(nred) {
+                factors.push(nred);
+                return;
+            }
         }
     }
-    if factor_bits <= 14 || pseudoprime(nred) {
+    if factor_bits <= 14 {
         factors.push(nred);
         return;
     }
