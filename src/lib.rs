@@ -582,7 +582,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
     }
     let rho_iters = 512;
     if nred.bits() <= 63 {
-        while let Some((a, b)) = pollard_rho::rho64(nred.low_u64(), 2, rho_iters) {
+        while let Some((a, b)) = pollard_rho::rho64(nred.low_u64(), 3, rho_iters) {
             factor_impl(a.into(), Algo::Auto, &prefs, factors, None);
             nred = b.into();
             if pseudoprime(nred) {
@@ -591,7 +591,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
             }
         }
     } else if nred.bits() <= 128 {
-        while let Some((a, b)) = pollard_rho::rho128(u128::cast_from(nred), 2, rho_iters) {
+        while let Some((a, b)) = pollard_rho::rho128(u128::cast_from(nred), 3, rho_iters) {
             factor_impl(a.into(), Algo::Auto, &prefs, factors, None);
             nred = b.into();
             if pseudoprime(nred) {
@@ -600,7 +600,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
             }
         }
     } else {
-        if let Some((a_s, b)) = pollard_rho::rho_impl(&nred, 2, rho_iters, prefs.verbosity) {
+        if let Some((a_s, b)) = pollard_rho::rho_impl(&nred, 3, rho_iters, prefs.verbosity) {
             // Force rho for recursion
             for a in a_s {
                 factor_impl(a, Algo::Auto, &prefs, factors, None);
@@ -650,7 +650,13 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
         }
     }
     if factor_bits < 32 {
-        factors.push(nred);
+        if (nred.bits() as usize) < 2 * factor_bits && !pseudoprime(nred) {
+            // If nred is composite and small, it has necessarily
+            // a small factor.
+            factor_impl(nred, Algo::Auto, &prefs, factors, None);
+        } else {
+            factors.push(nred);
+        }
         return;
     }
     if factor_bits as f64 / nred.bits() as f64 > 0.4 {
@@ -1068,6 +1074,26 @@ fn test_factor_smooth() -> Result<(), bnum::errors::ParseIntError> {
     let fs = factor_smooth(n, 20);
     // n = 2*2*3*23*229*443*14341*34883*98221*104123*17396053561176129467
     assert_eq!(fs.len(), 11);
+
+    // Some primes below 1000 can escape all tests:
+    let n = Uint::from(242153041166900_u64);
+    let fs = factor_smooth(n, 19);
+    // n = 2*2*5*5*199*281*853*50767
+    assert_eq!(fs.len(), 8);
+
+    let n = Uint::from(902002007847990_u64);
+    let fs = factor_smooth(n, 19);
+    assert_eq!(fs.len(), 9, "{fs:?}");
+
+    let fs = factor_smooth(Uint::from(70054262122659589807_u128), 18);
+    assert_eq!(fs.len(), 7, "{fs:?}");
+    let fs = factor_smooth(Uint::from(3977516652591602527_u128), 18);
+    assert_eq!(fs.len(), 8, "{fs:?}");
+    let fs = factor_smooth(Uint::from(3452559913281303_u64), 18);
+    assert_eq!(fs.len(), 10, "{fs:?}");
+    let fs = factor_smooth(Uint::from(56891511204557826214_u128), 18);
+    assert_eq!(fs.len(), 9, "{fs:?}");
+
     Ok(())
 }
 
