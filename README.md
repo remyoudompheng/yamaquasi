@@ -24,6 +24,10 @@ See [README_classgroup.md](README_classgroup.md) for details.
 
 # Changelog
 
+Version 0.3 (23 Nov 2025)
+
+- performance improvements for `factor_smooth`
+
 Version 0.2.3 (21 Sep 2025)
 
 - fix `pymqs` packaging
