@@ -7,6 +7,8 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use bnum::cast::CastFrom;
+
 use pyo3::exceptions::{PyKeyboardInterrupt, PyValueError};
 use pyo3::ffi::PyLong_FromString;
 use pyo3::prelude::*;
@@ -17,12 +19,15 @@ use pyo3::IntoPyObjectExt;
 use yamaquasi::{self, Algo, Int, Preferences, Uint, Verbosity};
 
 #[pymodule]
-fn pymqs(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(factor, m)?)?;
-    m.add_function(wrap_pyfunction!(factor_smooth, m)?)?;
-    m.add_function(wrap_pyfunction!(ecm, m)?)?;
-    m.add_function(wrap_pyfunction!(quadratic_classgroup, m)?)?;
-    Ok(())
+mod pymqs {
+    #[pymodule_export]
+    use super::factor;
+    #[pymodule_export]
+    use super::factor_smooth;
+    #[pymodule_export]
+    use super::ecm;
+    #[pymodule_export]
+    use super::quadratic_classgroup;
 }
 
 #[pyfunction]
@@ -123,13 +128,16 @@ fn factor(
 }
 
 fn uint_to_py<'py>(py: Python<'py>, n: &Uint) -> Bound<'py, PyInt> {
+    if n.bits() <= 128 {
+        return PyInt::new(py, u128::cast_from(*n));
+    }
     // Use string for conversion.
     // FIXME: this is ugly.
-    let s = CString::new(n.to_string()).unwrap();
+    let s = CString::new(n.to_str_radix(16)).unwrap();
     let sptr = s.as_ptr();
     let nullptr: *mut *mut c_char = std::ptr::null::<*mut c_char>() as *mut _;
     unsafe {
-        let obj_ptr = PyLong_FromString(sptr, nullptr, 0);
+        let obj_ptr = PyLong_FromString(sptr, nullptr, 16);
         Bound::from_owned_ptr(py, obj_ptr).cast_into_unchecked::<PyInt>()
     }
 }

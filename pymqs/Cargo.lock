@@ -179,6 +179,7 @@ dependencies = [
 name = "pymqs"
 version = "0.2.3"
 dependencies = [
+ "bnum",
  "pyo3",
  "rayon",
  "yamaquasi",
