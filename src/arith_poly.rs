@@ -291,7 +291,7 @@ impl<'a> Poly<'a> {
                 // leading coefficient is quo[2n-3]
                 Self::_longmul(&zr, &mut quo, &pp[n..], &qinv[1..], &mut tmp);
                 // pp -= q * quo
-                Self::_longmul(&zr, &mut pq, &quo[n - 1..2 * n - 2], &q, &mut tmp);
+                Self::_longmul(&zr, &mut pq, &quo[n - 1..2 * n - 2], q, &mut tmp);
                 debug_assert!((n..pp.len()).all(|i| pp[i] == pq[i]));
                 // We only need the remainder (low words).
                 Self::_sub(zn, &mut pp[..n], &pq[..n]);

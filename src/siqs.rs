@@ -29,6 +29,8 @@
 //! Parts of this file are used by the class group computation [crate::classgroup]
 //! and accept negative values of N.
 
+#![allow(clippy::needless_range_loop)]
+
 use std::cmp::{max, min};
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -335,7 +337,7 @@ pub fn siqs_calibrate(n: Uint) {
                     let mut recycled = None;
                     for idx in 0..polys_per_a {
                         if idx > 0 {
-                            pol.next(&s, &a);
+                            pol.next(&s, a);
                         }
                         assert!(pol.idx == idx);
                         recycled = Some(siqs_sieve_poly(&s, a, &pol, recycled));
@@ -826,7 +828,7 @@ pub fn select_a(f: &Factors, want: usize, v: Verbosity) -> Vec<Uint> {
             }
         }
         if candidates.len() > 2 * want && iters % 10 == 0 {
-            let mut candidates = Vec::from_iter(candidates.into_iter());
+            let mut candidates = Vec::from_iter(candidates);
             candidates.sort_by_key(|&c| U256::cast_from(c).abs_diff(f.target));
             candidates.truncate(want);
             candidates.sort();
@@ -834,7 +836,7 @@ pub fn select_a(f: &Factors, want: usize, v: Verbosity) -> Vec<Uint> {
         }
     }
     // Should not happen? return what we found so far including farther values.
-    let mut candidates = Vec::from_iter(candidates.into_iter());
+    let mut candidates = Vec::from_iter(candidates);
     candidates.sort_by_key(|&c| U256::cast_from(c).abs_diff(f.target));
     candidates.dedup();
     if candidates.len() > want {
@@ -1333,7 +1335,7 @@ impl<'a> SieveSIQS<'a> {
         let fb_size = fb.len();
         let nabs = n.unsigned_abs();
         SieveSIQS {
-            n: n.clone(),
+            n,
             nsqrt: if n.is_positive() {
                 arith::isqrt(nabs)
             } else {

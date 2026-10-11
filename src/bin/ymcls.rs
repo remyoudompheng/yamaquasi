@@ -14,7 +14,7 @@ fn main() {
     let arg = arguments::parse(std::env::args()).unwrap();
     if arg.get::<bool>("help").is_some() || !matches!(arg.orphans.len(), 1 | 2) {
         eprintln!("Usage: ymcls [OPTIONS] [-]DISCRIMINANT [OUTPUTDIR]");
-        eprintln!("");
+        eprintln!();
         eprintln!("Options:");
         eprintln!("  --help                    show this help");
         eprintln!("  --verbose silent|info|verbose|debug");

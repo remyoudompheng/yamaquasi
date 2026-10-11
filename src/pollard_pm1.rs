@@ -535,7 +535,7 @@ fn exp_modn_large(zn: &ZmodN, g: &MInt, exp: &LargeExpType) -> MInt {
     };
     // Consume bits starting with MSB.
     let g2 = zn.mul(g, g);
-    let mut gk = g.clone();
+    let mut gk = *g;
     // Powers g, g^3 .. g^63.
     let g_smalls = {
         let v = std::mem::MaybeUninit::<[MInt; 32]>::uninit();
@@ -631,9 +631,9 @@ fn pm1_stage2_polyeval(zn: &ZmodN, b2: f64, g: MInt) -> (Vec<Uint>, Uint) {
         let mut b = 1;
         let g2 = zn.mul(&g, &g);
         let mut gaps = vec![g2];
-        let mut bg = g.clone();
+        let mut bg = g;
         let mut bexp = 1;
-        v.push(bg.clone());
+        v.push(bg);
         while b < d1 {
             b += 2;
             if b % 3 == 0 || Integer::gcd(&b, &d1) != 1 {
@@ -644,7 +644,7 @@ fn pm1_stage2_polyeval(zn: &ZmodN, b2: f64, g: MInt) -> (Vec<Uint>, Uint) {
                 gaps.push(zn.mul(gaps[gaps.len() - 1], g2));
             }
             bg = zn.mul(&bg, &gaps[gap as usize / 2 - 1]);
-            v.push(bg.clone());
+            v.push(bg);
             bexp = b;
         }
         debug_assert!(bg == exp_modn(zn, &g, bexp));

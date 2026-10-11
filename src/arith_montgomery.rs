@@ -266,7 +266,7 @@ impl ZmodN {
         debug_assert!(Uint::from(*x.borrow()) < self.n);
         debug_assert!(Uint::from(*y.borrow()) < self.n);
         let mut m = MInt::default();
-        mint_mulmod(&self, &mut m.0, &x.borrow().0, &y.borrow().0, self.k);
+        mint_mulmod(self, &mut m.0, &x.borrow().0, &y.borrow().0, self.k);
         // FIXME: remove
         let nd = self.n.digits();
         if !mint_lt(&m.0, nd, self.k) {
@@ -324,7 +324,7 @@ impl ZmodN {
         debug_assert!(Uint::from_digits(*x) < (self.n << (64 * self.k)));
         // This is N times a division by 2^64.
         // Repeatedly add N * (-x[0]/N mod 2^64) and divide by 2^64
-        let mut m = x.clone();
+        let mut m = *x;
         let n = self.n.digits();
         let sz = self.k as usize;
         let ninv64 = self.ninv64;
@@ -394,7 +394,7 @@ fn mint_lt(x: &[u64], n: &[u64], sz: u32) -> bool {
         }
         return xi < ni;
     }
-    return false;
+    false
 }
 
 // Combined multiplication and multiprecision REDC.

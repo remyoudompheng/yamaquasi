@@ -136,7 +136,6 @@ impl RelationSet {
             for &(f, k) in r.factors.iter() {
                 if k % 2 == 1 {
                     if let Some(idx) = fbase.idx(f as u32) {
-                        let idx = idx as usize;
                         count[idx] = count[idx].saturating_add(1);
                     }
                 }
@@ -245,7 +244,7 @@ impl RelationSet {
                     continue 'iter2;
                 }
             }
-            factors.push(f2.clone());
+            factors.push(*f2);
         }
         // Combine cofactors
         if r1.cofactor % r2.cofactor == 0 {
@@ -575,7 +574,7 @@ pub fn final_step(n: &Uint, fb: &FBase, rels: &[Relation], verbose: Verbosity) -
             idxs[0] = idx as u32;
         } else if let Some(i) = fb.idx(f as u32) {
             assert_eq!(fb.p(i) as i64, f);
-            idxs[i as usize + 1] = idx as u32;
+            idxs[i + 1] = idx as u32;
         }
     }
     let get_index = |f: i64| -> Option<usize> {

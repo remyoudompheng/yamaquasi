@@ -12,7 +12,7 @@ fn main() {
     let arg = arguments::parse(std::env::args()).unwrap();
     if arg.get::<bool>("help").is_some() || arg.orphans.len() != 1 {
         eprintln!("Usage: ymqs [OPTIONS] NUMBER");
-        eprintln!("");
+        eprintln!();
         eprintln!("Options:");
         eprintln!("  --help                    show this help");
         eprintln!("  --verbose silent|info|verbose|debug");

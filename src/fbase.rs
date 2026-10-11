@@ -223,6 +223,7 @@ pub const SMALL_PRIMES_DIVIDERS: [arith::Dividers; SMALL_PRIMES.len()] = {
 };
 
 const MAX_MULTIPLIER: u32 = 200;
+const _: () = assert!(MAX_MULTIPLIER * MAX_MULTIPLIER < 1 << 16);
 
 /// Selects k such kn is a quadratic residue modulo many small primes.
 /// The scoring system is the average bit length of the smooth factor
@@ -238,7 +239,6 @@ pub fn select_multiplier(n: Uint) -> (u32, f64) {
     let mut nmodp = [0; SMALL_PRIMES.len()];
     // Precomputed log(p) / (p-1) (average log of factor p^k)
     let mut avg_logp = [0.0; SMALL_PRIMES.len()];
-    assert!(MAX_MULTIPLIER * MAX_MULTIPLIER < 1 << 16);
     for i in 0..SMALL_PRIMES.len() {
         let p = SMALL_PRIMES[i];
         let div = &SMALL_PRIMES_DIVIDERS[i];

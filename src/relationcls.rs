@@ -19,6 +19,9 @@
 //! than 256 bits (which is true if the input number does not exceed
 //! 500 bits).
 
+#![allow(clippy::len_zero)]
+#![allow(clippy::needless_range_loop)]
+
 use std::cmp::min;
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;

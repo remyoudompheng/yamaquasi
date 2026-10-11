@@ -73,7 +73,7 @@ pub fn pp1(
     let two = zn.add(&zn.one(), &zn.one());
     loop {
         for &p in block {
-            p_prev = p as u32;
+            p_prev = p;
             let p = p as u64;
             let mut pow = p;
             while pow * p < b1 {
@@ -151,7 +151,7 @@ pub fn pp1(
         let g2 = chebyshev_modn(&zn, &g, 2);
         let mut b = g;
         let mut bprev = g;
-        v.push(g.clone());
+        v.push(g);
         let mut exp = 1;
         debug_assert!(b == chebyshev_modn(&zn, &g, exp));
         while exp + 2 < d1 / 2 {

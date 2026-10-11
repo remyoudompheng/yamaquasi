@@ -28,7 +28,7 @@
 //! the distribution of sum(#roots/p) is:
 //!
 //! For 5k primes (largest ~100e3, sum~=3.14):
-//! > 50% for 5 smallest primes
+//! \> 50% for 5 smallest primes
 //! ~ 25% for larger primes < 1024
 //! ~ 5% for primes in (1024, 4096)
 //! ~ 7% for primes in (4096, 32768)
@@ -36,7 +36,7 @@
 //! The product of 5 smallest primes (2*3*7*11*13) is 13 bits large.
 //!
 //! For 39k primes (largest ~1e6, sum~=3.32):
-//! > 60% for 10 smallest primes
+//! \> 60% for 10 smallest primes
 //! ~ 15% for larger primes < 1024
 //! ~ 5% for primes in (1024, 4096)
 //! ~ 8% for primes in (4096, 32768)
@@ -101,6 +101,8 @@
 //! buckets is less important.
 //!
 //! TODO: Bibliography
+
+#![allow(clippy::len_zero)]
 
 use std::cmp::{max, min};
 use wide;
@@ -271,11 +273,11 @@ impl<'a> Sieve<'a> {
                         o1 != o2,
                         "large primes must have 2 roots p={p} o1={o1} o2={o2}"
                     );
-                    while (o1 as isize) < interval_size {
+                    while o1 < interval_size {
                         table.add(o1 as usize, pidx);
                         o1 += p;
                     }
-                    while (o2 as isize) < interval_size {
+                    while o2 < interval_size {
                         table.add(o2 as usize, pidx);
                         o2 += p;
                     }
@@ -392,7 +394,7 @@ impl<'a> Sieve<'a> {
             // They are guaranteed to have >= 16 hits inside the block.
             for log in 2..=12 {
                 // Interval of primes such that bit length == log.
-                let i_start = max(self.idxskip, 2 * self.fbase.idx_by_log[log] as usize);
+                let i_start = max(self.idxskip, 2 * self.fbase.idx_by_log[log]);
                 let i_end = if log < 15 {
                     2 * self.fbase.idx_by_log[log + 1]
                 } else {
@@ -442,7 +444,7 @@ impl<'a> Sieve<'a> {
                 // Interval of primes such that bit length == log.
                 let i_start = max(self.idxskip, 2 * self.fbase.idx_by_log[log]);
                 let i_end = if log < 15 {
-                    2 * self.fbase.idx_by_log[log + 1] as usize
+                    2 * self.fbase.idx_by_log[log + 1]
                 } else {
                     lo.len()
                 };
@@ -878,7 +880,7 @@ impl SieveTableLarge {
 
     fn bucket_offsets(&self, bidx: usize) -> &[u32] {
         let len = self.lengths[bidx] as usize;
-        &self.hits[bidx * Self::LBUCKET_SIZE..bidx * Self::LBUCKET_SIZE + len as usize]
+        &self.hits[bidx * Self::LBUCKET_SIZE..bidx * Self::LBUCKET_SIZE + len]
     }
 }
 

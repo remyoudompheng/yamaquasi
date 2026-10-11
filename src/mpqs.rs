@@ -146,9 +146,9 @@ pub fn mpqs(n: Uint, k: u32, prefs: &Preferences, tpool: Option<&rayon::ThreadPo
             );
         }
         for chunk in d_r_values.chunks(16) {
-            wks.batch_inversion(&s, chunk.iter().map(|&(d, _)| d).collect());
+            wks.batch_inversion(s, chunk.iter().map(|&(d, _)| d).collect());
             for (idx, (d, r)) in chunk.iter().enumerate() {
-                mpqs_poly(&s, idx, *d, r, wks);
+                mpqs_poly(s, idx, *d, r, wks);
                 if s.finished() {
                     return;
                 }
@@ -524,7 +524,7 @@ impl Workspace {
                     }
                     *prods.get_unchecked_mut(j) = prod;
                 }
-                let invprod = inv.invert(prod as u32, &div);
+                let invprod = inv.invert(prod as u32, div);
                 // 1/d[i] = product(j < i, d[j]) * product(j > i, d[j]) * invprod
                 let mut prodrev = invprod as u64;
                 for j in 0..ds.len() {
@@ -593,7 +593,7 @@ fn mpqs_poly(s: &SieveMPQS, idx: usize, d: u128, r: &Uint, wks: &mut Workspace) 
         roots1[i] = r1;
         roots2[i] = r2;
     }
-    let roots12 = [roots1.as_ref(), roots2.as_ref()];
+    let roots12 = [&roots1[..], &roots2[..]];
     let mut state = sieve::Sieve::new(start_offset, nblocks, fbase, roots12, wks.recycled.take());
     if nblocks == 0 {
         sieve_block_poly(s, &pol, roots12, &mut state);

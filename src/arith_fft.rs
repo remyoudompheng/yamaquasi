@@ -37,6 +37,8 @@
 //! There is no restriction on the size of original modulus N (currently bounded to 512 bits)
 //! except that the CRT has quadratic complexity wrt the size of N.
 
+#![allow(clippy::needless_range_loop)]
+
 use std::cmp::min;
 
 use bnum::cast::CastFrom;
@@ -942,8 +944,7 @@ impl<'a> MultiZmodP<'a> {
         // m = res/R
         let m = self.redc(x);
         // m = (res/R)*R
-        let m = self.zn.from_int(crate::Uint::from(m));
-        m
+        self.zn.from_int(crate::Uint::from(m))
     }
 
     /// Returns x/R (especially when x = aR*bR)

@@ -641,8 +641,8 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
     } else {
         // Try ECM
         while let Some((a, b)) = ecm::ecm(nred, curves, b1 as usize, b2, &prefs, None) {
-            factor_impl(a.into(), Algo::Auto, &prefs, factors, None);
-            nred = b.into();
+            factor_impl(a, Algo::Auto, &prefs, factors, None);
+            nred = b;
             if pseudoprime(nred) {
                 factors.push(nred);
                 return;
@@ -683,8 +683,8 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
         _ => (15000, 350_000_000, 49e12),
     };
     while let Some((a, b)) = ecm::ecm(nred, curves, b1 as usize, b2, &prefs, None) {
-        factor_impl(a.into(), Algo::Auto, &prefs, factors, None);
-        nred = b.into();
+        factor_impl(a, Algo::Auto, &prefs, factors, None);
+        nred = b;
         if pseudoprime(nred) {
             factors.push(nred);
             return;

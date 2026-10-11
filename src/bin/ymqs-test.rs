@@ -22,7 +22,7 @@ fn main() {
     let arg = arguments::parse(std::env::args()).unwrap();
     if arg.get::<bool>("help").is_some() {
         eprintln!("Usage: ymqs [OPTIONS]");
-        eprintln!("");
+        eprintln!();
         eprintln!("Options:");
         eprintln!("  --help                    show this help");
         eprintln!("  --mode ecm|ecm128|rho|qs|mpqs|siqs: force algorithm selection");
@@ -44,7 +44,7 @@ fn main() {
         let q0 = U256::from_digits(words) | U256::power_of_two(255);
         let p = Uint::cast_from(nextprime(&fbase, p0 >> (256 - bits / 2)));
         let q = Uint::cast_from(nextprime(&fbase, q0 >> (256 - bits + bits / 2)));
-        eprint!("{}", format!("p={p} q={q} => n={}\n", p * q));
+        eprintln!("p={p} q={q} => n={}", p * q);
         // Factor
         let n = p * q;
         let mut prefs = Preferences::default();
@@ -55,7 +55,7 @@ fn main() {
             eprintln!("ERROR failed to factor {n}={p}*{q}");
             std::process::exit(1);
         }
-        assert!(&pq == &[p, q] || &pq == &[q, p]);
+        assert!(pq == [p, q] || pq == [q, p]);
         i += 1;
         let elapsed = t0.elapsed().as_secs_f64();
         let avg = elapsed / (i as f64) * 1000.;
