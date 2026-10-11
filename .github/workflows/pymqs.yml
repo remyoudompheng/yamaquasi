@@ -12,15 +12,15 @@ jobs:
       fail-fast: false
       matrix:
         # macos-15-intel is x86, macos-14 is arm64
-        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, windows-11-arm, macos-15-intel, macos-14]
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, windows-11-arm, macos-15-intel, macos-15]
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.1.4
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: cibw-wheels-${{ matrix.os }}-${{ strategy.job-index }}
           path: ./wheelhouse/*.whl
@@ -37,15 +37,15 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
       - run: pip install build
       - run: python -m build --sdist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sdist
           path: dist/*.tar.gz
@@ -58,22 +58,21 @@ jobs:
       fail-fast: false
       matrix:
         os: [
-          ubuntu-22.04,
           ubuntu-24.04,
           ubuntu-24.04-arm,
+          ubuntu-26.04,
+          ubuntu-26.04-arm,
           windows-2022,
           windows-2025,
-          macos-14,
           macos-15,
           macos-15-intel,
-          #macos-26-arm64,
+          macos-26,
         ]
-        # Python 3.7 is not available on all runners
-        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
+        python-version: ['3.11', '3.12', '3.13', '3.13t', '3.14', '3.14t', '3.15']
 
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: false

@@ -1,7 +1,7 @@
 [package]
 name = "yamaquasi"
-version = "0.2.3"
-rust-version = "1.65"
+version = "0.3.0"
+rust-version = "1.80"
 edition = "2021"
 description = "An integer factoring utility"
 license = "BSD3"
@@ -17,14 +17,11 @@ bnum = { version = "0.8", features = ["numtraits"] }
 num-integer = "0.1"
 num-traits = "0.2"
 rand = "0.8"
-rayon = "~1.10" # for MSRV
+rayon = "1.12" # MSRV 1.80
 wide = "0.7"
-# Pinned indirect dependencies for MSRV 1.65.0
-rayon-core = "~1.12"
-unicode-width = "=0.1.13"
 
 [dev-dependencies]
-brunch = "0.3.7" # MSRV 1.63
+brunch = "=0.6.1" # MSRV 1.77
 
 [profile.release]
 debug = 2

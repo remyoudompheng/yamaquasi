@@ -12,11 +12,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Test MSRV and versions from Ubuntu 22.04, Debian 13
-        version: ["stable", "1.65.0", "1.75.0", "1.85.0"]
+        # Test MSRV and versions from Ubuntu 26.04, Debian 13
+        version: ["stable", "1.80.0", "1.85.0", "1.93.0"]
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v7
     - name: Select Rust version
       run: rustup override set ${{ matrix.version }}
     - name: Build
@@ -25,8 +25,6 @@ jobs:
       run: cargo check --benches
     - name: Check pymqs
       run: cargo check --manifest-path pymqs/Cargo.toml
-      # pymqs requires Rust 1.74 (pyo3 requirement)
-      if: ${{ matrix.version != '1.65.0' }}
     - name: Run tests
       run: cargo test --verbose
     - name: Run tests (AVX2)
@@ -41,9 +39,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14
+          - runner: macos-15
             target: aarch64-apple-darwin
-          - runner: macos-14
+          - runner: macos-15-intel
             target: x86_64-apple-darwin
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
@@ -63,7 +61,7 @@ jobs:
         shell: bash
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v7
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install musl build tools
         run: |
@@ -83,7 +81,7 @@ jobs:
         run: xz -kv9 target/${{ matrix.target }}/release/ymqs
         if: ${{ !startsWith( matrix.runner , 'windows' ) }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ymqs.${{ matrix.target }}.xz
           path: |
