@@ -624,7 +624,7 @@ pub struct UnexpectedLargeFactor(pub(crate) Uint);
 impl UnexpectedLargeFactor {
     fn new(zn: &ZmodN, x: &MInt) -> Self {
         let d = Integer::gcd(&zn.n, &Uint::from(*x));
-        assert!(d != Uint::ONE);
+        assert!(d != Uint::ONE, "d={d} n={}", zn.n);
         Self(d)
     }
 }

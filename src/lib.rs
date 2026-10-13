@@ -49,7 +49,6 @@ pub type Uint = arith::U1024;
 // Top-level functions
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use arith::Num;
 use arith_montgomery::{MInt, ZmodN};
@@ -71,10 +70,6 @@ pub struct Preferences {
     pub use_double: Option<bool>,
     // Only for class group computations
     pub outdir: Option<PathBuf>,
-
-    // Yes, storing state variables in a Preferences object
-    // is quite awkward.
-    pm1_done: AtomicBool,
 }
 
 impl Preferences {
@@ -89,6 +84,23 @@ impl Preferences {
             f()
         } else {
             false
+        }
+    }
+
+    pub fn make_thread_pool(&self) -> Option<rayon::ThreadPool> {
+        match self.threads {
+            None | Some(1) => None,
+            Some(t) => {
+                if self.verbose(Verbosity::Verbose) {
+                    eprintln!("Using a pool of {t} threads");
+                }
+                Some(
+                    rayon::ThreadPoolBuilder::new()
+                        .num_threads(t)
+                        .build()
+                        .expect("cannot create thread pool"),
+                )
+            }
         }
     }
 }
@@ -170,6 +182,9 @@ pub fn factor(n: Uint, alg: Algo, prefs: &Preferences) -> Result<Vec<Uint>, Fact
     if n.is_zero() {
         return Ok(vec![n]);
     }
+    if alg == Algo::Auto {
+        return factor_auto(n, prefs);
+    }
     let mut factors = vec![];
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Testing small prime divisors");
@@ -195,22 +210,8 @@ pub fn factor(n: Uint, alg: Algo, prefs: &Preferences) -> Result<Vec<Uint>, Fact
         eprintln!("Factoring {nred}");
     }
     // Create thread pool
-    let tpool: Option<rayon::ThreadPool> = match prefs.threads {
-        None | Some(1) => None,
-        Some(t) => {
-            if prefs.verbose(Verbosity::Verbose) {
-                eprintln!("Using a pool of {t} threads");
-            }
-            Some(
-                rayon::ThreadPoolBuilder::new()
-                    .num_threads(t)
-                    .build()
-                    .expect("cannot create thread pool"),
-            )
-        }
-    };
-    let tpool = tpool.as_ref();
-    factor_impl(nred, alg, prefs, &mut factors, tpool);
+    let tpool = prefs.make_thread_pool();
+    factor_impl(nred, alg, prefs, &mut factors, tpool.as_ref());
     check_factors(&n, &factors)?;
     factors.sort();
     Ok(factors)
@@ -255,6 +256,7 @@ fn factor_impl(
     factors: &mut Vec<Uint>,
     tpool: Option<&rayon::ThreadPool>,
 ) {
+    assert!(alg != Algo::Auto);
     // Since quadratic sieve methods work by finding non-trivial random
     // elements of multiplicative order 2 modulo n they will fail to resolve
     // prime power factors of n (because Z/p^k Z is cyclic).
@@ -283,77 +285,8 @@ fn factor_impl(
         factors.push(n);
         return;
     }
-    // Apply automatic strategy.
-    let alg_real = match alg {
-        Algo::Auto => {
-            // For small inputs, Pollard rho is faster than ECM and quadratic sieve.
-            if n.bits() < 52 {
-                if let Some((a_s, b)) = pollard_rho::rho(&n, prefs.verbosity) {
-                    for a in a_s {
-                        factor_impl(a, alg, prefs, factors, tpool);
-                    }
-                    if prefs.verbose(Verbosity::Info) {
-                        eprintln!("Recursively factor {b}");
-                    }
-                    factor_impl(b, alg, prefs, factors, tpool);
-                    return;
-                }
-            }
-            // Only in automatic mode, for large inputs, Pollard P-1 and ECM can be useful.
-            if n.bits() > 64 && !prefs.pm1_done.load(Ordering::Relaxed) {
-                let start_pm1 = std::time::Instant::now();
-                let pm1_res = pollard_pm1::pm1_quick(&n, prefs.verbosity);
-                // P-1 should be only run once.
-                prefs.pm1_done.store(true, Ordering::Relaxed);
-                if let Some((a_s, b)) = pm1_res {
-                    if prefs.verbose(Verbosity::Info) {
-                        eprintln!(
-                            "Pollard P-1 success with factors {a_s:?} in {:.3}s",
-                            start_pm1.elapsed().as_secs_f64()
-                        );
-                    }
-                    for a in a_s {
-                        factor_impl(a, alg, prefs, factors, tpool);
-                    }
-                    if prefs.verbose(Verbosity::Info) {
-                        eprintln!("Recursively factor {b}");
-                    }
-                    factor_impl(b, alg, prefs, factors, tpool);
-                    return;
-                } else if prefs.verbose(Verbosity::Info) {
-                    eprintln!(
-                        "Pollard P-1 failure in {:.3}s",
-                        start_pm1.elapsed().as_secs_f64()
-                    );
-                }
-            }
-            // ECM, in its 128-bit variant, is already efficient for 52-bit numbers.
-            let ecm_res = if matches!(n.bits(), 52..=128) {
-                ecm128::ecm128(n, false, prefs)
-            } else {
-                ecm::ecm_auto(n, prefs, tpool)
-            };
-            if let Some((a, b)) = ecm_res {
-                factor_impl(a, alg, prefs, factors, tpool);
-                if prefs.verbose(Verbosity::Info) {
-                    eprintln!("Recursively factor {b}");
-                }
-                factor_impl(b, alg, prefs, factors, tpool);
-                return;
-            }
-            // Select fallback algorithm
-            // The above Rho and ECM128 steps should not fail.
-            // Select ECM128 as the fallback for small integers.
-            if n.bits() <= 80 {
-                Algo::Ecm128
-            } else {
-                Algo::Siqs
-            }
-        }
-        _ => alg,
-    };
     // Now the strategy cannot be Auto.
-    match alg_real {
+    match alg {
         Algo::Auto => unreachable!("impossible"),
         Algo::Pm1 => {
             // Pure Pollard P-1
@@ -471,7 +404,7 @@ fn factor_impl(
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Selected multiplier {k} (score {score:.2}/10)");
     }
-    let divs = match alg_real {
+    let divs = match alg {
         Algo::Qs => Ok(qsieve::qsieve(n, k, prefs, tpool)),
         Algo::Mpqs => Ok(mpqs::mpqs(n, k, prefs, tpool)),
         Algo::Siqs => siqs::siqs(&n, k, prefs, tpool),
@@ -540,6 +473,292 @@ fn factor_impl(
     }
 }
 
+fn factor_auto(n: Uint, prefs: &Preferences) -> Result<Vec<Uint>, FactoringFailure> {
+    // Eliminate special cases.
+    let mut factors = vec![];
+    if n.is_one() {
+        return Ok(factors);
+    }
+
+    if prefs.verbose(Verbosity::Info) {
+        eprintln!("Testing small prime divisors");
+    }
+    let mut n = n;
+    let mut nred = n;
+    for (&p, div) in fbase::SMALL_PRIMES
+        .iter()
+        .zip(&fbase::SMALL_PRIMES_DIVIDERS)
+    {
+        loop {
+            let (q, r) = div.divmod_uint(&nred);
+            if r != 0 {
+                break;
+            }
+            nred = q;
+            factors.push(p.into());
+            if prefs.verbose(Verbosity::Info) {
+                eprintln!("Found small factor {p}");
+            }
+        }
+    }
+    if nred != n && prefs.verbose(Verbosity::Info) {
+        eprintln!("Factoring {nred}");
+    }
+    if nred.is_one() {
+        return Ok(factors);
+    }
+
+    n = nred;
+    let is_perfect_power = {
+        if n.bits() <= 64 {
+            // Use native arithmetic is possible.
+            arith::perfect_power(n.low_u64()).map(|_pk @ (p, k)| (p.into(), k))
+        } else if n.bits() <= 128 {
+            arith::perfect_power(u128::cast_from(n)).map(|_pk @ (p, k)| (p.into(), k))
+        } else {
+            arith::perfect_power(n)
+        }
+    };
+    if let Some((p, k)) = is_perfect_power {
+        let facs = factor_auto(p, prefs)?;
+        for _ in 0..k {
+            factors.extend_from_slice(&facs[..]);
+        }
+        return Ok(factors);
+    }
+
+    let tpool = prefs.make_thread_pool();
+    factor_auto_impl(n, prefs, &mut factors, tpool.as_ref())?;
+    Ok(factors)
+}
+
+/// Current state of factorization.
+struct FactorState {
+    // The original number to be factored.
+    //n: Uint,
+    // The current composite factor to process.
+    nred: Uint,
+
+    // A list of prime factors of n.
+    primes: Vec<Uint>,
+    // A list of composite factors of n.
+    composites: Vec<Uint>,
+    // Invariants
+    // n = product(primes) * product(composites)
+    // nred = product(composites)
+}
+
+impl FactorState {
+    fn new(n: Uint) -> Self {
+        FactorState {
+            nred: n,
+            primes: vec![],
+            composites: vec![n],
+        }
+    }
+
+    /// Update state using a decomposition nred = product(factors) * cofactor.
+    fn declare_factors(&mut self, factors: Vec<Uint>) {
+        for f in factors {
+            if pseudoprime(f) {
+                for c in self.composites.iter_mut() {
+                    while *c % f == Uint::ZERO {
+                        self.primes.push(f);
+                        *c /= f;
+                        self.nred /= f;
+                    }
+                }
+            } else {
+                let mut i = 0;
+                while i < self.composites.len() {
+                    let c = self.composites[i];
+                    let d = arith_gcd::big_gcd(&c, &f);
+                    if d != Uint::ONE && d != c {
+                        // Found a divisor of c
+                        // Product of composites is unchanged.
+                        self.composites[i] = c / d;
+                        self.composites.push(d);
+                    }
+                    i += 1;
+                }
+            }
+        }
+        // Move primes to other vector.
+        for c in self.composites.iter_mut() {
+            if pseudoprime(*c) {
+                self.primes.push(*c);
+                self.nred /= *c;
+                *c = Uint::ONE;
+            }
+        }
+        self.composites.retain(|c| !c.is_one());
+    }
+
+    fn done(&self) -> bool {
+        self.composites.is_empty()
+    }
+}
+
+/// Implementation of automatic algorithm selection.
+fn factor_auto_impl(
+    n: Uint,
+    prefs: &Preferences,
+    factors: &mut Vec<Uint>,
+    tpool: Option<&rayon::ThreadPool>,
+) -> Result<(), FactoringFailure> {
+    if pseudoprime(n) {
+        factors.push(n);
+        return Ok(());
+    }
+    let mut st = FactorState::new(n);
+    if st.done() {
+        factors.append(&mut st.primes);
+        return Ok(());
+    }
+
+    // Start with algorithms depending on prime size (trial factoring, Rho, P-1, ECM)
+    // There is no need for recursion: running them twice does not bring benefits.
+
+    // For small inputs, Pollard rho is faster than ECM and quadratic sieve.
+    if n.bits() < 52 {
+        if let Some((a_s, _b)) = pollard_rho::rho(&st.nred, prefs.verbosity) {
+            st.declare_factors(a_s);
+            if st.done() {
+                factors.append(&mut st.primes);
+                return Ok(());
+            }
+            if prefs.verbose(Verbosity::Info) {
+                eprintln!("Recursively factor {}", st.nred);
+            }
+        }
+    }
+    // Only in automatic mode, for large inputs, Pollard P-1 and ECM can be useful.
+    if n.bits() > 64 {
+        let start_pm1 = std::time::Instant::now();
+        let pm1_res = pollard_pm1::pm1_quick(&n, prefs.verbosity);
+        // P-1 should be only run once.
+        if let Some((a_s, _b)) = pm1_res {
+            if prefs.verbose(Verbosity::Info) {
+                eprintln!(
+                    "Pollard P-1 success with factors {a_s:?} in {:.3}s",
+                    start_pm1.elapsed().as_secs_f64()
+                );
+            }
+            st.declare_factors(a_s);
+            if st.done() {
+                factors.append(&mut st.primes);
+                return Ok(());
+            }
+            if prefs.verbose(Verbosity::Info) {
+                eprintln!("Recursively factor {}", st.nred);
+            }
+        } else if prefs.verbose(Verbosity::Info) {
+            eprintln!(
+                "Pollard P-1 failure in {:.3}s",
+                start_pm1.elapsed().as_secs_f64()
+            );
+        }
+    }
+    // ECM, in its 128-bit variant, is already efficient for 52-bit numbers.
+    let ecm_res = if matches!(n.bits(), 52..=128) {
+        ecm128::ecm128(n, false, prefs)
+    } else {
+        ecm::ecm_auto(n, prefs, tpool)
+    };
+    if let Some((a, _b)) = ecm_res {
+        st.declare_factors(vec![a]);
+        if st.done() {
+            factors.append(&mut st.primes);
+            return Ok(());
+        }
+        if prefs.verbose(Verbosity::Info) {
+            eprintln!("Recursively factor {}", st.nred);
+        }
+    }
+
+    for _ in 0..32 {
+        // ECM beats Siqs for small integers
+        let ncurrent = st.nred;
+        if st.done() {
+            // FIXME: redundant check?
+            factors.append(&mut st.primes);
+            return Ok(());
+        }
+
+        if st.nred.bits() <= 80 {
+            // FIXME: don't repeat already tried curves.
+            if let Some((a, _b)) = ecm128::ecm128(st.nred, true, prefs) {
+                st.declare_factors(vec![a]);
+                if prefs.verbose(Verbosity::Info) {
+                    eprintln!("Recursively factor {}", st.nred);
+                }
+            }
+        } else {
+            // Never call SIQS with a perfect power.
+            let is_perfect_power = {
+                if ncurrent.bits() <= 64 {
+                    // Use native arithmetic is possible.
+                    arith::perfect_power(ncurrent.low_u64()).map(|_pk @ (p, k)| (p.into(), k))
+                } else if ncurrent.bits() <= 128 {
+                    arith::perfect_power(u128::cast_from(ncurrent))
+                        .map(|_pk @ (p, k)| (p.into(), k))
+                } else {
+                    arith::perfect_power(ncurrent)
+                }
+            };
+            if let Some((p, k)) = is_perfect_power {
+                let mut facs = vec![];
+                factor_auto_impl(p, prefs, &mut facs, tpool)?;
+                for _ in 0..k {
+                    st.declare_factors(facs.clone());
+                }
+                continue;
+            }
+
+            let (k, score) = fbase::select_multiplier(st.nred);
+            if prefs.verbose(Verbosity::Info) {
+                eprintln!("Selected multiplier {k} (score {score:.2}/10)");
+            }
+            let divs = siqs::siqs(&st.nred, k, prefs, tpool);
+            match divs {
+                Ok(divs) => st.declare_factors(divs),
+                Err(UnexpectedFactor(d)) => st.declare_factors(vec![d.into()]),
+            };
+        }
+        if st.nred == ncurrent {
+            // Iterations are deterministic.
+            break;
+        }
+        if st.done() {
+            factors.append(&mut st.primes);
+            return Ok(());
+        }
+    }
+    if !st.done() {
+        // Try factoring remaining composites
+        let mut facs = vec![];
+        for &c in &st.composites {
+            if c == st.nred {
+                // Only recurse into smaller numbers.
+                return Err(FactoringFailure);
+            }
+            if prefs.verbose(Verbosity::Info) {
+                eprintln!("Recursively factor {c}");
+            }
+            factor_auto_impl(c, prefs, &mut facs, tpool)?;
+        }
+        st.declare_factors(facs);
+    }
+    if st.done() {
+        factors.append(&mut st.primes);
+        return Ok(());
+    }
+    if prefs.verbose(Verbosity::Info) {
+        eprintln!("Factorization is incomplete.");
+    }
+    Err(FactoringFailure)
+}
+
 fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
     if n.is_one() {
         return;
@@ -558,7 +777,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
         let rho_fast_iters: u64 = 128;
         if nred.bits() <= 128 {
             if let Some((a, b)) = pollard_rho::rho128(u128::cast_from(nred), 2, rho_fast_iters) {
-                factor_impl(a.into(), Algo::Auto, &prefs, factors, None);
+                factor_auto_impl(a.into(), &prefs, factors, None).unwrap();
                 nred = b.into();
                 if pseudoprime(nred) {
                     factors.push(nred);
@@ -570,7 +789,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
             {
                 // Force rho for recursion
                 for a in a_s {
-                    factor_impl(a, Algo::Auto, &prefs, factors, None);
+                    factor_auto_impl(a, &prefs, factors, None).unwrap();
                 }
                 nred = b;
                 if pseudoprime(nred) {
@@ -583,7 +802,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
     let rho_iters = 512;
     if nred.bits() <= 63 {
         while let Some((a, b)) = pollard_rho::rho64(nred.low_u64(), 3, rho_iters) {
-            factor_impl(a.into(), Algo::Auto, &prefs, factors, None);
+            factor_auto_impl(a.into(), &prefs, factors, None).unwrap();
             nred = b.into();
             if pseudoprime(nred) {
                 factors.push(nred);
@@ -592,7 +811,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
         }
     } else if nred.bits() <= 128 {
         while let Some((a, b)) = pollard_rho::rho128(u128::cast_from(nred), 3, rho_iters) {
-            factor_impl(a.into(), Algo::Auto, &prefs, factors, None);
+            factor_auto_impl(a.into(), &prefs, factors, None).unwrap();
             nred = b.into();
             if pseudoprime(nred) {
                 factors.push(nred);
@@ -603,7 +822,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
         if let Some((a_s, b)) = pollard_rho::rho_impl(&nred, 3, rho_iters, prefs.verbosity) {
             // Force rho for recursion
             for a in a_s {
-                factor_impl(a, Algo::Auto, &prefs, factors, None);
+                factor_auto_impl(a, &prefs, factors, None).unwrap();
             }
             nred = b;
             if pseudoprime(nred) {
@@ -631,7 +850,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
     if nred.bits() < 128 {
         while let Some((a, b)) = ecm128::ecm(u128::cast_from(nred), curves, b1, b2, prefs.verbosity)
         {
-            factor_impl(a.into(), Algo::Auto, &prefs, factors, None);
+            factor_auto_impl(a.into(), &prefs, factors, None).unwrap();
             nred = b.into();
             if pseudoprime(nred) {
                 factors.push(nred);
@@ -641,7 +860,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
     } else {
         // Try ECM
         while let Some((a, b)) = ecm::ecm(nred, curves, b1 as usize, b2, &prefs, None) {
-            factor_impl(a, Algo::Auto, &prefs, factors, None);
+            factor_auto_impl(a, &prefs, factors, None).unwrap();
             nred = b;
             if pseudoprime(nred) {
                 factors.push(nred);
@@ -653,7 +872,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
         if (nred.bits() as usize) < 2 * factor_bits && !pseudoprime(nred) {
             // If nred is composite and small, it has necessarily
             // a small factor.
-            factor_impl(nred, Algo::Auto, &prefs, factors, None);
+            factor_auto_impl(nred, &prefs, factors, None).unwrap();
         } else {
             factors.push(nred);
         }
@@ -661,7 +880,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
     }
     if factor_bits as f64 / nred.bits() as f64 > 0.4 {
         // This is equivalent to full factoring
-        factor_impl(nred, Algo::Auto, &prefs, factors, None);
+        factor_auto_impl(nred, &prefs, factors, None).unwrap();
         return;
     }
     // Otherwise keep using ECM
@@ -683,7 +902,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
         _ => (15000, 350_000_000, 49e12),
     };
     while let Some((a, b)) = ecm::ecm(nred, curves, b1 as usize, b2, &prefs, None) {
-        factor_impl(a, Algo::Auto, &prefs, factors, None);
+        factor_auto_impl(a, &prefs, factors, None).unwrap();
         nred = b;
         if pseudoprime(nred) {
             factors.push(nred);
@@ -914,6 +1133,16 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     // n = 3 mod 4 for optimal multiplier
     let n = Uint::from_digit(966218335873381319);
     factor(n, Algo::Mpqs, &Preferences::default()).unwrap();
+
+    // Many small factors
+    let n = Uint::from_digit(412682899978);
+    factor(n, Algo::Auto, &Preferences::default()).unwrap();
+
+    // Triggered ecm128(1) in Auto mode.
+    let n = Uint::from_str("116234185885542836921546102271413189262848299811057")?;
+    factor(n, Algo::Auto, &Preferences::default()).unwrap();
+    let n = Uint::from_str("35263301580611604739963993408020422755244243071902")?;
+    factor(n, Algo::Auto, &Preferences::default()).unwrap();
 
     Ok(())
 }

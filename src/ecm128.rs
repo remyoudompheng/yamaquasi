@@ -69,6 +69,7 @@ pub fn ecm_semiprime(n: u64) -> Option<(u64, u64)> {
 
 #[doc(hidden)]
 pub fn ecm(n: u128, curves: usize, b1: u64, b2: f64, v: Verbosity) -> Option<(u128, u128)> {
+    assert!(n & 1 == 1 && n > 3);
     let zn = ZmodN::new(Uint::from(n));
     let suyama = ecm::Suyama11::new(&zn).unwrap();
     let sb = ecm::SmoothBase::new(b1 as usize, false);

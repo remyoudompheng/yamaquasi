@@ -53,6 +53,8 @@ pub fn siqs(
     prefs: &Preferences,
     tpool: Option<&rayon::ThreadPool>,
 ) -> Result<Vec<Uint>, UnexpectedFactor> {
+    assert!(n.bits() > 2); // Tiny integers are not compatible.
+
     let (norig, n) = (n, n * Uint::from(k));
     let use_double = prefs.use_double.unwrap_or(n.bits() > 256);
     // Choose factor base. Sieve twice the number of primes

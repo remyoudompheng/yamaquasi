@@ -364,7 +364,10 @@ where
 {
     for k in [2, 3, 5, 7, 11, 13, 17, 19_u32] {
         let r = n.nth_root(k);
-        if r.pow(k) == n {
+        if r == n {
+            return None; // n == 1
+        }
+        if r < n && r.pow(k) == n {
             if let Some((rr, kk)) = perfect_power(r) {
                 return Some((rr, k * kk));
             }
