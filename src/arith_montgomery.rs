@@ -12,14 +12,322 @@ use std::borrow::Borrow;
 
 use bnum::cast::CastFrom;
 use bnum::BUint;
+use num_integer::Integer;
 
 use crate::arith;
 use crate::arith_gcd;
 use crate::Uint;
 
+/// A structure for Montgomery-form modular arithmetic.
+/// It will usually hold only the modulus and its 64-bit 2-adic inverse.
+pub trait Zmod {
+    type Val;
+
+    fn new(n: Uint) -> Self;
+    fn cast(self, n: u64) -> Self::Val;
+    fn one(self) -> Self::Val;
+
+    fn add(self, x: Self::Val, y: Self::Val) -> Self::Val;
+    fn sub(self, x: Self::Val, y: Self::Val) -> Self::Val;
+    fn mul(self, x: Self::Val, y: Self::Val) -> Self::Val;
+
+    // A function returning x-y or y-x with unspecified choice.
+    // Usually more efficient than sub.
+    fn abs_diff(self, x: Self::Val, y: Self::Val) -> Self::Val
+    where
+        Self: Copy + Sized,
+        Self::Val: Copy,
+    {
+        self.sub(x, y) // replace with more efficient implementations.
+    }
+
+    // Compute x to a non zero exponent e.
+    fn pow1(self, x: Self::Val, e: u64) -> Self::Val
+    where
+        Self: Copy + Sized,
+        Self::Val: Copy,
+    {
+        assert!(e > 0);
+        let mut res: Option<Self::Val> = None;
+        let mut sq = x;
+        let mut e = e;
+        // Invariant: x^e = sq^exp * res
+        while e > 1 {
+            if e & 1 == 1 {
+                // sq^exp * res = (sq^2)^(exp/2) * (sq*res)
+                res = if let Some(r) = res {
+                    Some(self.mul(r, sq))
+                } else {
+                    Some(sq)
+                };
+            }
+            sq = self.mul(sq, sq);
+            e /= 2;
+        }
+        debug_assert_eq!(e, 1);
+        if let Some(r) = res {
+            self.mul(sq, r)
+        } else {
+            sq
+        }
+    }
+
+    fn gcd_factors(self, vals: &[Self::Val], factors: &mut Vec<Uint>) -> Self::Val;
+}
+
+#[derive(Clone, Copy)]
+pub struct Mod64 {
+    n: u64,
+    ninv: u64,
+}
+
+impl Mod64 {
+    pub fn new64(n: u64) -> Mod64 {
+        Mod64 {
+            n,
+            ninv: mg_2adic_inv(n),
+        }
+    }
+}
+
+impl Zmod for Mod64 {
+    type Val = u64;
+
+    fn new(n: Uint) -> Self {
+        assert!(n.bits() <= 64);
+        let n64 = u64::cast_from(n);
+        Self {
+            n: n64,
+            ninv: mg_2adic_inv(n64),
+        }
+    }
+
+    fn one(self) -> u64 {
+        let half = (1 << 63) % self.n;
+        self.add(half, half)
+    }
+
+    fn cast(self, n: u64) -> u64 {
+        n
+    }
+
+    fn add(self, x: u64, y: u64) -> u64 {
+        let my = self.n - y;
+        if x >= my {
+            x - my
+        } else {
+            x + y
+        }
+    }
+
+    fn sub(self, x: u64, y: u64) -> u64 {
+        let my = self.n - y;
+        if x >= y {
+            x - y
+        } else {
+            x + my
+        }
+    }
+
+    fn abs_diff(self, x: u64, y: u64) -> u64 {
+        x.abs_diff(y)
+    }
+
+    fn mul(self, x: u64, y: u64) -> u64 {
+        mg_mul(self.n, self.ninv, x, y)
+    }
+
+    fn gcd_factors(self, vals: &[u64], factors: &mut Vec<Uint>) -> u64 {
+        let mut nred = self.n;
+        gcd_factors_generic(self.n, &mut nred, vals, factors);
+        nred
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Mod128 {
+    n: u128,
+    ninv: u64,
+}
+
+impl Mod128 {
+    pub fn new128(n: u128) -> Mod128 {
+        Mod128 {
+            n,
+            ninv: mg_2adic_inv(n as u64),
+        }
+    }
+}
+
+impl Zmod for Mod128 {
+    type Val = u128;
+
+    fn new(n: Uint) -> Self {
+        assert!(n.bits() <= 128);
+        let n128 = u128::cast_from(n);
+        Self {
+            n: n128,
+            ninv: mg_2adic_inv(n128 as u64),
+        }
+    }
+
+    fn one(self) -> u128 {
+        let half = (1 << 127) % self.n;
+        self.add(half, half)
+    }
+
+    fn cast(self, n: u64) -> u128 {
+        n.into()
+    }
+
+    #[inline]
+    fn add(self, x: u128, y: u128) -> u128 {
+        let my = self.n - y;
+        if x >= my {
+            x - my
+        } else {
+            x + y
+        }
+    }
+
+    #[inline]
+    fn sub(self, x: u128, y: u128) -> u128 {
+        let my = self.n - y;
+        if x >= y {
+            x - y
+        } else {
+            x + my
+        }
+    }
+
+    fn abs_diff(self, x: u128, y: u128) -> u128 {
+        x.abs_diff(y)
+    }
+
+    #[inline]
+    fn mul(self, x: u128, y: u128) -> u128 {
+        let n = self.n;
+        let ninv = self.ninv;
+
+        // Ordinary long multiplication (4 x MUL64)
+        let (xy0, xy1) = mul256(x, y);
+        let mn1 = redc128(n, ninv, xy0);
+        self.add(xy1, mn1)
+    }
+
+    fn gcd_factors(self, vals: &[u128], factors: &mut Vec<Uint>) -> u128 {
+        let mut nred = self.n;
+        gcd_factors_generic(self.n, &mut nred, vals, factors);
+        nred
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Mod192 {
+    n: BUint<3>,
+    ninv: u64,
+}
+
+impl Zmod for Mod192 {
+    type Val = BUint<3>;
+
+    fn new(n: Uint) -> Self {
+        assert!(n.bits() <= 192);
+        let nd = n.digits();
+        Self {
+            n: BUint::<3>::cast_from(n),
+            ninv: mg_2adic_inv(nd[0]),
+        }
+    }
+
+    fn one(self) -> Self::Val {
+        let half = (BUint::ONE << 191) % self.n;
+        self.add(half, half)
+    }
+
+    fn cast(self, n: u64) -> Self::Val {
+        n.into()
+    }
+
+    #[inline]
+    fn add(self, x: Self::Val, y: Self::Val) -> Self::Val {
+        let my = self.n - y;
+        if x >= my {
+            x - my
+        } else {
+            x + y
+        }
+    }
+
+    #[inline]
+    fn sub(self, x: Self::Val, y: Self::Val) -> Self::Val {
+        let my = self.n - y;
+        if x >= y {
+            x - y
+        } else {
+            x + my
+        }
+    }
+
+    fn abs_diff(self, x: Self::Val, y: Self::Val) -> Self::Val {
+        x.abs_diff(y)
+    }
+
+    #[inline]
+    fn mul(self, x: Self::Val, y: Self::Val) -> Self::Val {
+        let ninv = self.ninv;
+        let x = x.digits();
+        let y = y.digits();
+        let n = self.n.digits();
+        let mut z = [0u64; 6];
+        let mut z2 = [0u64; 3];
+        for i in 0..3 {
+            // Accumulate x[i] * y in z.
+            let mut carry = 0;
+            for j in 0..3 {
+                let xy = x[i] as u128 * y[j] as u128 + z[i + j] as u128 + carry as u128;
+                z[i + j] = xy as u64;
+                carry = (xy >> 64) as u64;
+            }
+            // Add m * N to cancel the lower word.
+            let m = z[i].wrapping_mul(ninv);
+            let mut carryn = 0;
+            for j in 0..3 {
+                if i + j >= 3 {
+                    // Store in z2
+                    let xy = m as u128 * n[j] as u128 + z2[i + j - 3] as u128 + carryn as u128;
+                    z2[i + j - 3] = xy as u64;
+                    carryn = (xy >> 64) as u64;
+                } else {
+                    let xy = m as u128 * n[j] as u128 + z[i + j] as u128 + carryn as u128;
+                    z[i + j] = xy as u64;
+                    carryn = (xy >> 64) as u64;
+                }
+            }
+            // z = x[..=i] * y + LOW(m[..=i] * N)
+            z[i + 3] = carry;
+            // z2 = HIGH(m[..=i] * N) is at most (2 N * B^i)
+            z2[i] = carryn;
+        }
+        debug_assert!(&z[..3] == &[0, 0, 0]);
+        // Return a normalized number
+        // z = x * y + (eps < 2^192) <= N * N + 2^192
+        // z2 <= N * 2^192
+        self.add(
+            BUint::from_digits(z2),
+            BUint::from_digits([z[3], z[4], z[5]]),
+        )
+    }
+
+    fn gcd_factors(self, vals: &[Self::Val], factors: &mut Vec<Uint>) -> Self::Val {
+        let mut nred = self.n;
+        gcd_factors_generic(self.n, &mut nred, vals, factors);
+        nred
+    }
+}
+
 /// Returns ninv such that n*ninv = -1
 pub fn mg_2adic_inv(n: u64) -> u64 {
-    assert!(n & 1 == 1);
     // Invariant: nx = 1 + 2^k s, k increasing
     let mut x = 1u64;
     loop {
@@ -69,6 +377,52 @@ pub fn mg_inv(n: u64, ninv: u64, r2: u64, x: u64) -> Option<u64> {
     let mminv = arith::inv_mod64(mm, n)?;
     // minv = R/mm = R^2/m
     Some(mg_mul(n, ninv, mminv, r2))
+}
+
+#[inline]
+fn mul256(x: u128, y: u128) -> (u128, u128) {
+    // Compute the 256-bit product xy.
+    let (x0, x1) = (x as u64, (x >> 64) as u64);
+    let (y0, y1) = (y as u64, (y >> 64) as u64);
+    let mut xy0 = x0 as u128 * y0 as u128;
+    let mut xy1 = x1 as u128 * y1 as u128;
+    let (mid, mut c) = (x0 as u128 * y1 as u128).overflowing_add(x1 as u128 * y0 as u128);
+    if c {
+        xy1 += 1 << 64;
+    }
+    (xy0, c) = xy0.overflowing_add(mid.wrapping_shl(64));
+    xy1 += mid >> 64;
+    if c {
+        xy1 += 1;
+    }
+    (xy0, xy1)
+}
+
+fn redc128(n: u128, ninv: u64, xy0: u128) -> u128 {
+    // Apply the REDC algorithm (6 x MUL64)
+    // Reduce 2 times
+    let (n0, n1) = (n as u64, (n >> 64) as u64);
+    let mut xy0hi = (xy0 >> 64) as u64;
+    let mut mn_low = 0; // Accumulator for higher half.
+    if (xy0 as u64) != 0 {
+        let m0 = (xy0 as u64).wrapping_mul(ninv);
+        debug_assert!((xy0 as u64).wrapping_add(m0.wrapping_mul(n0)) == 0);
+        // xy += m0 * n
+        let mn0hi = ((m0 as u128 * n0 as u128) >> 64) as u64 + 1;
+        // Cannot overflow: (2^64-1)^2 + (2^64-2) + (2^64-1) + 1 < 2^128
+        let mn1 = m0 as u128 * n1 as u128 + mn0hi as u128 + xy0hi as u128;
+        xy0hi = mn1 as u64;
+        mn_low = (mn1 >> 64) as u64;
+    }
+    let mut mn1 = mn_low as u128;
+    if xy0hi != 0 {
+        let m = xy0hi.wrapping_mul(ninv);
+        debug_assert!(xy0hi.wrapping_add(m.wrapping_mul(n0)) == 0);
+        let mn0hi = ((m as u128 * n0 as u128) >> 64) as u64 + 1;
+        // Cannot overflow: (2^64-1)^2 + (2^64-2) + (2^64-1) + 1 < 2^128
+        mn1 = m as u128 * n1 as u128 + mn0hi as u128 + mn_low as u128;
+    }
+    mn1
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,23 +490,6 @@ impl M128 {
         if n >> 64 == 0 {
             return M128(mg_mul(n as u64, ninv as u64, x.0 as u64, y.0 as u64) as u128);
         }
-        fn mul256(x: u128, y: u128) -> (u128, u128) {
-            // Compute the 256-bit product xy.
-            let (x0, x1) = (x as u64, (x >> 64) as u64);
-            let (y0, y1) = (y as u64, (y >> 64) as u64);
-            let mut xy0 = x0 as u128 * y0 as u128;
-            let mut xy1 = x1 as u128 * y1 as u128;
-            let (mid, mut c) = (x0 as u128 * y1 as u128).overflowing_add(x1 as u128 * y0 as u128);
-            if c {
-                xy1 += 1 << 64;
-            }
-            (xy0, c) = xy0.overflowing_add(mid.wrapping_shl(64));
-            xy1 += mid >> 64;
-            if c {
-                xy1 += 1;
-            }
-            (xy0, xy1)
-        }
         // Apply the REDC algorithm.
         let (xy0, xy1) = mul256(x.0, y.0);
         if xy0 == 0 {
@@ -196,6 +533,26 @@ impl From<MInt> for Uint {
         let mut digits = [0u64; Uint::BITS as usize / 64];
         digits[..MINT_WORDS].copy_from_slice(&m.0);
         Uint::from_digits(digits)
+    }
+}
+
+impl From<MInt> for u64 {
+    fn from(m: MInt) -> Self {
+        m.0[0]
+    }
+}
+
+impl From<MInt> for u128 {
+    fn from(m: MInt) -> Self {
+        m.0[0] as u128 | ((m.0[1] as u128) << 64)
+    }
+}
+
+impl From<u64> for MInt {
+    fn from(x: u64) -> Self {
+        let mut m = MInt::default();
+        m.0[0] = x;
+        m
     }
 }
 
@@ -253,7 +610,21 @@ impl ZmodN {
     }
 
     pub fn from_int(&self, x: Uint) -> MInt {
+        // This method can be used for "large" integers.
+        let x = if x > self.n {
+            x % self.n
+        } else {
+            x
+        };
         self.mul(MInt::from_uint(x), self.r2)
+    }
+
+    pub fn from_i64(&self, x: i64) -> MInt {
+        if x < 0 {
+            self.sub(MInt::default(), self.from_int(x.unsigned_abs().into()))
+        } else {
+            self.from_int((x as u64).into())
+        }
     }
 
     pub fn to_int(&self, x: MInt) -> Uint {
@@ -264,7 +635,7 @@ impl ZmodN {
 
     pub fn mul<M: Borrow<MInt>>(&self, x: M, y: M) -> MInt {
         // all bit lengths MUST be < 512
-        debug_assert!(Uint::from(*x.borrow()) < self.n);
+        debug_assert!(Uint::from(*x.borrow()) < self.n, "n={} x={}", self.n, Uint::from(*x.borrow()));
         debug_assert!(Uint::from(*y.borrow()) < self.n);
         let mut m = MInt::default();
         mint_mulmod(self, &mut m.0, &x.borrow().0, &y.borrow().0, self.k);
@@ -571,6 +942,41 @@ pub fn gcd_factors(n: &Uint, vals: &[MInt]) -> (Vec<Uint>, Uint) {
     (facs, n)
 }
 
+pub fn gcd_factors_generic<T>(n: T, nred: &mut T, vals: &[T], factors: &mut Vec<Uint>)
+where
+    T: Integer + std::fmt::Display + std::fmt::Debug + Copy,
+    Uint: CastFrom<T>,
+{
+    assert!(!n.is_zero());
+
+    fn find_factors<T>(n: T, nred: &mut T, vals: &[T], gcd1: T, gcd2: T, factors: &mut Vec<Uint>)
+    where
+        T: Integer + std::fmt::Display + std::fmt::Debug + Copy,
+        Uint: CastFrom<T>,
+    {
+        if gcd1 == gcd2 {
+            return;
+        }
+        let p = gcd2 / gcd1;
+        debug_assert!(gcd2 > gcd1 && gcd2 == p * gcd1);
+        if crate::pseudoprime(Uint::cast_from(p)) || vals.len() <= 2 {
+            assert!(p != T::zero(), "{n} {p} {gcd1} {gcd2} {vals:?}");
+            *nred = *nred / p;
+            factors.push(Uint::cast_from(p));
+            return;
+        }
+        let mid = vals.len() / 2;
+        // d1 <= gcd(n, mid) <= d2 for divisibility order,
+        // so gcd(n,mid)=gcd(d2,mid)=gcd1*gcd(p,mid/d1)
+        let d = gcd1 * p.gcd(&(vals[mid] / gcd1));
+        find_factors(n, nred, &vals[..=mid], gcd1, d, factors);
+        find_factors(n, nred, &vals[mid..], d, gcd2, factors);
+    }
+    let d1 = n.gcd(&vals[0]);
+    let d2 = n.gcd(&vals[vals.len() - 1]);
+    find_factors(n, nred, vals, d1, d2, factors);
+}
+
 #[test]
 fn test_montgomery64() {
     // Check that 64-bit moduli do not trigger overflow.
@@ -663,4 +1069,122 @@ fn test_gcd_factors() {
         ]
     );
     assert_eq!(nn, Uint::from_digit(19 * 31));
+}
+
+#[test]
+fn test_gcd_factors64() {
+    let n: u64 = 13 * 17 * 19 * 31 * 37;
+    let vals64 = [
+        79,
+        77 * 13,
+        7 * 13,
+        9 * 13,
+        97 * 13 * 37,
+        5 * 13 * 37,
+        13 * 17 * 37,
+        13 * 17 * 37 * 8,
+    ];
+    let mut nred = n;
+    let mut facs = vec![];
+    gcd_factors_generic(n, &mut nred, &vals64, &mut facs);
+    eprintln!("factors={facs:?}");
+    assert_eq!(
+        facs,
+        vec![
+            Uint::from_digit(13),
+            Uint::from_digit(37),
+            Uint::from_digit(17)
+        ]
+    );
+    assert_eq!(nred, 19 * 31);
+}
+
+#[test]
+fn test_mod128() {
+    // 128-bit modular arithmetic
+    let n = 242117442329613169289925222087543973661;
+    let ninv = M128::inv_2adic(n);
+    let (r, r2) = M128::r_r2(n, ninv);
+    eprintln!("N={n}");
+    eprintln!("R={r:?}");
+    eprintln!("R²={r2:?}");
+    assert_eq!(r, M128::mul(n, ninv, r, r));
+    let x = M128::mul(n, ninv, M128(123456789), r2);
+    let y = M128::mul(n, ninv, M128(987654321), r2);
+    let xy = M128::mul(n, ninv, M128(123456789 * 987654321), r2);
+    eprintln!("x={x:?}");
+    eprintln!("y={y:?}");
+    assert_eq!(xy, M128::mul(n, ninv, x, y));
+}
+
+#[test]
+fn test_mod128_pow() {
+    let n = 242117442329613169289925222087543973661;
+    let zn = Mod128::new128(n);
+    let ninv = M128::inv_2adic(n);
+    let (_r, M128(r2)) = M128::r_r2(n, ninv);
+    let x = zn.mul(123456789, r2);
+    let y = zn.mul(987654321, r2);
+    let xy = zn.mul(123456789 * 987654321, r2);
+    eprintln!("x={x:?}");
+    eprintln!("y={y:?}");
+    assert_eq!(xy, zn.mul(x, y));
+
+    let p: u128 = 0x7fffffffffffffffffffffffffffffff; // Mersenne 2^127-1
+    let zn = Mod128::new128(p);
+    let r = zn.one();
+    let r2 = r * r;
+    assert_eq!(r, 2);
+    //assert_eq!(r2.0, 4);
+    assert_eq!(r, zn.mul(r, r));
+    // 1^x == 1
+    //assert_eq!(zn.pow(p, pinv, r, r, 0), r);
+    assert_eq!(zn.pow1(r, 1), r);
+    assert_eq!(zn.pow1(r, 2), r);
+    assert_eq!(zn.pow1(r, 1234567), r);
+
+    //assert_eq!(zn.pow1(r2, 0), r);
+    assert_eq!(zn.pow1(r2, 2), 8);
+    assert_eq!(zn.pow1(r2, 126), 1);
+
+    // p-1 = 16892688675869322961 * 10071882974053182366
+    let mut z = zn.pow1(r2, 16892688675869322961);
+    z = zn.pow1(z, 10071882974053182366);
+    assert_eq!(z, r);
+
+    let p: u128 = 0xffffffffffffffffffffffffffffff61;
+    let zn = Mod128::new128(p);
+    let r = zn.one();
+    let r2 = r * r;
+    assert_eq!(r, 159);
+    assert_eq!(r2, 159 * 159);
+    // p-1 = 28872119904 * 187592445612049 * 62826870453001
+    let mut z = zn.pow1(r2, 28872119904);
+    z = zn.pow1(z, 187592445612049);
+    z = zn.pow1(z, 62826870453001);
+    assert_eq!(z, r);
+}
+
+#[test]
+fn test_mod192() {
+    // 192-bit modular arithmetic
+    type V = <Mod192 as Zmod>::Val;
+    use std::str::FromStr;
+
+    // When n is very close to 2^192 overflows may happen
+    // n=5939616784458085049524607740966332828342925827617785743389
+    // x=4951045000718286260915972387495416378309047244556505037049
+    // y=3743884040452119348854962810505852958632577508628420755798
+    let n = V::from_str("5939616784458085049524607740966332828342925827617785743389").unwrap();
+    let x = V::from_str("4951045000718286260915972387495416378309047244556505037049").unwrap();
+    let y = V::from_str("3743884040452119348854962810505852958632577508628420755798").unwrap();
+
+    // Expect: 1541630417522718043704030247502554313295206416476587435054
+    let z = V::from_str("1541630417522718043704030247502554313295206416476587435054").unwrap();
+
+    let zn = Mod192::new(Uint::cast_from(n));
+    let m = zn.mul(x, y);
+    eprintln!("m={m}");
+    eprintln!("z={z}");
+    assert_eq!(m, z);
 }
