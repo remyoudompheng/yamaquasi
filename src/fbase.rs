@@ -6,6 +6,7 @@
 //! This file is common to all variants (QS, MPQS, SIQS).
 
 use std::cmp::{max, min};
+use std::sync::LazyLock;
 
 use crate::arith::{self, Num, I256};
 use crate::arith_montgomery;
@@ -222,6 +223,31 @@ pub const SMALL_PRIMES_DIVIDERS: [arith::Dividers; SMALL_PRIMES.len()] = {
     divs
 };
 
+pub static U16_PRIMES: LazyLock<Vec<u32>> = LazyLock::new(|| {
+    let ps = primes(6542);
+    assert_eq!(ps.last(), Some(&65521));
+    ps
+});
+
+// A bitmap of all small primes.
+// Prime p is stored at bit p/3.
+pub static PRIME_MAP: LazyLock<Vec<u64>> = LazyLock::new(|| {
+    let mut v = vec![0_u64; (1 << 20) / 64];
+    for p in primes(226600) {
+        if p == 2 {
+            continue;
+        }
+        if p > PRIME_MAP_MAX as u32 {
+            break;
+        }
+        let idx = p as usize / 3;
+        v[idx / 64] |= 1 << (idx % 64);
+    }
+    assert_eq!(v.last(), Some(&0x2400b201418230a8));
+    v
+});
+pub const PRIME_MAP_MAX: usize = 3 << 20; // 128kB
+
 const MAX_MULTIPLIER: u32 = 200;
 const _: () = assert!(MAX_MULTIPLIER * MAX_MULTIPLIER < 1 << 16);
 
@@ -322,6 +348,7 @@ fn expected_smooth_magnitude(
     res
 }
 
+/// Return the list of first n primes.
 pub fn primes(n: u32) -> Vec<u32> {
     // The n-th prime is always less than n * n.bit_length()
     // except for n = 1.
@@ -367,12 +394,12 @@ pub struct PrimeSieve {
 
 impl PrimeSieve {
     pub fn new() -> Self {
-        let smalls = primes(6542);
+        let smalls = &*U16_PRIMES;
         assert_eq!(smalls.last(), Some(&65521));
         // If 65535%p = k, 65536 + (p-1-k) is a multiple of p
         let offsets = smalls.iter().map(|&p| p - 1 - 65535 % p).collect();
         Self {
-            smallprimes: smalls.into_boxed_slice(),
+            smallprimes: smalls.clone().into_boxed_slice(),
             block: vec![],
             block_count: 0,
             offsets,

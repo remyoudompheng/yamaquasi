@@ -19,6 +19,7 @@ use crate::Uint;
 
 /// Returns ninv such that n*ninv = -1
 pub fn mg_2adic_inv(n: u64) -> u64 {
+    assert!(n & 1 == 1);
     // Invariant: nx = 1 + 2^k s, k increasing
     let mut x = 1u64;
     loop {

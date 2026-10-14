@@ -37,6 +37,7 @@ pub mod qsieve64;
 pub mod sieve;
 pub mod siqs;
 pub mod squfof;
+pub mod trialdiv;
 
 // Class group computations
 pub mod classgroup;
@@ -483,23 +484,30 @@ fn factor_auto(n: Uint, prefs: &Preferences) -> Result<Vec<Uint>, FactoringFailu
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Testing small prime divisors");
     }
+    if n.bits() <= 32 {
+        let mut n32 = u32::cast_from(n);
+        let tz = n32.trailing_zeros();
+        for _ in 0..tz {
+            factors.push(Uint::from_digit(2));
+        }
+        n32 >>= tz;
+        trialdiv::factor_u32(n32, &mut factors);
+        return Ok(factors);
+    }
+
     let mut n = n;
     let mut nred = n;
-    for (&p, div) in fbase::SMALL_PRIMES
-        .iter()
-        .zip(&fbase::SMALL_PRIMES_DIVIDERS)
-    {
-        loop {
-            let (q, r) = div.divmod_uint(&nred);
-            if r != 0 {
-                break;
-            }
-            nred = q;
-            factors.push(p.into());
-            if prefs.verbose(Verbosity::Info) {
-                eprintln!("Found small factor {p}");
-            }
-        }
+
+    let tz = nred.trailing_zeros();
+    for _ in 0..tz {
+        factors.push(Uint::from_digit(2));
+    }
+    nred >>= tz;
+
+    if nred.bits() <= 128 {
+        trialdiv::factor4096(&mut nred, &mut factors);
+    } else {
+        trialdiv::factor128k(&mut nred, &mut factors);
     }
     if nred != n && prefs.verbose(Verbosity::Info) {
         eprintln!("Factoring {nred}");
