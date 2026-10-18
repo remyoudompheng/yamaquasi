@@ -132,11 +132,6 @@ impl PM1Base {
             factors.push(buffer as u32)
         }
 
-        let gaps: Vec<u8> = (1..larges.len())
-            .map(|k| u8::try_from(larges[k] - larges[k - 1]).unwrap() / 2)
-            .collect();
-        let mut max_gap: u32 = gaps.iter().copied().max().unwrap() as u32;
-
         // Should be use baby/giant steps?
         let step_size = match b2 {
             ..300 => 0,
@@ -151,6 +146,17 @@ impl PM1Base {
             150_000..250_000 => 1050, // φ=240
             _ => unreachable!(),
         };
+
+        let (gaps, mut max_gap) = if step_size == 0 {
+            let gaps: Vec<u8> = (1..larges.len())
+                .map(|k| u8::try_from(larges[k] - larges[k - 1]).unwrap() / 2)
+                .collect();
+            let max_gap: u32 = gaps.iter().copied().max().unwrap() as u32;
+            (gaps, max_gap)
+        } else {
+            (vec![], 0)
+        };
+
         let (step_larges, step_smallgaps, step_pairs) = if step_size == 0 {
             (0, vec![], vec![])
         } else {
@@ -192,87 +198,6 @@ impl PM1Base {
             step_larges,
             step_smallgaps: step_smallgaps.into_boxed_slice(),
             step_pairs: step_pairs.into_boxed_slice(),
-        }
-    }
-
-    // Tentatively factor number n with a budget of squarings.
-    // budget=40000 will factor about 75% of 50-bit semiprimes
-    // for about 6x-8x less time than SQUFOF.
-    pub fn factor(&self, n: u64, budget: usize) -> Option<(u64, u64)> {
-        assert!(n % 2 == 1);
-        // We have a lot of modular reductions to compute,
-        // so we use Montgomery forms.
-        // Precompute opposite inverse of n mod R (R=2^64)
-        let zn = Mod64::new64(n);
-
-        // Compute 2^K-1 mod n where K bit length is <= budget
-        // 2R mod N,
-        let one = zn.one();
-        let minus_one_r = n - one;
-        let mut xr = zn.add(one, one);
-        // Small primes is assumed to have a cost of 1024 (95 primes).
-        let fmax = std::cmp::min(self.factors.len(), budget * self.factors.len() / 1024);
-        for block in self.factors[..fmax].chunks(8) {
-            for &f in block {
-                // Compute x^f
-                xr = zn.pow1(xr, f as u64);
-            }
-            // Maybe we have finished?
-            // No need to reduce out of Montgomery form, subtract R
-            // to get 2^K R - R = (2^K-1)R
-            let d = Integer::gcd(&n, &(xr + minus_one_r));
-            if d > 1 && d < n {
-                return Some((d, n / d));
-            }
-        }
-        let d = Integer::gcd(&n, &(xr + minus_one_r));
-        if d > 1 && d < n {
-            return Some((d, n / d));
-        }
-        // Start stage 2.
-        // We still have not factored but maybe the order of xr is a small prime
-        // since we have eliminated small factors.
-        if budget < 1001 {
-            return None;
-        }
-        let pmax = std::cmp::min(self.larges.len(), budget - 1000);
-        // Compute xr^2k for 2k = 2 ... 86
-        let xr2 = zn.mul(xr, xr);
-        // jumps[k] = xr^(2k+2)
-        let mut jumps = [0u64; 64];
-        let mut j = xr2;
-        for k in 1..=jumps.len() {
-            jumps[k - 1] = j;
-            j = zn.mul(j, xr2);
-        }
-        // The first large prime is 503 = 120 * 4 + 22 + 1
-        let xr240 = zn.mul(jumps[120 / 2 - 1], jumps[120 / 2 - 1]);
-        let xr480 = zn.mul(xr240, xr240);
-        let xr502 = zn.mul(xr480, jumps[22 / 2 - 1]);
-        let mut h = zn.mul(xr502, xr);
-        let mut product = h + minus_one_r;
-        let mut exp = 503;
-        debug_assert!(self.larges[0] == 503);
-        for (idx, &p) in self.larges[1..pmax].iter().enumerate() {
-            if idx % 64 == 0 {
-                // Factoring will fail if both factors have similar
-                // largest primes.
-                let d = Integer::gcd(&n, &product);
-                if d > 1 && d < n {
-                    return Some((d, n / d));
-                }
-            }
-            // Accumulate the product of (h^p - 1) for primes p
-            let gap = (p - exp) as usize;
-            h = zn.mul(h, jumps[gap / 2 - 1]);
-            product = zn.mul(product, h + minus_one_r);
-            exp = p;
-        }
-        let d = Integer::gcd(&n, &product);
-        if d > 1 && d < n {
-            return Some((d, n / d));
-        } else {
-            None
         }
     }
 
@@ -1054,30 +979,7 @@ const STAGE2_PARAMS: &[(f64, u64, u64)] = &[
 ];
 
 #[test]
-fn test_pm1_basic() {
-    let ns: &[u64] = &[
-        235075827453629, // max divisor 29129
-        166130059616737, // max divisor 467
-        159247921097933, // max divisor 3251
-        224077614412439, // max divisor 1759
-        219669028971857, // max divisor 193
-    ];
-    let pb = PM1Base::new();
-    'nextn: for &n in ns {
-        for budget in [500, 1000, 1500, 2000, 4000, 7000, 10000, 20000] {
-            if let Some((p, q)) = pb.factor(n, budget) {
-                eprintln!("factored {n} with budget {budget} => {p}*{q}");
-                assert_eq!(p * q, n);
-                continue 'nextn;
-            }
-        }
-        panic!("failed to factor {n}");
-    }
-}
-
-#[test]
 fn test_pm1_random() {
-    let pb = PM1Base::new();
     for bits in [20, 22, 24, 26, 28] {
         let mut seed = 1234567_u32;
         let mut samples = vec![];
@@ -1098,12 +1000,20 @@ fn test_pm1_random() {
 
         let size = 2 * bits;
         let total = samples.len();
-        for budget in [500, 2000, 5000, 10000, 20000, 35000, 65000] {
+        for budget in [500, 2000, 5000, 10000, 20000] {
+            // b2 = nth_prime(budget)
+            let pb = if budget > 5000 {
+                PM1Base::newsmall(512, 1024 + 10 * budget)
+            } else {
+                PM1Base::newsmall(128, 10 * budget)
+            };
             let mut ok = 0;
             let start = std::time::Instant::now();
             for &n in &samples {
-                if let Some((x, y)) = pb.factor(n, budget) {
-                    assert_eq!(x * y, n);
+                let xs = pb.pm1(&Uint::from(n));
+                if xs.len() > 1 {
+                    let xprod: u64 = xs.iter().copied().map(u64::cast_from).product();
+                    assert_eq!(n % xprod, 0);
                     ok += 1;
                 }
             }

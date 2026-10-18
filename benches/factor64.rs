@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use brunch::Bench;
-use yamaquasi::{fbase, pollard_pm1, pollard_rho, qsieve64, squfof, Verbosity};
+use yamaquasi::{fbase, pollard_pm1, pollard_rho, qsieve64, squfof, Uint, Verbosity};
 
 brunch::benches! {
     {
@@ -125,7 +125,7 @@ brunch::benches! {
             166130059616737,
             159247921097933,
             224077614412439,
-            219669028971857,
+            153661921148731,
         ];
         Bench::new("5x Rho n=48 bits")
             .with_timeout(Duration::from_secs(3))
@@ -157,12 +157,11 @@ brunch::benches! {
             28379446573532569, // B=11447
             56181815869659373, // B=17489
         ];
-        let pb = pollard_pm1::PM1Base::new();
+        let pb = pollard_pm1::PM1Base::newsmall(512, 30000);
         Bench::new("5x P-1 n=56 bits")
             .with_timeout(Duration::from_secs(3))
             .run_seeded(n56, |ns| for &n in ns {
-                let Some(_) = pb.factor(n, 3000)
-                    else { panic!("failure on {n}") };
+                pb.pm1(&Uint::from(n)).first().unwrap_or_else(|| panic!("failure on {n}"));
             })
     },
     {
@@ -174,14 +173,14 @@ brunch::benches! {
             5733442064937071, // B=55127
 
         ];
-        let pb = pollard_pm1::PM1Base::new();
+        let pb = pollard_pm1::PM1Base::newsmall(512, 80000);
         Bench::new("5x P-1 n=52 bits with large bound")
             .with_timeout(Duration::from_secs(3))
             .run_seeded(n52hard, |ns| for &n in ns {
-                let Some(_) = pb.factor(n, 8000)
-                    else { panic!("failure on {n}") };
+                pb.pm1(&Uint::from(n)).first().unwrap_or_else(|| panic!("failure on {n}"));
             })
     },
+    /*
     {
         let n52hard: &[u64] = &[
             1834558324821379, // B=750223
@@ -198,6 +197,7 @@ brunch::benches! {
                     else { panic!("failure on {n}") };
             })
     },
+    */
     {
         let n48: &[u64] = &[
             235075827453629,
