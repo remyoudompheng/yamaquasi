@@ -611,11 +611,7 @@ impl ZmodN {
 
     pub fn from_int(&self, x: Uint) -> MInt {
         // This method can be used for "large" integers.
-        let x = if x > self.n {
-            x % self.n
-        } else {
-            x
-        };
+        let x = if x > self.n { x % self.n } else { x };
         self.mul(MInt::from_uint(x), self.r2)
     }
 
@@ -635,7 +631,12 @@ impl ZmodN {
 
     pub fn mul<M: Borrow<MInt>>(&self, x: M, y: M) -> MInt {
         // all bit lengths MUST be < 512
-        debug_assert!(Uint::from(*x.borrow()) < self.n, "n={} x={}", self.n, Uint::from(*x.borrow()));
+        debug_assert!(
+            Uint::from(*x.borrow()) < self.n,
+            "n={} x={}",
+            self.n,
+            Uint::from(*x.borrow())
+        );
         debug_assert!(Uint::from(*y.borrow()) < self.n);
         let mut m = MInt::default();
         mint_mulmod(self, &mut m.0, &x.borrow().0, &y.borrow().0, self.k);

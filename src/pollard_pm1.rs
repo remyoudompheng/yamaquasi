@@ -312,6 +312,10 @@ impl PM1Base {
             (nred, Uint::from(g))
         };
 
+        if nred.is_one() {
+            return facs;
+        }
+
         // Convert to ordinary form and back to nred Montgomery form.
         let gk1 = zn.to_int(MInt::from_uint(gk));
         //println!("stage2 nred={nred} g={gk1}");
