@@ -1,9 +1,12 @@
 use std::str::FromStr;
 
-use yamaquasi::pollard_pm1::pm1_impl;
+use yamaquasi::pollard_pm1::{pm1_impl, PM1Base};
 use yamaquasi::{Preferences, Uint, Verbosity};
 
 fn main() {
+    // A 128-bit semiprime.
+    let p128 = Uint::from(49077314686865539721714714586249325793_u128);
+
     // A 256-bit semiprime.
     // P-1 cannot possibly find the factors:
     // 283591646828730759669387134803840520563
@@ -23,28 +26,60 @@ fn main() {
     prefs.verbosity = Verbosity::Silent;
 
     let b2_values = [
-        30e3, 60e3, 100e3, 200e3, 450e3, 1.9e6, 8.3e6, 33e6, 133e6, 550e6, 2.3e9, 7.9e9, 37e9,
-        150e9, 640e9, 2.5e12, 11e12,
+        10e3, 30e3, 60e3, 100e3, 200e3, 450e3, 1.9e6, 8.3e6, 33e6, 133e6, 550e6, 2.3e9, 7.9e9,
+        37e9, 150e9, 640e9, 2.5e12, 11e12,
     ];
+    let mut tt128 = vec![];
     let mut tt256 = vec![];
     let mut tt480 = vec![];
     for &b2 in &b2_values {
         let b1 = 200;
+
+        // Warmup
+        let _ = pm1_impl(&p256, b1, b2, Verbosity::Silent);
+
+        let start = std::time::Instant::now();
+        let res = pm1_impl(&p128, b1, b2, Verbosity::Silent);
+        assert!(res.is_none());
+        let t = start.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("p128 PM1(B1={b1},B2={b2:.2e}) in {t:.3}ms");
+        tt128.push(t);
+
         let start = std::time::Instant::now();
         let res = pm1_impl(&p256, b1, b2, Verbosity::Silent);
         assert!(res.is_none());
-        let t = start.elapsed().as_secs_f64();
-        eprintln!("p256 PM1(B1={b1},B2={b2:.2e}) in {t:.3}s");
+        let t = start.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("p256 PM1(B1={b1},B2={b2:.2e}) in {t:.3}ms");
         tt256.push(t);
 
         let start = std::time::Instant::now();
         let res = pm1_impl(&p480, b1, b2, Verbosity::Silent);
         assert!(res.is_none());
-        let t = start.elapsed().as_secs_f64();
-        eprintln!("p480 PM1(B1={b1},B2={b2:.2e}) in {t:.3}s");
+        let t = start.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("p480 PM1(B1={b1},B2={b2:.2e}) in {t:.3}ms");
         tt480.push(t);
+
+        if b2 < 250e3 {
+            let pb = PM1Base::newsmall(b1 as u32, b2 as u32);
+
+            let start = std::time::Instant::now();
+            let _ = pb.pm1(&p128);
+            let t = start.elapsed().as_secs_f64() * 1000.0;
+            eprintln!("p128 small PM1(B1={b1},B2={b2:.2e}) in {t:.3}ms");
+
+            let start = std::time::Instant::now();
+            let _ = pb.pm1(&p256);
+            let t = start.elapsed().as_secs_f64() * 1000.0;
+            eprintln!("p256 small PM1(B1={b1},B2={b2:.2e}) in {t:.3}ms");
+
+            let start = std::time::Instant::now();
+            let _ = pb.pm1(&p480);
+            let t = start.elapsed().as_secs_f64() * 1000.0;
+            eprintln!("p480 small PM1(B1={b1},B2={b2:.2e}) in {t:.3}ms");
+        }
     }
 
+    let mut t128 = vec![];
     let mut t256 = vec![];
     let mut t480 = vec![];
     let b1_values = &[1000, 10_000, 100_000, 1_000_000, 10_000_000, 100_000_000];
@@ -52,53 +87,72 @@ fn main() {
         let b2 = 8.3e6;
 
         let start = std::time::Instant::now();
+        let res = pm1_impl(&p128, b1, b2, Verbosity::Silent);
+        assert!(res.is_none());
+        let t = start.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("p128 PM1(B1={b1},B2={b2:.2e}) in {t:.3}ms");
+        t128.push(t);
+
+        let start = std::time::Instant::now();
         let res = pm1_impl(&p256, b1, b2, Verbosity::Silent);
         assert!(res.is_none());
-        let t = start.elapsed().as_secs_f64();
-        eprintln!("p256 PM1(B1={b1},B2={b2:.2e}) in {t:.3}s");
+        let t = start.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("p256 PM1(B1={b1},B2={b2:.2e}) in {t:.3}ms");
         t256.push(t);
 
         let start = std::time::Instant::now();
         let res = pm1_impl(&p480, b1, b2, Verbosity::Silent);
         assert!(res.is_none());
-        let t = start.elapsed().as_secs_f64();
-        eprintln!("p480 PM1(B1={b1},B2={b2:.2e}) in {t:.3}s");
+        let t = start.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("p480 PM1(B1={b1},B2={b2:.2e}) in {t:.3}ms");
         t480.push(t);
     }
 
     // Compare with theoretical complexity.
     // In stage 1, we need 1.2 modular multiplications per bit.
+    let mut stage1_c128 = vec![];
     let mut stage1_c256 = vec![];
     let mut stage1_c480 = vec![];
     for i in 2..b1_values.len() {
         let b1 = b1_values[i] as f64;
-        let c = (t256[i] - t256[0]) / (1.44 * 1.2 * b1) * 1e9;
+        let c = (t128[i] - t128[0]) / (1.44 * 1.2 * b1) * 1e6;
+        stage1_c128.push(c.round() as u64);
+        let c = (t256[i] - t256[0]) / (1.44 * 1.2 * b1) * 1e6;
         stage1_c256.push(c.round() as u64);
-        let c = (t480[i] - t480[0]) / (1.44 * 1.2 * b1) * 1e9;
+        let c = (t480[i] - t480[0]) / (1.44 * 1.2 * b1) * 1e6;
         stage1_c480.push(c.round() as u64);
     }
+    eprintln!("p128: stage 1 cost 1.2 * 1.44 B1 * {stage1_c128:?}ns");
     eprintln!("p256: stage 1 cost 1.2 * 1.44 B1 * {stage1_c256:?}ns");
     eprintln!("p480: stage 1 cost 1.2 * 1.44 B1 * {stage1_c480:?}ns");
+    let mut small2_c128 = vec![];
     let mut small2_c256 = vec![];
     let mut small2_c480 = vec![];
+    let mut large2_c128 = vec![];
     let mut large2_c256 = vec![];
     let mut large2_c480 = vec![];
     for i in 1..b2_values.len() {
         let b2 = b2_values[i] as f64;
         if b2 < 80e3 {
-            let c = (tt256[i] - tt256[0]) / (b2 / b2.log2()) * 1e9;
+            let c = (tt128[i] - tt128[0]) / (b2 / b2.log2()) * 1e6;
+            small2_c128.push(c.round() as u64);
+            let c = (tt256[i] - tt256[0]) / (b2 / b2.log2()) * 1e6;
             small2_c256.push(c.round() as u64);
-            let c = (tt480[i] - tt480[0]) / (b2 / b2.log2()) * 1e9;
+            let c = (tt480[i] - tt480[0]) / (b2 / b2.log2()) * 1e6;
             small2_c480.push(c.round() as u64);
         } else {
-            let c = (tt256[i] - tt256[0]) / (b2.sqrt() * b2.log2()) * 1e9;
+            let c = (tt128[i] - tt128[0]) / (b2.sqrt() * b2.log2()) * 1e6;
+            large2_c128.push(c.round() as u64);
+            let c = (tt256[i] - tt256[0]) / (b2.sqrt() * b2.log2()) * 1e6;
             large2_c256.push(c.round() as u64);
-            let c = (tt480[i] - tt480[0]) / (b2.sqrt() * b2.log2()) * 1e9;
+            let c = (tt480[i] - tt480[0]) / (b2.sqrt() * b2.log2()) * 1e6;
             large2_c480.push(c.round() as u64);
         }
     }
+    eprintln!("p128: small stage 2 cost B2/log2(B2) * {small2_c128:?}ns");
     eprintln!("p256: small stage 2 cost B2/log2(B2) * {small2_c256:?}ns");
     eprintln!("p480: small stage 2 cost B2/log2(B2) * {small2_c480:?}ns");
+    eprintln!("p128: large stage 2 cost sqrt(B2)*log2(B2) * {large2_c128:?}ns");
     eprintln!("p256: large stage 2 cost sqrt(B2)*log2(B2) * {large2_c256:?}ns");
     eprintln!("p480: large stage 2 cost sqrt(B2)*log2(B2) * {large2_c480:?}ns");
 }

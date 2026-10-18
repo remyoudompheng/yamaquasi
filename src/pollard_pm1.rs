@@ -53,36 +53,60 @@
 //! Richard P. Brent, Alexander Kruppa, Paul Zimmermann
 //! https://hal.inria.fr/hal-01630907/document
 
+use bnum::cast::CastFrom;
 use bnum::types::U1024;
 use num_integer::Integer;
 
 use crate::arith_fft::convolve_modn_ntt;
-use crate::arith_montgomery::{gcd_factors, mg_2adic_inv, mg_mul, mg_redc, MInt, ZmodN};
+use crate::arith_montgomery::{gcd_factors, MInt, Mod128, Mod192, Mod64, Zmod, ZmodN};
 use crate::arith_poly::{Poly, PolyRing};
 use crate::fbase;
 use crate::{Uint, Verbosity};
 
 /// A factor base for Pollard P-1.
 /// Pairs of factors are multiplied into u32.
+#[derive(Default, Debug)]
 pub struct PM1Base {
     // Compact blocks of factors, up to bound 500 (95 primes)
     factors: Box<[u32]>,
     // 16384 primes from 500 to ~180000
     larges: Box<[u32]>,
+
+    // The prime gaps: list of (large[k+1] - large[k])/2
+    // The gap is never larger than 256 for primes under 400 million
+    gaps: Box<[u8]>,
+    // The number of prime gaps to compute, i.e. max (large[k+1] - large[k])/2
+    max_gap: u32,
+
+    // Baby step/giant step plan: useful when B2 > 1000
+    // Cost is len(gaps) + step_larges + len(step_smalls) + len(larges)
+    step_size: u32,
+    step_larges: u32,
+    step_smallgaps: Box<[u8]>,
+    // List of (giant step, baby step) to combine for each large prime
+    step_pairs: Box<[(u8, u8)]>,
 }
 
 impl PM1Base {
+    // Hardcoded instance for quadratic sieve.
     pub fn new() -> Self {
-        let primes = fbase::primes(70000);
+        Self::newsmall(500, 65530)
+    }
+
+    // Small instances for factor_smooth.
+    pub fn newsmall(b1: u32, b2: u32) -> Self {
+        assert!(b1 < 65_500);
+        assert!(b2 < 250_000); // b2 < 250 * 1050
+
         let mut factors = vec![];
         let mut larges = vec![];
         let mut buffer = 1_u64;
-        for p in primes {
+        for &p in &*fbase::U16_PRIMES {
             // Small primes are raised to some power.
-            if p < 500 {
+            if p < b1 {
                 let p = p as u64;
                 let mut pow = p;
-                while pow * p < 1024 {
+                while pow * p < b1 as u64 {
                     pow *= p;
                 }
                 if buffer * pow >= 1 << 32 {
@@ -90,18 +114,84 @@ impl PM1Base {
                     buffer = 1;
                 }
                 buffer *= pow;
+            } else if p < b2 {
+                larges.push(p)
             } else {
-                if larges.len() < 64 * 1024 {
-                    larges.push(p)
+                break;
+            }
+        }
+        if b2 > 65536 {
+            let extra = fbase::primes_below(b2);
+            for l in extra {
+                if 65536 < l {
+                    larges.push(l);
                 }
             }
         }
         if buffer > 1 {
             factors.push(buffer as u32)
         }
+
+        let gaps: Vec<u8> = (1..larges.len())
+            .map(|k| u8::try_from(larges[k] - larges[k - 1]).unwrap() / 2)
+            .collect();
+        let mut max_gap: u32 = gaps.iter().copied().max().unwrap() as u32;
+
+        // Should be use baby/giant steps?
+        let step_size = match b2 {
+            ..300 => 0,
+            300..800 => 30,           // φ=12
+            800..1500 => 60,          // φ=16
+            1500..3000 => 90,         // φ=24
+            3000..6000 => 120,        // φ=32
+            6000..15000 => 210,       // φ=48
+            15000..40000 => 330,      // φ=80
+            40_000..80_000 => 510,    // φ=128
+            80_000..150_000 => 660,   // φ=160
+            150_000..250_000 => 1050, // φ=240
+            _ => unreachable!(),
+        };
+        let (step_larges, step_smallgaps, step_pairs) = if step_size == 0 {
+            (0, vec![], vec![])
+        } else {
+            let nlarges = b2 / step_size + 1;
+            let smalls: Vec<u32> = (0..step_size).filter(|&x| x.gcd(&step_size) == 1).collect();
+            let mut smallidx = vec![0u8; step_size as usize];
+            for (i, &s) in smalls.iter().enumerate() {
+                smallidx[s as usize] = i as u8;
+            }
+            let smallgaps: Vec<u8> = (1..smalls.len())
+                .map(|k| u8::try_from(smalls[k] - smalls[k - 1]).unwrap() / 2)
+                .collect();
+            assert!(nlarges <= 255);
+            assert!(smalls.len() <= 255);
+            max_gap = smallgaps.iter().copied().max().unwrap() as u32;
+            let mut pairs = Vec::with_capacity(larges.len());
+            let mut q = 0;
+            let mut qstep = q * step_size;
+            for &l in &larges {
+                while l > qstep {
+                    q += 1;
+                    qstep += step_size;
+                    assert!(q <= nlarges);
+                }
+                let pair = ((q - 1) as u8, smallidx[(qstep - l) as usize]);
+                debug_assert_eq!(l, (pair.0 as u32 + 1) * step_size - smalls[pair.1 as usize]);
+                pairs.push(((q - 1) as u8, smallidx[(qstep - l) as usize]));
+            }
+            (nlarges, smallgaps, pairs)
+        };
+
         PM1Base {
             factors: factors.into_boxed_slice(),
             larges: larges.into_boxed_slice(),
+            gaps: gaps.into_boxed_slice(),
+            max_gap,
+
+            step_size,
+            step_larges,
+            step_smallgaps: step_smallgaps.into_boxed_slice(),
+            step_pairs: step_pairs.into_boxed_slice(),
         }
     }
 
@@ -113,30 +203,19 @@ impl PM1Base {
         // We have a lot of modular reductions to compute,
         // so we use Montgomery forms.
         // Precompute opposite inverse of n mod R (R=2^64)
-        let ninv = mg_2adic_inv(n);
+        let zn = Mod64::new64(n);
 
         // Compute 2^K-1 mod n where K bit length is <= budget
         // 2R mod N,
-        let one_r = ((1u128 << 64) % (n as u128)) as u64;
-        let minus_one_r = n - one_r;
-        let mut xr = (2 * one_r) % n;
-        debug_assert!(mg_redc(n, ninv, xr as u128) == 2);
+        let one = zn.one();
+        let minus_one_r = n - one;
+        let mut xr = zn.add(one, one);
         // Small primes is assumed to have a cost of 1024 (95 primes).
         let fmax = std::cmp::min(self.factors.len(), budget * self.factors.len() / 1024);
         for block in self.factors[..fmax].chunks(8) {
             for &f in block {
                 // Compute x^f
-                let mut res = one_r;
-                let mut sq = xr;
-                let mut exp = f;
-                while exp > 0 {
-                    if exp & 1 == 1 {
-                        res = mg_mul(n, ninv, res, sq);
-                    }
-                    sq = mg_mul(n, ninv, sq, sq);
-                    exp /= 2;
-                }
-                xr = res;
+                xr = zn.pow1(xr, f as u64);
             }
             // Maybe we have finished?
             // No need to reduce out of Montgomery form, subtract R
@@ -158,19 +237,19 @@ impl PM1Base {
         }
         let pmax = std::cmp::min(self.larges.len(), budget - 1000);
         // Compute xr^2k for 2k = 2 ... 86
-        let xr2 = mg_mul(n, ninv, xr, xr);
+        let xr2 = zn.mul(xr, xr);
         // jumps[k] = xr^(2k+2)
         let mut jumps = [0u64; 64];
         let mut j = xr2;
         for k in 1..=jumps.len() {
             jumps[k - 1] = j;
-            j = mg_mul(n, ninv, j, xr2);
+            j = zn.mul(j, xr2);
         }
         // The first large prime is 503 = 120 * 4 + 22 + 1
-        let xr240 = mg_mul(n, ninv, jumps[120 / 2 - 1], jumps[120 / 2 - 1]);
-        let xr480 = mg_mul(n, ninv, xr240, xr240);
-        let xr502 = mg_mul(n, ninv, xr480, jumps[22 / 2 - 1]);
-        let mut h = mg_mul(n, ninv, xr502, xr);
+        let xr240 = zn.mul(jumps[120 / 2 - 1], jumps[120 / 2 - 1]);
+        let xr480 = zn.mul(xr240, xr240);
+        let xr502 = zn.mul(xr480, jumps[22 / 2 - 1]);
+        let mut h = zn.mul(xr502, xr);
         let mut product = h + minus_one_r;
         let mut exp = 503;
         debug_assert!(self.larges[0] == 503);
@@ -185,8 +264,8 @@ impl PM1Base {
             }
             // Accumulate the product of (h^p - 1) for primes p
             let gap = (p - exp) as usize;
-            h = mg_mul(n, ninv, h, jumps[gap / 2 - 1]);
-            product = mg_mul(n, ninv, product, h + minus_one_r);
+            h = zn.mul(h, jumps[gap / 2 - 1]);
+            product = zn.mul(product, h + minus_one_r);
             exp = p;
         }
         let d = Integer::gcd(&n, &product);
@@ -195,6 +274,228 @@ impl PM1Base {
         } else {
             None
         }
+    }
+
+    /// Run pm1 with selected exponents.
+    /// Returns a (possibly trivial) factorization of n.
+    ///
+    /// This is similar to pm1_impl except that stage 1 uses small blocks,
+    /// and stage 2 only uses prime gaps.
+    ///
+    /// Cost: 1.44 B1 + 2 primecount(B1, B2)
+    pub fn pm1(&self, n: &Uint) -> Vec<Uint> {
+        let mut facs = vec![];
+        let mut zn = ZmodN::new(*n);
+        // Run stage1
+        let (nred, gk) = if n.bits() <= 64 {
+            let zn = Mod64::new(*n);
+            self.stage1(zn, &mut facs)
+        } else if n.bits() <= 128 {
+            let zn = Mod128::new(*n);
+            self.stage1(zn, &mut facs)
+        } else if n.bits() <= 192 {
+            let zn = Mod192::new(*n);
+            self.stage1(zn, &mut facs)
+        } else {
+            let mut nred = *n;
+            let mut g = zn.from_int(Uint::from(2_u64));
+            let mut gpows = Vec::with_capacity(self.factors.len() / 8 + 1);
+            gpows.push(zn.one());
+            for block in self.factors.chunks(8) {
+                for &exp in block {
+                    g = exp_modn(&zn, &g, exp as u64);
+                    gpows.push(zn.sub(&g, &zn.one()));
+                }
+                // Check GCD after each exponent block
+                check_gcd_factors(n, &mut facs, &mut nred, &mut gpows, None);
+            }
+            (nred, Uint::from(g))
+        };
+
+        // Convert to ordinary form and back to nred Montgomery form.
+        let gk1 = zn.to_int(MInt::from_uint(gk));
+        //println!("stage2 nred={nred} g={gk1}");
+        zn = ZmodN::new(nred);
+        let g = zn.from_int(gk1);
+
+        if nred.bits() <= 64 {
+            let zn = Mod64::new(nred);
+            let g = u64::from(g);
+            let nred = self.stage2(zn, g, &mut facs);
+            facs.push(nred);
+            return facs;
+        } else if nred.bits() <= 128 {
+            let zn = Mod128::new(nred);
+            let g = u128::from(g);
+            let nred = self.stage2(zn, g, &mut facs);
+            facs.push(nred);
+            return facs;
+        } else if nred.bits() <= 192 {
+            let zn = Mod192::new(nred);
+            let g = <Mod192 as Zmod>::Val::cast_from(Uint::from(g));
+            let nred = self.stage2(zn, g, &mut facs);
+            facs.push(nred);
+            return facs;
+        }
+
+        // Stage 2
+        // g is 2^(product of small primes) mod n
+        // gaps[i] = g^2i+2
+        // The vector is grown dynamically during iteration.
+        let g2 = zn.mul(&g, &g);
+        let mut gaps = Vec::with_capacity(self.max_gap as usize);
+        gaps.push(g2);
+        let mut g2k = g2;
+        for _ in 2..=self.max_gap {
+            g2k = zn.mul(&g2k, &g2);
+            gaps.push(g2k);
+        }
+
+        // Compute g^pprev
+        let mut p_prev = self.larges[0];
+        let mut x = exp_modn(&zn, &g, p_prev as u64);
+        // Accumulate product of (g^p-1)
+        let one = zn.one();
+        let mut products = Vec::with_capacity(self.larges.len());
+        let mut product = one;
+        products.push(one);
+        if self.step_size > 0 {
+            // Compute giant steps
+            let gl = exp_modn(&zn, &g, self.step_size as u64);
+            let mut giants = Vec::with_capacity(self.step_larges as usize);
+            giants.push(gl);
+            let mut glk = gl;
+            for _ in 1..self.step_larges {
+                glk = zn.mul(&glk, &gl);
+                giants.push(glk);
+            }
+            // Compute baby steps
+            let mut smalls = Vec::with_capacity(self.step_smallgaps.len() + 1);
+            smalls.push(g);
+            let mut gs = g;
+            for &gap in &self.step_smallgaps {
+                gs = zn.mul(&gs, &gaps[gap as usize - 1]);
+                smalls.push(gs);
+            }
+            // Compute all products
+            for (idx, &(ig, is)) in self.step_pairs.iter().enumerate() {
+                product = zn.mul(
+                    &product,
+                    &zn.sub(&giants[ig as usize], &smalls[is as usize]),
+                );
+                if idx % 8 == 0 {
+                    products.push(product);
+                }
+            }
+        } else {
+            product = zn.sub(&x, &one);
+            for (pidx, &p) in self.larges[1..].iter().enumerate() {
+                let gap = (p - p_prev) as usize;
+                debug_assert!(gap > 0 && gap % 2 == 0, "gap={gap} p_prev={p_prev} p={p}");
+                x = zn.mul(x, gaps[gap / 2 - 1]);
+                product = zn.mul(&product, &zn.sub(&x, &one));
+                if pidx % 8 == 0 {
+                    // Don't store all products
+                    products.push(product);
+                }
+                p_prev = p;
+            }
+        }
+        // Check GCD at the end of stage 2
+        let mut nred = nred;
+        check_gcd_factors(n, &mut facs, &mut nred, &mut products, None);
+        facs.push(nred);
+        facs
+    }
+
+    // Run P-1 stage 1.
+    // Returns: nred = n / gcd(n, g^K-1), g^K in Montgomery form for n.
+    pub fn stage1<Z: Zmod + Copy>(&self, zn: Z, facs: &mut Vec<Uint>) -> (Uint, Uint)
+    where
+        Z::Val: Copy,
+        Uint: CastFrom<Z::Val>,
+    {
+        let one = zn.one();
+        let mut g = zn.cast(2);
+        let mut gpows: Vec<Z::Val> = vec![one];
+        // Stage 1
+        for &exp in &self.factors {
+            g = zn.pow1(g, exp as u64);
+            gpows.push(zn.abs_diff(g, one));
+        }
+        let nred = zn.gcd_factors(&gpows, facs);
+        (Uint::cast_from(nred), Uint::cast_from(g))
+    }
+
+    pub fn stage2<Z: Zmod + Copy>(&self, zn: Z, g: Z::Val, facs: &mut Vec<Uint>) -> Uint
+    where
+        Z::Val: Copy,
+        Uint: CastFrom<Z::Val>,
+    {
+        let one = zn.one();
+        // Stage 2
+        // g is 2^(product of small primes) mod n
+        // gaps[i] = g^2i+2
+        // The vector is grown dynamically during iteration.
+        let g2 = zn.mul(g, g);
+        let mut gaps = Vec::with_capacity(self.max_gap as usize);
+        gaps.push(g2);
+        let mut g2k = g2;
+        for _ in 2..=self.max_gap {
+            g2k = zn.mul(g2k, g2);
+            gaps.push(g2k);
+        }
+
+        let mut products: Vec<Z::Val> = Vec::with_capacity(self.larges.len() / 8 + 1);
+        let mut product = one;
+        products.push(one);
+        if self.step_size > 0 {
+            // Compute giant steps
+            let gl = zn.pow1(g, self.step_size as u64);
+            let mut giants = Vec::with_capacity(self.step_larges as usize);
+            giants.push(gl);
+            let mut glk = gl;
+            for _ in 1..self.step_larges {
+                glk = zn.mul(glk, gl);
+                giants.push(glk);
+            }
+            // Compute baby steps
+            let mut smalls = Vec::with_capacity(self.step_smallgaps.len() + 1);
+            smalls.push(g);
+            let mut gs = g;
+            for &gap in &self.step_smallgaps {
+                gs = zn.mul(gs, gaps[gap as usize - 1]);
+                smalls.push(gs);
+            }
+            // Compute all products
+            for (idx, &(ig, is)) in self.step_pairs.iter().enumerate() {
+                product = zn.mul(
+                    product,
+                    zn.abs_diff(giants[ig as usize], smalls[is as usize]),
+                );
+                if idx % 8 == 0 {
+                    products.push(product);
+                }
+            }
+        } else {
+            // Compute g^pprev
+            let mut x = zn.pow1(g, self.larges[0] as u64);
+            // Accumulate product of (g^p-1)
+            product = zn.sub(x, one);
+            for (pidx, &gap) in self.gaps.iter().enumerate() {
+                debug_assert!(gap as usize - 1 < gaps.len());
+                x = zn.mul(x, gaps[gap as usize - 1]);
+                product = zn.mul(product, zn.abs_diff(x, one));
+                if pidx % 8 == 0 {
+                    // Don't store all products
+                    products.push(product);
+                }
+            }
+        }
+
+        // Check GCD at the end of stage 2
+        let nred = zn.gcd_factors(&products, facs);
+        Uint::cast_from(nred)
     }
 }
 
@@ -808,6 +1109,80 @@ fn test_pm1_random() {
             );
         }
     }
+}
+
+#[test]
+fn test_pm1_smooth() {
+    use std::str::FromStr;
+
+    // Relations from a sieve.
+    // 124328626618163268430184474454250925320: 2 2 2 5 13 19 107 1871 1987 8311 129469 713917 41180532667
+    // 1972461167729706376412338749702922523385: 3 3 5 7 7 7 13 17 3299 73189 417899 1410811 4062012508769
+
+    // Exponent base costing about 1500 multiplications.
+    let pb = PM1Base::newsmall(200, 5000);
+    let n = Uint::from_str("124328626618163268430184474454250925320").unwrap() >> 3;
+    let v = pb.pm1(&n);
+    println!("{:?}", v);
+    // It should find factors: 107 1871 1987 8311 713917 129469*41180532667
+    // 1235 = 5*13*19 is not separated, 129469 is not smooth
+    assert!(v.contains(&Uint::from_digit(713917)));
+    assert!(v.len() >= 7);
+
+    let n = Uint::from_str("1972461167729706376412338749702922523385").unwrap();
+    let v = pb.pm1(&n);
+    println!("{:?}", v);
+    // It should find factors: 3299 73189 1410811 417899*4062012508769
+    // Small factors are not separated, 417899 is not smooth
+    assert!(v.len() >= 4);
+
+    // 11774943399382161031848827893490971: 4657 8221 16787 24691 80039 573031 16178431
+    let pb = PM1Base::newsmall(100, 2000); // 700 MUL
+    let n = Uint::from_str("11774943399382161031848827893490971").unwrap();
+    let v = pb.pm1(&n);
+    println!("{:?}", v);
+    assert!(v.len() >= 4);
+
+    // Triggered a bug
+    let pb = PM1Base::newsmall(400, 2000);
+    let n = Uint::from_str("18695411147110492918685973421761282").unwrap() >> 1;
+    let v = pb.pm1(&n);
+    println!("{:?}", v);
+    assert!(v.len() >= 4);
+
+    // Force stage1 192 and stage2 64
+    // Remaining primes: 25733 (prime 919), 30203 (prime 15101)
+    let pb = PM1Base::newsmall(300, 1000);
+    let n = Uint::from_str("1088346653828179798842202107510272955225").unwrap();
+    let v = pb.pm1(&n);
+    println!("{:?}", v);
+    assert!(v.len() >= 7);
+
+    // Force stage1 192 and stage2 128
+    // Remaining primes: 1039 * 1109 * 19069 * 25733 * 1170173
+    let pb = PM1Base::newsmall(100, 1000);
+    let v = pb.pm1(&n);
+    println!("{:?}", v);
+    assert!(v.len() >= 3);
+
+    let pb = PM1Base::newsmall(250, 4000);
+    let n = Uint::from_str("17917681567176975564890649792772767247239").unwrap();
+    let v = pb.pm1(&n);
+    println!("{:?}", v);
+    assert!(v.len() >= 4);
+    assert!(v.contains(&Uint::from_digit(1122841)));
+
+    // Force stage1 big and stage2 192
+    // Stage 1 must find factors: 4263811 1839401 10321901
+    // Stage 2 must find factors: 14360837 13609697
+    let pb = PM1Base::newsmall(1000, 10000);
+    let n = Uint::from_str("215241452493727163326221877241410629781765704986319587895847957613081")
+        .unwrap();
+    let v = pb.pm1(&n);
+    println!("{:?}", v);
+    assert!(v.len() >= 4);
+    assert!(v.contains(&Uint::from_digit(14360837)));
+    assert!(v.contains(&Uint::from_digit(13609697)));
 }
 
 #[test]

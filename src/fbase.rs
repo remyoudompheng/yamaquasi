@@ -224,7 +224,7 @@ pub const SMALL_PRIMES_DIVIDERS: [arith::Dividers; SMALL_PRIMES.len()] = {
 };
 
 pub static U16_PRIMES: LazyLock<Vec<u32>> = LazyLock::new(|| {
-    let ps = primes(6542);
+    let ps = primes_below(65536);
     assert_eq!(ps.last(), Some(&65521));
     ps
 });
@@ -233,7 +233,7 @@ pub static U16_PRIMES: LazyLock<Vec<u32>> = LazyLock::new(|| {
 // Prime p is stored at bit p/3.
 pub static PRIME_MAP: LazyLock<Vec<u64>> = LazyLock::new(|| {
     let mut v = vec![0_u64; (1 << 20) / 64];
-    for p in primes(226600) {
+    for p in primes_below(PRIME_MAP_MAX as u32) {
         if p == 2 {
             continue;
         }
@@ -366,6 +366,29 @@ pub fn primes(n: u32) -> Vec<u32> {
             }
             // No need to sieve numbers above sqrt(bound)
             if p as u64 * p as u64 > bound as u64 {
+                continue;
+            }
+            // First odd multiple is 3p.
+            let mut k = p + p / 2;
+            while k < sieve.len() {
+                sieve[k] = true;
+                k += p
+            }
+        }
+    }
+    primes
+}
+
+pub fn primes_below(n: u32) -> Vec<u32> {
+    // sieve[i] says that 2i+1 is composite
+    let mut sieve = vec![false; n as usize / 2];
+    let mut primes = Vec::with_capacity(n as usize / 8);
+    primes.push(2);
+    for i in 1..sieve.len() {
+        if !sieve[i] {
+            let p = 2 * i + 1;
+            primes.push(p as u32);
+            if p * p > n as usize {
                 continue;
             }
             // First odd multiple is 3p.
