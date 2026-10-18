@@ -144,7 +144,7 @@ brunch::benches! {
         Bench::new("5x Rho n=56 bits")
             .with_timeout(Duration::from_secs(3))
             .run_seeded(n56, |ns| for &n in ns {
-                pollard_rho::rho_semiprime(n).unwrap();
+                let _ = pollard_rho::rho_semiprime(n);
             })
     },
     {

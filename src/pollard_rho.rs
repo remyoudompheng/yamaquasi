@@ -28,9 +28,9 @@
 //! Peter L. Montgomery, Speeding the Pollard and Elliptic Curve methods of Factorization
 //! (Math. Comp. 48, 177, 1987)
 
-use num_integer::Integer;
+use bnum::cast::CastFrom;
 
-use crate::arith_montgomery::{gcd_factors, mg_2adic_inv, mg_mul, MInt, ZmodN, M128};
+use crate::arith_montgomery::{gcd_factors, MInt, Mod128, Mod192, Mod64, Zmod, ZmodN};
 use crate::{Uint, Verbosity};
 
 /// Attempt to factor a double large prime from quadratic sieve
@@ -39,132 +39,35 @@ use crate::{Uint, Verbosity};
 /// The smallest prime factor usually has 19-30 bits.
 /// This function focuses on factors under 25 bits.
 pub fn rho_semiprime(n: u64) -> Option<(u64, u64)> {
-    if n >> 40 == 0 {
+    let f = if n >> 40 == 0 {
         rho64(n, 1, 2048)
-            .or_else(|| rho64(n, 2, 2048))
-            .or_else(|| rho64(n, 3, 2048))
-    } else if n >> 48 == 0 {
-        rho64(n, 1, 4096)
             .or_else(|| rho64(n, 2, 4096))
             .or_else(|| rho64(n, 3, 4096))
+    } else if n >> 48 == 0 {
+        rho64(n, 1, 4096)
+            .or_else(|| rho64(n, 2, 8192))
+            .or_else(|| rho64(n, 3, 8192))
     } else {
         // Don't try too much
-        rho64(n, 1, 8192)
-    }
+        rho64(n, 1, 16384)
+    };
+    let f = f?;
+    Some((f, n / f))
 }
 
-// Run Pollard's rho algorithm.
-//
-// Due to the structure of Brent's cycle finding algorithm,
-// iters should be slightly less than a power of 2 (interval [1.5*2^k, 2^k])
-#[doc(hidden)]
-pub fn rho64(n: u64, c: u64, iters: u64) -> Option<(u64, u64)> {
-    let ninv = mg_2adic_inv(n);
-    // Perform x => x^2 + c on the Montgomery representation
-    // So this is actually: xR => x^2 R + c where R=2^64.
-    //
-    // The seed is always 2.
-    //
-    // Invariants:
-    // x1 = f^e1(seed) and x2=f^e2(seed)
-    // 3/2 e1 <= e2 <= 2 e1 - 1
-    let (mut x1, mut x2) = (2_u64, 2_u64);
-    let mut prod = 1;
-    let mut next_interval_start = 0;
-    let mut next_interval_end = 1;
-    for e2 in 1..iters {
-        x2 = mg_mul(n, ninv, x2, x2);
-        x2 += c; // we tolerate x2==n (it will be absorbed by next mg_mul)
-        if e2 < next_interval_start {
-            continue;
-        }
-        // We are in the interval, compare.
-        let prodnext = mg_mul(n, ninv, prod, x1.abs_diff(x2));
-        if prodnext == 0 {
-            // Probably the previous value had a nontrivial GCD with n
-            // and the remaining factor was multiplied in.
-            let d = Integer::gcd(&n, &x1.abs_diff(x2));
-            if d > 1 && d < n {
-                return Some((d, n / d));
-            }
-        }
-        if e2 >= 512 && e2 % 128 == 127 {
-            let d = Integer::gcd(&n, &prod);
-            if d > 1 && d < n {
-                return Some((d, n / d));
-            }
-        }
-        prod = prodnext;
-        if e2 == next_interval_end {
-            // Set e1 = e2
-            x1 = x2;
-            // Next interval is (2^k + 2^(k-1), 2^(k+1) - 1) (length 2^(k-1))
-            let pow2k = e2 + 1;
-            debug_assert!(pow2k & (pow2k - 1) == 0);
-            next_interval_start = pow2k + pow2k / 2;
-            next_interval_end = 2 * pow2k - 1;
+pub fn rho64(n: u64, c: u64, iters: u64) -> Option<u64> {
+    let zn = Mod64::new64(n);
+    let (fs, _) = rho_zmod(zn, c, iters);
+    if fs.len() == 0 {
+        None
+    } else {
+        let f = u64::cast_from(fs[0]);
+        if f < n {
+            Some(f)
+        } else {
+            None
         }
     }
-    let d = Integer::gcd(&n, &prod);
-    if d > 1 && d < n {
-        return Some((d, n / d));
-    }
-    None
-}
-
-#[doc(hidden)]
-pub fn rho128(n: u128, c: u128, iters: u64) -> Option<(u128, u128)> {
-    let ninv = M128::inv_2adic(n);
-    // Perform x => x^2 + c on the Montgomery representation
-    // So this is actually: xR => x^2 R + c where R=2^128.
-    //
-    // The seed is always 2.
-    //
-    // Invariants:
-    // x1 = f^e1(seed) and x2=f^e2(seed)
-    // 3/2 e1 <= e2 <= 2 e1 - 1
-    let (mut x1, mut x2) = (M128(2_u128), M128(2_u128));
-    let mut prod = M128(1);
-    let mut next_interval_start = 0;
-    let mut next_interval_end = 1;
-    for e2 in 1..iters {
-        x2 = M128::mul(n, ninv, x2, x2);
-        x2.0 += c; // we tolerate x2==n (it will be absorbed by next M128::mul)
-        if e2 < next_interval_start {
-            continue;
-        }
-        // We are in the interval, compare.
-        let prodnext = M128::mul(n, ninv, prod, M128(x1.0.abs_diff(x2.0)));
-        if prodnext.0 == 0 {
-            // Probably the previous value had a nontrivial GCD with n
-            // and the remaining factor was multiplied in.
-            let d = Integer::gcd(&n, &x1.0.abs_diff(x2.0));
-            if d > 1 && d < n {
-                return Some((d, n / d));
-            }
-        }
-        if e2 >= 512 && e2 % 128 == 127 {
-            let d = Integer::gcd(&n, &prod.0);
-            if d > 1 && d < n {
-                return Some((d, n / d));
-            }
-        }
-        prod = prodnext;
-        if e2 == next_interval_end {
-            // Set e1 = e2
-            x1 = x2;
-            // Next interval is (2^k + 2^(k-1), 2^(k+1) - 1) (length 2^(k-1))
-            let pow2k = e2 + 1;
-            debug_assert!(pow2k & (pow2k - 1) == 0);
-            next_interval_start = pow2k + pow2k / 2;
-            next_interval_end = 2 * pow2k - 1;
-        }
-    }
-    let d = Integer::gcd(&n, &prod.0);
-    if d > 1 && d < n {
-        return Some((d, n / d));
-    }
-    None
 }
 
 /// Run Pollard's rho as part of general factorization.
@@ -176,8 +79,8 @@ pub fn rho(n: &Uint, verbosity: Verbosity) -> Option<(Vec<Uint>, Uint)> {
     let size = n.bits();
     let n0 = n.digits()[0];
     let iters = match size {
-        0..=24 => 128,
-        25..=32 => 512,
+        0..=24 => 256,
+        25..=32 => 1024,
         33..=40 => 2048,
         41..=48 => 8192,
         // 16384 is a bit too small for 55 bits.
@@ -193,61 +96,128 @@ pub fn rho(n: &Uint, verbosity: Verbosity) -> Option<(Vec<Uint>, Uint)> {
     // Use several functions to avoid large cycles.
     // We don't want to fallback to a slower algorithm.
     // Typical runtime is below 1ms.
+    let zn = Mod64::new64(n0);
     for c in 1..10 {
-        if let Some((p, q)) = rho64(n0, c, iters) {
+        let (ps, nred) = rho_zmod(zn, c, iters);
+        if ps.len() > 1 {
             if verbosity >= Verbosity::Info {
                 let ms = start.elapsed().as_secs_f64() * 1000.0;
-                eprintln!("Found factor {p} with Pollard rho (iters={c}x{iters}) in {ms:.3}ms");
+                eprintln!("Found factors {ps:?} with Pollard rho (iters={c}x{iters}) in {ms:.3}ms");
             }
-            return Some((vec![p.into()], q.into()));
+            return Some((ps, nred));
         }
     }
     None
 }
 
-#[doc(hidden)]
-pub fn rho_impl(
-    n: &Uint,
-    seed: u64,
-    iters: u64,
-    verbosity: Verbosity,
-) -> Option<(Vec<Uint>, Uint)> {
+// Run rho to find many small factors in a single pass.
+// The cost is 1.5 * iters squarings.
+//
+// Returns a list of integers such that their product divides n.
+pub fn rho_impl(n: &Uint, c: u64, iters: u64, verbosity: Verbosity) -> Option<(Vec<Uint>, Uint)> {
     let start = std::time::Instant::now();
-    assert!(n.bits() >= 64 || seed < n.digits()[0]);
-    // The modulus/ring can shrink as we find factors.
-    let zn = ZmodN::new(*n);
-    let s = zn.from_int(seed.into());
-    let mut x1 = s;
-    let mut x2 = s;
-    // This is not really 1, because we are using Montgomery
-    // representation, but it is easier (and it is also a square).
-    let one = MInt::from_uint(Uint::ONE);
-    let mut prods = Vec::with_capacity(iters as usize);
+    let (facs, nred) = if n.bits() <= 64 {
+        let zn = Mod64::new(*n);
+        rho_zmod(zn, c, iters)
+    } else if n.bits() <= 128 {
+        let zn = Mod128::new(*n);
+        rho_zmod(zn, c, iters)
+    } else if n.bits() <= 192 {
+        let zn = Mod192::new(*n);
+        rho_zmod(zn, c, iters)
+    } else {
+        rho_big(n, c, iters)
+    };
+    if facs.len() == 0 {
+        None
+    } else {
+        if verbosity >= Verbosity::Info {
+            let ms = start.elapsed().as_secs_f64() * 1000.0;
+            eprintln!(
+                "Found factors {:?} with Pollard rho (c={c} iters={iters}) in {ms:.1}ms",
+                facs
+            );
+        }
+        Some((facs, nred))
+    }
+}
+
+fn rho_zmod<Z: Zmod + Copy>(zn: Z, c: u64, iters: u64) -> (Vec<Uint>, Uint)
+where
+    Z::Val: Copy,
+    Uint: CastFrom<Z::Val>,
+{
+    let c = zn.cast(c);
+
+    let mut facs = vec![];
+    // Starting value is always 2 (in Montgomery form)
+    let (mut x1, mut x2) = (zn.cast(2), zn.cast(2));
     let mut prod = zn.one();
-    for _ in 0..iters {
-        // x1 => x1^2 + one
-        x1 = zn.mul(&x1, &x1);
-        x1 = zn.add(&x1, &one);
-        // Twice x2 => x2^2 + one
+    let mut next_ref = 0;
+    let mut next_end = 1;
+    let mut prods = vec![];
+    for e2 in 1..iters {
+        x2 = zn.mul(x2, x2);
+        x2 = zn.add(x2, c); // c is small, we tolerate x2>=n
+        if e2 < next_ref {
+            continue;
+        }
+        // We are in the interval, compare.
+        let prodnext = zn.mul(prod, zn.abs_diff(x1, x2));
+        if e2 <= 32 || e2 % 32 == 31 {
+            prods.push(prod);
+        }
+        prod = prodnext;
+        if e2 == next_end {
+            /*
+            if e2 >= 128 {
+                let nred = zn.gcd_factors(&prods, &mut facs);
+                if nred != n {
+                    return facs;
+                }
+                prods = vec![prods[prods.len() - 1]];
+            }
+            */
+            // Set e1 = e2
+            x1 = x2;
+            next_ref = next_end + next_end / 2;
+            next_end *= 2;
+        }
+    }
+    let nred = zn.gcd_factors(&prods, &mut facs);
+    (facs, Uint::cast_from(nred))
+}
+
+fn rho_big(n: &Uint, c: u64, iters: u64) -> (Vec<Uint>, Uint) {
+    let zn = ZmodN::new(*n);
+
+    // Starting value is always 2 (in Montgomery form)
+    let (mut x1, mut x2) = (MInt::from(2), MInt::from(2));
+    let c = MInt::from(c);
+    let mut prod = MInt::from(1);
+    let mut next_ref = 0;
+    let mut next_end = 1;
+    let mut prods = vec![];
+    for e2 in 1..iters {
         x2 = zn.mul(&x2, &x2);
-        x2 = zn.add(&x2, &one);
-        x2 = zn.mul(&x2, &x2);
-        x2 = zn.add(&x2, &one);
-        prod = zn.mul(&prod, &zn.sub(&x2, &x1));
-        prods.push(prod);
+        x2 = zn.add(&x2, &c);
+        if e2 < next_ref {
+            continue;
+        }
+        // We are in the interval, compare.
+        let prodnext = zn.mul(&prod, &zn.sub(&x1, &x2));
+        if e2 <= 32 || e2 % 32 == 31 {
+            prods.push(prod);
+        }
+        prod = prodnext;
+        if e2 == next_end {
+            // Set e1 = e2
+            x1 = x2;
+            next_ref = next_end + next_end / 2;
+            next_end *= 2;
+        }
     }
-    let (fs, nred) = gcd_factors(n, &prods);
-    if nred == Uint::ONE || &nred == n {
-        return None;
-    }
-    if verbosity >= Verbosity::Info {
-        let ms = start.elapsed().as_secs_f64() * 1000.0;
-        eprintln!(
-            "Found factors {:?} with Pollard rho (seed={seed} iters={iters}) in {ms:.1}ms",
-            fs
-        );
-    }
-    Some((fs, nred))
+    gcd_factors(n, &prods)
 }
 
 #[test]
@@ -261,7 +231,8 @@ fn test_rho_basic() {
     ];
     'nextn: for &n in ns {
         for budget in [500, 1000, 1500, 2000, 4000, 7000, 10000, 20000] {
-            if let Some((p, q)) = rho64(n, 1, budget) {
+            if let Some(p) = rho64(n, 1, budget) {
+                let q = n / p;
                 eprintln!("factored {n} with budget {budget} => {p}*{q}");
                 assert_eq!(p * q, n);
                 continue 'nextn;
@@ -275,15 +246,15 @@ fn test_rho_basic() {
     for budget in [500, 1000, 1500, 2000, 4000, 7000, 10000, 20000, 50000] {
         assert!(rho64(n, 1, budget).is_none());
     }
-    let (p, q) = rho64(n, 1, 54725).unwrap();
-    assert_eq!(p * q, n);
+    let p = rho64(n, 1, 65536).unwrap();
+    assert_eq!(n % p, 0);
     // But another function will work.
-    let (p, q) = rho64(n, 2, 1000).unwrap();
-    assert_eq!(p * q, n);
+    let p = rho64(n, 2, 1000).unwrap();
+    assert_eq!(n % p, 0);
     // 64-bit integers must work.
     let n = 0xeb67d1ff62bd9f49;
-    let (p, q) = rho64(n, 2, 65536).unwrap();
-    assert_eq!(p * q, n);
+    let p = rho64(n, 2, 65536).unwrap();
+    assert_eq!(n % p, 0);
 }
 
 #[test]
@@ -313,12 +284,39 @@ fn test_rho_small() {
         3142887637 * 2807200547,
     ];
     for &n in ns {
-        if let Some((p, q)) = rho(&Uint::from(n), Verbosity::Info) {
-            assert_eq!(p[0] * q, Uint::from_digit(n));
+        if let Some((ps, nred)) = rho(&Uint::from(n), Verbosity::Info) {
+            let (p, q) = if ps.len() == 1 {
+                (ps[0], nred)
+            } else {
+                (ps[0], ps[1])
+            };
+            assert_eq!(p * q, Uint::from_digit(n));
         } else {
             panic!("failure for {n}");
         }
     }
+}
+
+#[test]
+fn test_rho_smooth() {
+    use std::str::FromStr;
+
+    // 11774943399382161031848827893490971: 4657 8221 16787 24691 80039 573031 16178431
+    let n: u128 = 11774943399382161031848827893490971;
+    let (facs, _) = rho_impl(&Uint::from(n), 2, 512, Verbosity::Silent).unwrap();
+    // Should find a factor
+    assert!(facs.len() >= 1, "{facs:?}");
+
+    // 9625281177645328643: 7 149 659 7573 32003 57781
+    let n: u64 = 9625281177645328643;
+    let (facs, _) = rho_impl(&Uint::from(n), 2, 256, Verbosity::Silent).unwrap();
+    // Should find 4 distinct factors
+    assert!(facs.len() >= 4, "{facs:?}");
+
+    // 192 bits:
+    let n = Uint::from_str("44787627309529707312627764656534371155276280609020817807").unwrap();
+    let (facs, _) = rho_impl(&Uint::from(n), 2, 1024, Verbosity::Silent).unwrap();
+    assert!(facs.len() >= 6, "{facs:?}");
 }
 
 #[test]
@@ -349,8 +347,8 @@ fn test_rho_random() {
             let mut ok = 0;
             let start = std::time::Instant::now();
             for &n in &samples {
-                if let Some((x, y)) = rho64(n, 1, budget) {
-                    assert_eq!(x * y, n);
+                if let Some(x) = rho64(n, 1, budget) {
+                    assert_eq!(n % x, 0);
                     ok += 1;
                 }
             }
@@ -362,8 +360,8 @@ fn test_rho_random() {
             ok = 0;
             let start = std::time::Instant::now();
             for &n in &samples {
-                if let Some((x, y)) = rho64(n, 1, budget / 2).or_else(|| rho64(n, 2, budget / 2)) {
-                    assert_eq!(x * y, n);
+                if let Some(x) = rho64(n, 1, budget / 2).or_else(|| rho64(n, 2, budget / 2)) {
+                    assert!(1 < x && x < n && n % x == 0, "n={n} x={x}");
                     ok += 1;
                 }
             }
@@ -375,11 +373,11 @@ fn test_rho_random() {
             ok = 0;
             let start = std::time::Instant::now();
             for &n in &samples {
-                if let Some((x, y)) = rho64(n, 1, budget / 3)
+                if let Some(x) = rho64(n, 1, budget / 3)
                     .or_else(|| rho64(n, 2, budget / 3))
                     .or_else(|| rho64(n, 3, budget / 3))
                 {
-                    assert_eq!(x * y, n);
+                    assert!(1 < x && x < n && n % x == 0);
                     ok += 1;
                 }
             }

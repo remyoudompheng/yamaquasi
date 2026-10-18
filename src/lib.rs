@@ -783,51 +783,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
     if nred.bits() >= 64 {
         // Quick Rho run to eliminate small factors.
         let rho_fast_iters: u64 = 128;
-        if nred.bits() <= 128 {
-            if let Some((a, b)) = pollard_rho::rho128(u128::cast_from(nred), 2, rho_fast_iters) {
-                factor_auto_impl(a.into(), &prefs, factors, None).unwrap();
-                nred = b.into();
-                if pseudoprime(nred) {
-                    factors.push(nred);
-                    return;
-                }
-            }
-        } else {
-            if let Some((a_s, b)) = pollard_rho::rho_impl(&nred, 2, rho_fast_iters, prefs.verbosity)
-            {
-                // Force rho for recursion
-                for a in a_s {
-                    factor_auto_impl(a, &prefs, factors, None).unwrap();
-                }
-                nred = b;
-                if pseudoprime(nred) {
-                    factors.push(nred);
-                    return;
-                }
-            }
-        }
-    }
-    let rho_iters = 512;
-    if nred.bits() <= 63 {
-        while let Some((a, b)) = pollard_rho::rho64(nred.low_u64(), 3, rho_iters) {
-            factor_auto_impl(a.into(), &prefs, factors, None).unwrap();
-            nred = b.into();
-            if pseudoprime(nred) {
-                factors.push(nred);
-                return;
-            }
-        }
-    } else if nred.bits() <= 128 {
-        while let Some((a, b)) = pollard_rho::rho128(u128::cast_from(nred), 3, rho_iters) {
-            factor_auto_impl(a.into(), &prefs, factors, None).unwrap();
-            nred = b.into();
-            if pseudoprime(nred) {
-                factors.push(nred);
-                return;
-            }
-        }
-    } else {
-        if let Some((a_s, b)) = pollard_rho::rho_impl(&nred, 3, rho_iters, prefs.verbosity) {
+        if let Some((a_s, b)) = pollard_rho::rho_impl(&nred, 2, rho_fast_iters, prefs.verbosity) {
             // Force rho for recursion
             for a in a_s {
                 factor_auto_impl(a, &prefs, factors, None).unwrap();
@@ -838,6 +794,21 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
                 return;
             }
         }
+    }
+    let rho_iters = 512;
+    if let Some((a_s, b)) = pollard_rho::rho_impl(&nred, 3, rho_iters, prefs.verbosity) {
+        // Force rho for recursion
+        for a in a_s {
+            factor_auto_impl(a, &prefs, factors, None).unwrap();
+        }
+        nred = b;
+        if pseudoprime(nred) {
+            factors.push(nred);
+            return;
+        }
+    }
+    if nred.is_one() {
+        return;
     }
     if factor_bits <= 14 {
         factors.push(nred);
@@ -860,6 +831,9 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
         {
             factor_auto_impl(a.into(), &prefs, factors, None).unwrap();
             nred = b.into();
+            if nred.is_one() {
+                return;
+            }
             if pseudoprime(nred) {
                 factors.push(nred);
                 return;
