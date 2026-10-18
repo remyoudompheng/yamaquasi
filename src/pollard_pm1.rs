@@ -36,7 +36,7 @@
 //! # Large integers
 //!
 //! A generic Pollard P-1 implementation for possibly large integers
-//! is provided by functions [pm1_only] and [pm1_quick]
+//! is provided by functions [pm1_only] and [pm1_auto]
 //!
 //! It uses the multipoint evaluation model for large D=sqrt(B2)
 //! where D is such that D ~= 5 φ(D).
@@ -52,6 +52,8 @@
 //! FFT extension for algebraic-group factorization algorithms
 //! Richard P. Brent, Alexander Kruppa, Paul Zimmermann
 //! https://hal.inria.fr/hal-01630907/document
+
+use std::sync::LazyLock;
 
 use bnum::cast::CastFrom;
 use bnum::types::U1024;
@@ -428,18 +430,45 @@ impl PM1Base {
     }
 }
 
+// Predefined schemes for PM1 with cost ~ X multiplications.
+// X = 2 B1 + π(B2)
+static PM1_500: LazyLock<PM1Base> = LazyLock::new(|| PM1Base::newsmall(130, 1600));
+static PM1_1000: LazyLock<PM1Base> = LazyLock::new(|| PM1Base::newsmall(250, 4000));
+static PM1_2000: LazyLock<PM1Base> = LazyLock::new(|| PM1Base::newsmall(320, 12000));
+static PM1_4000: LazyLock<PM1Base> = LazyLock::new(|| PM1Base::newsmall(500, 28000));
+
 // Similarly to ECM implementation, run Pollard P-1 with small parameters
 // to possibly detect a small factor. The cost is 2 multiplications per large
 // prime and it should use a CPU budget similar to 1 ECM run.
-pub fn pm1_quick(n: &Uint, v: Verbosity) -> Option<(Vec<Uint>, Uint)> {
+pub fn pm1_auto(n: &Uint, v: Verbosity) -> Option<(Vec<Uint>, Uint)> {
     // Choose B1 so that stage 1 is a large part of CPU time.
     match n.bits() {
-        // Ignore single word integers: the multiprecision implementation
-        // is too costly.
-        // Also ignore numbers until 84-bit where ECM is very fast.
-        0..=84 => None,
+        0..=64 => {
+            // Finds half of 18-bit factors
+            let fs = PM1_500.pm1(n);
+            let (nred, fs) = fs.split_last()?;
+            Some((fs.to_vec(), *nred))
+        }
+        65..=80 => {
+            // Finds half of 20-bit factors
+            let fs = PM1_1000.pm1(n);
+            let (nred, fs) = fs.split_last()?;
+            Some((fs.to_vec(), *nred))
+        }
+        81..=96 => {
+            // Finds half of 22-bit factors
+            let fs = PM1_2000.pm1(n);
+            let (nred, fs) = fs.split_last()?;
+            Some((fs.to_vec(), *nred))
+        }
+        97..=128 => {
+            // Finds half of 24-bit factors
+            let fs = PM1_4000.pm1(n);
+            let (nred, fs) = fs.split_last()?;
+            Some((fs.to_vec(), *nred))
+        }
         // Catches many 24-bit factors in 1-5ms.
-        85..=190 => pm1_impl(n, 600, 40e3, v),
+        129..=190 => pm1_impl(n, 600, 40e3, v),
         // Takes less than a few ms
         191..=220 => pm1_impl(n, 10_000, 270e3, v),
         // Takes less than 0.01 second

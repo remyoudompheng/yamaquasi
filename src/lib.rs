@@ -624,48 +624,36 @@ fn factor_auto_impl(
         return Ok(());
     }
 
+    // See [factor_auto], n is larger than 32 bits and has no factor below 12 bits.
+
     // Start with algorithms depending on prime size (trial factoring, Rho, P-1, ECM)
     // There is no need for recursion: running them twice does not bring benefits.
+    // 90% of random integers have second largest factor O(n^1/3)
 
-    // For small inputs, Pollard rho is faster than ECM and quadratic sieve.
-    if n.bits() < 52 {
-        if let Some((a_s, _b)) = pollard_rho::rho(&st.nred, prefs.verbosity) {
-            st.declare_factors(a_s);
-            if st.done() {
-                factors.append(&mut st.primes);
-                return Ok(());
-            }
-            if prefs.verbose(Verbosity::Info) {
-                eprintln!("Recursively factor {}", st.nred);
-            }
-        }
-    }
-    // Only in automatic mode, for large inputs, Pollard P-1 and ECM can be useful.
-    if n.bits() > 64 {
-        let start_pm1 = std::time::Instant::now();
-        let pm1_res = pollard_pm1::pm1_quick(&n, prefs.verbosity);
-        // P-1 should be only run once.
-        if let Some((a_s, _b)) = pm1_res {
-            if prefs.verbose(Verbosity::Info) {
-                eprintln!(
-                    "Pollard P-1 success with factors {a_s:?} in {:.3}s",
-                    start_pm1.elapsed().as_secs_f64()
-                );
-            }
-            st.declare_factors(a_s);
-            if st.done() {
-                factors.append(&mut st.primes);
-                return Ok(());
-            }
-            if prefs.verbose(Verbosity::Info) {
-                eprintln!("Recursively factor {}", st.nred);
-            }
-        } else if prefs.verbose(Verbosity::Info) {
+    // For small inputs, P-1 covers most primes and is faster than ECM and quadratic sieve.
+    let start_pm1 = std::time::Instant::now();
+    let pm1_res = pollard_pm1::pm1_auto(&n, prefs.verbosity);
+    // P-1 should be only run once.
+    if let Some((a_s, _b)) = pm1_res {
+        if prefs.verbose(Verbosity::Info) {
             eprintln!(
-                "Pollard P-1 failure in {:.3}s",
+                "Pollard P-1 success with factors {a_s:?} in {:.3}s",
                 start_pm1.elapsed().as_secs_f64()
             );
         }
+        st.declare_factors(a_s);
+        if st.done() {
+            factors.append(&mut st.primes);
+            return Ok(());
+        }
+        if prefs.verbose(Verbosity::Info) {
+            eprintln!("Recursively factor {}", st.nred);
+        }
+    } else if prefs.verbose(Verbosity::Info) {
+        eprintln!(
+            "Pollard P-1 failure in {:.3}s",
+            start_pm1.elapsed().as_secs_f64()
+        );
     }
     // ECM, in its 128-bit variant, is already efficient for 52-bit numbers.
     let ecm_res = if matches!(n.bits(), 52..=128) {
