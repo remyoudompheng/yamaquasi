@@ -62,6 +62,9 @@
 //! Curves with large prescribed torsion like the EECM good curves or Suyama-11 curves
 //! make this problem more acute.
 
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::result_large_err)]
+
 use std::cmp::{max, min};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -221,7 +224,7 @@ pub fn ecm(
         let iter = iters.fetch_add(1, Ordering::SeqCst) + 1;
         let curve = suyama
             .element(seed)
-            .and_then(|p| suyama.params_point(&p))
+            .and_then(|p| Suyama11::params_point(&zn, &p))
             .and_then(|g| Curve::twisted_from_point(zn.clone(), g));
         let fallback = {
             let seed = seed as u64 % (1 << 24);
@@ -490,7 +493,7 @@ fn ecm_curve(
 fn check_gcd_factor(n: &Uint, values: &[MInt]) -> Option<Uint> {
     // FIXME: we should return all factors. We just
     // return the largest one.
-    let fs = gcd_factors(n, &values[..]).0;
+    let fs = gcd_factors(n, values).0;
     fs.iter().filter(|f| f != &n).max().copied()
 }
 
@@ -505,11 +508,11 @@ pub struct SmoothBase {
 impl SmoothBase {
     pub fn new(b1: usize, use_large: bool) -> Self {
         const LARGE_THRESHOLD: u64 = 4096;
-        let primes = if b1 < 65_536 {
-            fbase::primes(b1 as u32 / 2)
+        let mut primes = vec![];
+        let primes: &[u32] = if b1 < 65_536 {
+            &fbase::U16_PRIMES
         } else {
             let mut s = fbase::PrimeSieve::new();
-            let mut primes = vec![];
             loop {
                 let b = s.next();
                 primes.extend_from_slice(b);
@@ -517,13 +520,13 @@ impl SmoothBase {
                     break;
                 }
             }
-            primes
+            &primes[..]
         };
         let mut factors = vec![];
         let mut factors_lg = vec![];
         let mut buffer = 1_u64;
         let mut buffer_lg = U1024::ONE;
-        for p in primes {
+        for &p in primes {
             // Small primes are raised to some power (until B1).
             if p >= b1 as u32 {
                 break;
@@ -542,7 +545,7 @@ impl SmoothBase {
             }
             // Avoid too many primes in exponent buffer.
             // Small primes must make smaller blocks.
-            if p < 256 && buffer > 1 << 32 {
+            if p < 256 && buffer > 1 << 16 {
                 factors.push(buffer);
                 buffer = 1;
             }
@@ -592,7 +595,7 @@ pub struct Curve {
 
 /// A point in the projective plane using homogeneous coordinates.
 #[derive(Clone, Debug)]
-pub struct Point(MInt, MInt, MInt);
+pub struct Point(pub MInt, pub MInt, pub MInt);
 
 impl Point {
     pub(crate) fn xyz(&self) -> (MInt, MInt, MInt) {
@@ -1223,6 +1226,19 @@ pub struct Suyama11<'a> {
     gy: MInt,
 }
 
+pub const SUYAMA_POINTS: &[(i64, i64, i64)] = &[
+    // List of points in the Suyama-11 moduli space.
+    (2, -14, 1),                                // σ=11 (1G)
+    (13, -30, 1),                               // σ=11/13 (2G)
+    (180, 2016, 125),                           // σ=47/3 (2G)
+    (2892, 155496, 1),                          // σ=-239/241 (3G)
+    (-15818, -8246, 1331),                      // σ=-2171/719 (3G)
+    (2419260, 4141081, 216000),                 // σ=46079/40321 (4G)
+    (59923572, -288872640, 24137569),           // σ=149763/17279 (4G)
+    (340076727348, -897051404184, 23862997439), // σ=6733681/9843601 (5G)
+    (21822288742, 500339780486, 27298090331),   // σ=105169691/3623761 (5G)
+];
+
 impl<'a> Suyama11<'a> {
     #[doc(hidden)]
     pub fn new(zn: &'a ZmodN) -> Result<Self, UnexpectedFactor> {
@@ -1340,8 +1356,7 @@ impl<'a> Suyama11<'a> {
     }
 
     #[doc(hidden)]
-    pub fn params(&self, pt: &Point) -> Result<(MInt, MInt), UnexpectedLargeFactor> {
-        let zn = self.zn;
+    pub fn params(zn: &ZmodN, pt: &Point) -> Result<(MInt, MInt), UnexpectedLargeFactor> {
         // If [u:v:1] = [3x+z : 3y : 3z] the parameters
         // are σ = 24/u - 1 and r = 48v / u^2
         // σ = 72z/(3x + z) - 1
@@ -1369,13 +1384,12 @@ impl<'a> Suyama11<'a> {
 
     /// Returns a projective point generating the twisted Edwards curve
     /// represented by `pt` in the modular curve.
-    pub fn params_point(&self, pt: &Point) -> Result<Point, UnexpectedLargeFactor> {
+    pub fn params_point(zn: &ZmodN, pt: &Point) -> Result<Point, UnexpectedLargeFactor> {
         // α = σ^2 - 5
         // β = 4σ
         // x = (2rσ) / (σ - 1)(σ + 5)(σ**2 + 5)
         // y = (α**3 - β**3) / (α**3 + β**3)
-        let zn = self.zn;
-        let (s, r) = self.params(pt)?;
+        let (s, r) = Self::params(zn, pt)?;
         let five = zn.from_int(5_u64.into());
         let a = zn.sub(zn.mul(&s, &s), five);
         let β = zn.mul(&s, &zn.from_int(4_u64.into()));
@@ -1716,10 +1730,10 @@ fn test_suyama11() {
     }
 
     // σ=11/13 for 2G
-    let sigma = s.params(&s.element(2).unwrap()).unwrap().0;
+    let sigma = Suyama11::params(&zn, &s.element(2).unwrap()).unwrap().0;
     assert_eq!(sigma, Curve::fraction_modn(&zn, 11, 13).unwrap());
     // σ=-239/241 for 3G
-    let sigma = s.params(&s.element(3).unwrap()).unwrap().0;
+    let sigma = Suyama11::params(&zn, &s.element(3).unwrap()).unwrap().0;
     assert_eq!(sigma, Curve::fraction_modn(&zn, -239, 241).unwrap());
 
     // Unexpected factors:

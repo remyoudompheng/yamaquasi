@@ -426,7 +426,8 @@ fn redc128(n: u128, ninv: u64, xy0: u128) -> u128 {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct M128(pub u128);
+#[doc(hidden)]
+pub struct M128(pub u128);
 
 // Montgomery modular arithmetic for 128-bit moduli.
 // If the modulus fits in 64 bits, operations are defined with

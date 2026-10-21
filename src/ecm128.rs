@@ -15,7 +15,7 @@
 use bnum::cast::CastFrom;
 use num_integer::Integer;
 
-use crate::arith_montgomery::{ZmodN, M128};
+use crate::arith_montgomery::{Mod128, Mod192, Mod64, Zmod, ZmodN, M128};
 use crate::ecm;
 use crate::params::stage2_params;
 use crate::{Preferences, Uint, Verbosity};
@@ -80,7 +80,7 @@ pub fn ecm(n: u128, curves: usize, b1: u64, b2: f64, v: Verbosity) -> Option<(u1
     for seed in 1..=curves {
         let g = suyama
             .element(seed as u32 + 1)
-            .and_then(|p| suyama.params_point(&p));
+            .and_then(|p| ecm::Suyama11::params_point(&zn, &p));
         let g = match g {
             Ok(g) => g,
             Err(ecm::UnexpectedLargeFactor(p)) => {
@@ -189,7 +189,7 @@ fn ecm_curve(
     let mut bexp = 1;
     assert_eq!(bs[0], 1);
     steps.push(g.clone());
-    let mut n_bsteps = 1 as usize;
+    let mut n_bsteps = 1;
     for &b in &bs[1..] {
         let gap = b - bexp;
         while gaps.len() < gap as usize / 2 {
@@ -261,9 +261,233 @@ fn ecm_curve(
     None
 }
 
+// Run ECM for a number assumed to be smooth (returns multiple factors).
+#[doc(hidden)]
+pub fn ecm_curve_smooth(n: &Uint, curveseed: u32, sb: &ecm::SmoothBase, b2: f64) -> Vec<Uint> {
+    assert!(n.bits() <= 192);
+
+    let mut facs = vec![];
+
+    // Build curve.
+    let zn = ZmodN::new(*n);
+    let g = if (curveseed as usize) < ecm::SUYAMA_POINTS.len() {
+        let p = ecm::SUYAMA_POINTS[curveseed as usize];
+        // Transform as [3x-z, 3y, 3z]
+        let p = ecm::Point(
+            zn.from_i64(3 * p.0 - p.2),
+            zn.from_i64(3 * p.1),
+            zn.from_i64(3 * p.2),
+        );
+        match ecm::Suyama11::params_point(&zn, &p) {
+            Ok(g) => g,
+            Err(ecm::UnexpectedLargeFactor(p)) => {
+                facs.push(p.into());
+                return facs;
+            }
+        }
+    } else {
+        let suyama = ecm::Suyama11::new(&zn).unwrap();
+        match suyama
+            .element(curveseed + 1)
+            .and_then(|p| ecm::Suyama11::params_point(&zn, &p))
+        {
+            Ok(g) => g,
+            Err(ecm::UnexpectedLargeFactor(p)) => {
+                facs.push(p);
+                return facs;
+            }
+        }
+    };
+
+    let (gx, gy, gz) = g.xyz();
+    drop(g);
+    let (nred, mut g1) = if n.bits() <= 64 {
+        let zn = Mod64::new64(u64::cast_from(*n));
+        let g = (u64::from(gx), u64::from(gy), u64::from(gz));
+        ecm_curve_stage1(ECurve(zn), g, sb, &mut facs)
+    } else if n.bits() <= 128 {
+        let zn = Mod128::new128(u128::cast_from(*n));
+        let g = (u128::from(gx), u128::from(gy), u128::from(gz));
+        ecm_curve_stage1(ECurve(zn), g, sb, &mut facs)
+    } else if n.bits() <= 192 {
+        let zn = Mod192::new(*n);
+        let g = (
+            <Mod192 as Zmod>::Val::cast_from(Uint::from(gx)),
+            <Mod192 as Zmod>::Val::cast_from(Uint::from(gy)),
+            <Mod192 as Zmod>::Val::cast_from(Uint::from(gz)),
+        );
+        ecm_curve_stage1(ECurve(zn), g, sb, &mut facs)
+    } else {
+        unreachable!()
+    };
+
+    // Stage 2
+    if &nred < n {
+        g1.0 %= nred;
+        g1.1 %= nred;
+        g1.2 %= nred;
+    }
+    if nred.bits() <= 64 {
+        //eprintln!("ECM stage2 64");
+        let zn = Mod64::new64(u64::cast_from(nred));
+        let g = (
+            u64::cast_from(g1.0),
+            u64::cast_from(g1.1),
+            u64::cast_from(g1.2),
+        );
+        ecm_curve_stage2(ECurve(zn), g, b2, &mut facs)
+    } else if nred.bits() <= 128 {
+        //eprintln!("ECM stage2 128");
+        let zn = Mod128::new128(u128::cast_from(nred));
+        let g = (
+            u128::cast_from(g1.0),
+            u128::cast_from(g1.1),
+            u128::cast_from(g1.2),
+        );
+        ecm_curve_stage2(ECurve(zn), g, b2, &mut facs)
+    } else if n.bits() <= 192 {
+        let zn = Mod192::new(*n);
+        let g = (
+            <Mod192 as Zmod>::Val::cast_from(Uint::from(gx)),
+            <Mod192 as Zmod>::Val::cast_from(Uint::from(gy)),
+            <Mod192 as Zmod>::Val::cast_from(Uint::from(gz)),
+        );
+        ecm_curve_stage2(ECurve(zn), g, b2, &mut facs)
+    } else {
+        unreachable!()
+    };
+
+    facs
+}
+
+fn ecm_curve_stage1<Z>(
+    c: ECurve<Z>,
+    g: (Z::Val, Z::Val, Z::Val),
+    sb: &ecm::SmoothBase,
+    facs: &mut Vec<Uint>,
+) -> (Uint, (Uint, Uint, Uint))
+where
+    Z: Zmod + Copy,
+    Z::Val: Copy,
+    Uint: CastFrom<Z::Val>,
+{
+    let mut g = g;
+    let mut gs = vec![g.0];
+    // Assume that factors will not be found simultaneously
+    for &f in sb.factors.iter() {
+        g = c.scalar64_mul(f, g);
+        gs.push(g.0);
+        //if g.0 == 0 { break; }
+    }
+    let nred = c.0.gcd_factors(&gs, facs);
+    drop(gs);
+    /*
+    if crate::pseudoprime(nred.into()) {
+        //eprintln!("finished {nred}!");
+        return facs;
+    }
+    */
+    (
+        Uint::cast_from(nred),
+        (
+            Uint::cast_from(g.0),
+            Uint::cast_from(g.1),
+            Uint::cast_from(g.2),
+        ),
+    )
+}
+
+fn ecm_curve_stage2<Z, V>(c: ECurve<Z>, g: (V, V, V), b2: f64, facs: &mut Vec<Uint>)
+where
+    Z: Zmod<Val = V> + Copy,
+    Z::Val: Copy,
+{
+    let (_, d1, d2) = stage2_params(b2);
+    let zn = c.0;
+    //assert!(c.is_valid(&c.ext(g)));
+    fn proj<T>(p: (T, T, T, T)) -> (T, T, T) {
+        (p.0, p.1, p.2)
+    }
+
+    // Prepare values of abs(b): there are phi(d1)/2 < d1/4 such values.
+    let mut bs = Vec::with_capacity(d1 as usize / 4);
+    for b in 1..d1 / 2 {
+        if Integer::gcd(&b, &d1) == 1 {
+            bs.push(b);
+        }
+    }
+    let g2 = c.dblext(g);
+    let g4 = c.dblext(proj(g2));
+    let mut gaps: Vec<(_, _, _, _)> = vec![g2, g4];
+    // Baby/giant steps in a single vector.
+    let mut steps: Vec<(_, _, _)> = Vec::with_capacity(d1 as usize / 4 + d2 as usize);
+    // Compute the baby steps
+    let mut bg = c.ext(g);
+    let mut bexp = 1;
+    assert_eq!(bs[0], 1);
+    steps.push(g.clone());
+    let mut n_bsteps = 1 as usize;
+    for &b in &bs[1..] {
+        let gap = b - bexp;
+        while gaps.len() < gap as usize / 2 {
+            let gap2 = c.add(gaps[0], gaps[gaps.len() - 1]);
+            gaps.push(gap2);
+        }
+        bg = c.add(bg, gaps[gap as usize / 2 - 1]);
+        steps.push(proj(bg));
+        n_bsteps += 1;
+        bexp = b;
+    }
+    // Compute the giant steps
+    // WARNING: extended coordinate addition must not be used
+    // to compute the first step.
+    let dg = c.scalar64_mul(d1, g);
+    let dg2 = c.dblext(dg);
+    let dgext = c.ext(dg);
+    let mut gg = dg2.clone();
+    steps.push(dg);
+    steps.push(proj(dg2));
+    for _ in 2..d2 {
+        gg = c.add(gg, dgext);
+        steps.push(proj(gg));
+    }
+    // Clear denominators
+    {
+        let l = steps.len();
+        let mut u = steps[0].2;
+        for i in 1..l {
+            steps[i].1 = zn.mul(steps[i].1, u);
+            u = zn.mul(u, steps[i].2);
+        }
+        u = steps[l - 1].2;
+        for i in 2..=l {
+            steps[l - i].1 = zn.mul(steps[l - i].1, u);
+            u = zn.mul(u, steps[l - i].2);
+        }
+    }
+
+    let bsteps = &steps[..n_bsteps];
+    let gsteps = &steps[n_bsteps..];
+    // Compute O(d*phi(d)) products
+    let mut buffer = zn.one();
+    let mut prods = Vec::with_capacity(gsteps.len());
+    prods.push(buffer);
+    for pg in gsteps {
+        // Compute the gcd after each row for finer granularity.
+        for pb in bsteps {
+            // y(G) - y(B)
+            let delta_y = zn.abs_diff(pg.1, pb.1);
+            buffer = zn.mul(buffer, delta_y);
+        }
+        prods.push(buffer);
+    }
+    zn.gcd_factors(&prods, facs);
+}
+
 /// An elliptic curve in twisted Edwards form -ax²+y² = 1 + dx²y²
 /// Coefficient d is not stored and implicitly contained in the generator coordinates.
 pub struct Curve {
+    zn: Mod128,
     /// The modulus.
     n: u128,
     /// Helper constants for modular arithmetic.
@@ -275,7 +499,8 @@ pub struct Curve {
 
 // A curve point in projective coordinates.
 #[derive(Clone, Debug)]
-pub struct Point(M128, M128, M128);
+#[doc(hidden)]
+pub struct Point(pub M128, pub M128, pub M128);
 
 // A curve point in extended coordinates (on quadric XY=ZT).
 #[derive(Clone, Debug)]
@@ -296,6 +521,7 @@ impl From<&ecm::Curve> for Curve {
         let (r, _) = M128::r_r2(n, ninv);
         let g = c.gen().xyz();
         Curve {
+            zn: Mod128::new128(n),
             n,
             ninv,
             one: r,
@@ -323,7 +549,14 @@ impl Curve {
             M128::mul(n, ninv, m, r2)
         };
         let g = Point(mul(x1, y2), mul(y1, x2), mul(x2, y2));
-        Curve { n, ninv, one: r, g }
+        let zn = Mod128::new128(n);
+        Curve {
+            zn,
+            n,
+            ninv,
+            one: r,
+            g,
+        }
     }
 
     pub fn from_point(n: u128, p: Point) -> Self {
@@ -331,6 +564,7 @@ impl Curve {
         let ninv = M128::inv_2adic(n);
         let (r, _) = M128::r_r2(n, ninv);
         Curve {
+            zn: Mod128::new128(n),
             n,
             ninv,
             one: r,
@@ -347,126 +581,25 @@ impl Curve {
         ExtPoint(mul(p.0, p.2), mul(p.1, p.2), mul(p.2, p.2), mul(p.0, p.1))
     }
 
-    // Computes 2P + Q using 8+7 multiplications.
-    fn dbladd(&self, p: &Point, q: &ExtPoint) -> Point {
-        let add = |x, y| M128::add(self.n, x, y);
-        let sub = |x, y| M128::sub(self.n, x, y);
-        let mul = |x, y| M128::mul(self.n, self.ninv, x, y);
-
-        let p = self.dblext(p);
-        // Copy-paste add(p,q) but omit one coordinate.
-        // (yP - xP)(yQ + xQ), (yP + xP)(yQ - xQ)
-        let a = mul(sub(p.1, p.0), add(q.1, q.0));
-        let b = mul(add(p.1, p.0), sub(q.1, q.0));
-        // 2 zP tQ, 2 zQ tP
-        let c = mul(p.2, q.3);
-        let c = add(c, c);
-        let d = mul(p.3, q.2);
-        let d = add(d, d);
-        let e = add(d, c);
-        let f = sub(b, a);
-        let g = add(b, a);
-        let h = sub(d, c);
-        // xy(P+Q) = zt(P+Q) = efgh
-        Point(mul(e, f), mul(g, h), mul(f, g))
-    }
-
     // Formula add-2008-hwcd-4 in Explicit Formula Database
     fn add(&self, p: &ExtPoint, q: &ExtPoint) -> ExtPoint {
-        let add = |x, y| M128::add(self.n, x, y);
-        let sub = |x, y| M128::sub(self.n, x, y);
-        let mul = |x, y| M128::mul(self.n, self.ninv, x, y);
-        // (yP - xP)(yQ + xQ), (yP + xP)(yQ - xQ)
-        let a = mul(sub(p.1, p.0), add(q.1, q.0));
-        let b = mul(add(p.1, p.0), sub(q.1, q.0));
-        // 2 zP tQ, 2 zQ tP
-        let c = mul(p.2, q.3);
-        let c = add(c, c);
-        let d = mul(p.3, q.2);
-        let d = add(d, d);
-        let e = add(d, c);
-        let f = sub(b, a);
-        let g = add(b, a);
-        let h = sub(d, c);
-        // xy(P+Q) = zt(P+Q) = efgh
-        ExtPoint(mul(e, f), mul(g, h), mul(f, g), mul(e, h))
-    }
-
-    // Doubling formula following dbl-2008-bbjlp (7 multiplications)
-    // https://hyperelliptic.org/EFD/g1p/auto-twisted-projective.html#doubling-dbl-2008-bbjlp
-    fn double(&self, p: &Point) -> Point {
-        let add = |x, y| M128::add(self.n, x, y);
-        let sub = |x, y| M128::sub(self.n, x, y);
-        let mul = |x, y| M128::mul(self.n, self.ninv, x, y);
-        // Similar to the begining of dblext()
-        let x_plus_y = add(p.0, p.1);
-        let b = mul(x_plus_y, x_plus_y);
-        let c = mul(p.0, p.0);
-        let d = mul(p.1, p.1);
-        let c_plus_d = add(c, d);
-        let f = sub(d, c);
-        let h = mul(p.2, p.2);
-        let j = sub(sub(f, h), h);
-        let x = mul(sub(b, c_plus_d), j);
-        let y = mul(f, sub(M128(0), c_plus_d));
-        let z = mul(f, j);
-        Point(x, y, z)
+        let r = ECurve(self.zn).add(
+            (p.0 .0, p.1 .0, p.2 .0, p.3 .0),
+            (q.0 .0, q.1 .0, q.2 .0, q.3 .0),
+        );
+        ExtPoint(M128(r.0), M128(r.1), M128(r.2), M128(r.3))
     }
 
     // Formula is dbl-2008-hwcd (8 multiplications)
     // <https://hyperelliptic.org/EFD/g1p/auto-twisted-extended.html#doubling-dbl-2008-hwcd>
     fn dblext(&self, p: &Point) -> ExtPoint {
-        let add = |x, y| M128::add(self.n, x, y);
-        let sub = |x, y| M128::sub(self.n, x, y);
-        let mul = |x, y| M128::mul(self.n, self.ninv, x, y);
-        let x_y = add(p.0, p.1);
-        let x_y2 = mul(x_y, x_y);
-        let a = mul(p.0, p.0);
-        let b = mul(p.1, p.1);
-        let c = mul(p.2, p.2);
-        let c = add(c, c);
-        let e = sub(sub(x_y2, a), b);
-        // D=-A, G=B-A, H=-B-A, F=G-C
-        let g = sub(b, a);
-        let f = sub(g, c);
-        let h = sub(M128(0), add(a, b));
-        ExtPoint(mul(e, f), mul(g, h), mul(f, g), mul(e, h))
+        let r = ECurve(self.zn).dblext((p.0 .0, p.1 .0, p.2 .0));
+        ExtPoint(M128(r.0), M128(r.1), M128(r.2), M128(r.3))
     }
 
     pub fn scalar64_mul(&self, k: u64, p: &Point) -> Point {
-        // Prepare small steps.
-        let pext = self.ext(p);
-        let p2 = self.dblext(p);
-        let p3 = self.add(&pext, &p2);
-        let p5 = self.add(&p3, &p2);
-        let p7 = self.add(&p5, &p2);
-        let gaps = [&pext, &p3, &p5, &p7];
-        // Encode the chain as:
-        // 2l (doubling l times)
-        // ±k (add/sub kP where k is odd)
-        let mut c = [0_i8; 32];
-        let l = ecm::Curve::make_addition_chain(&mut c, k);
-        // Get initial element (chain[l-1] = 1 or 3 or 5 or 7)
-        let mut q = gaps[c[l - 1] as usize / 2].proj();
-        for idx in 1..l {
-            let op = c[l - 1 - idx];
-            if op % 2 == 0 {
-                for _ in 0..op / 2 {
-                    // FIXME: 1 MUL wasted
-                    q = self.double(&q);
-                }
-            } else {
-                if op > 0 {
-                    q = self.dbladd(&q, gaps[op as usize / 2]);
-                } else {
-                    let mut gap = gaps[(-op) as usize / 2].clone();
-                    gap.0 = M128(self.n - gap.0 .0);
-                    gap.3 = M128(self.n - gap.3 .0);
-                    q = self.dbladd(&q, &gap);
-                }
-            }
-        }
-        q
+        let p = ECurve(self.zn).scalar64_mul(k, (p.0 .0, p.1 .0, p.2 .0));
+        Point(M128(p.0), M128(p.1), M128(p.2))
     }
 
     fn is_valid(&self, p: &ExtPoint) -> bool {
@@ -481,6 +614,137 @@ impl Curve {
         let zg = sub(mul(g.1, g.1), add(mul(g.0, g.0), mul(g.2, g.2)));
         let zp = sub(mul(p.1, p.1), add(mul(p.0, p.0), mul(p.2, p.2)));
         mul(zg, mul(p.3, p.3)) == mul(zp, mul(g.3, g.3))
+    }
+}
+
+// Curve arithmetic in fixed precision.
+struct ECurve<Z>(Z);
+
+impl<V, Z: Zmod<Val = V>> ECurve<Z>
+where
+    V: Copy,
+    Z: Copy,
+{
+    pub fn ext(&self, p: (V, V, V)) -> (V, V, V, V) {
+        let (x, y, z) = p;
+        let zn = self.0;
+        (zn.mul(x, z), zn.mul(y, z), zn.mul(z, z), zn.mul(x, y))
+    }
+
+    // Computes 2P + Q using 8+7 multiplications.
+    fn dbladd(&self, p: (V, V, V), q: (V, V, V, V)) -> (V, V, V) {
+        let zn = self.0;
+
+        let p = self.dblext(p);
+        // Copy-paste add(p,q) but omit one coordinate.
+        // (yP - xP)(yQ + xQ), (yP + xP)(yQ - xQ)
+        let a = zn.mul(zn.sub(p.1, p.0), zn.add(q.1, q.0));
+        let b = zn.mul(zn.add(p.1, p.0), zn.sub(q.1, q.0));
+        // 2 zP tQ, 2 zQ tP
+        let c = zn.mul(p.2, q.3);
+        let c = zn.add(c, c);
+        let d = zn.mul(p.3, q.2);
+        let d = zn.add(d, d);
+        let e = zn.add(d, c);
+        let f = zn.sub(b, a);
+        let g = zn.add(b, a);
+        let h = zn.sub(d, c);
+        // xy(P+Q) = zt(P+Q) = efgh
+        (zn.mul(e, f), zn.mul(g, h), zn.mul(f, g))
+    }
+
+    // Formula add-2008-hwcd-4 in Explicit Formula Database
+    fn add(&self, p: (V, V, V, V), q: (V, V, V, V)) -> (V, V, V, V) {
+        let zn = self.0;
+        // (yP - xP)(yQ + xQ), (yP + xP)(yQ - xQ)
+        let a = zn.mul(zn.sub(p.1, p.0), zn.add(q.1, q.0));
+        let b = zn.mul(zn.add(p.1, p.0), zn.sub(q.1, q.0));
+        // 2 zP tQ, 2 zQ tP
+        let c = zn.mul(p.2, q.3);
+        let c = zn.add(c, c);
+        let d = zn.mul(p.3, q.2);
+        let d = zn.add(d, d);
+        let e = zn.add(d, c);
+        let f = zn.sub(b, a);
+        let g = zn.add(b, a);
+        let h = zn.sub(d, c);
+        // xy(P+Q) = zt(P+Q) = efgh
+        (zn.mul(e, f), zn.mul(g, h), zn.mul(f, g), zn.mul(e, h))
+    }
+
+    // Doubling formula following dbl-2008-bbjlp (7 multiplications)
+    // https://hyperelliptic.org/EFD/g1p/auto-twisted-projective.html#doubling-dbl-2008-bbjlp
+    fn double(&self, p: (V, V, V)) -> (V, V, V) {
+        let zn = self.0;
+        // Similar to the begining of dblext()
+        let x_plus_y = zn.add(p.0, p.1);
+        let b = zn.mul(x_plus_y, x_plus_y);
+        let c = zn.mul(p.0, p.0);
+        let d = zn.mul(p.1, p.1);
+        let c_plus_d = zn.add(c, d);
+        let f = zn.sub(d, c);
+        let h = zn.mul(p.2, p.2);
+        let j = zn.sub(zn.sub(f, h), h);
+        let x = zn.mul(zn.sub(b, c_plus_d), j);
+        let y = zn.mul(f, zn.sub(zn.cast(0), c_plus_d));
+        let z = zn.mul(f, j);
+        (x, y, z)
+    }
+
+    // Formula is dbl-2008-hwcd (8 multiplications)
+    // <https://hyperelliptic.org/EFD/g1p/auto-twisted-extended.html#doubling-dbl-2008-hwcd>
+    fn dblext(&self, p: (V, V, V)) -> (V, V, V, V) {
+        let zn = self.0;
+        let x_y = zn.add(p.0, p.1);
+        let x_y2 = zn.mul(x_y, x_y);
+        let a = zn.mul(p.0, p.0);
+        let b = zn.mul(p.1, p.1);
+        let c = zn.mul(p.2, p.2);
+        let c = zn.add(c, c);
+        let e = zn.sub(zn.sub(x_y2, a), b);
+        // D=-A, G=B-A, H=-B-A, F=G-C
+        let g = zn.sub(b, a);
+        let f = zn.sub(g, c);
+        let h = zn.sub(zn.cast(0), zn.add(a, b));
+        (zn.mul(e, f), zn.mul(g, h), zn.mul(f, g), zn.mul(e, h))
+    }
+
+    pub fn scalar64_mul(&self, k: u64, p: (V, V, V)) -> (V, V, V) {
+        let zn = self.0;
+        // Prepare small steps.
+        let pext = self.ext(p);
+        let p2 = self.dblext(p);
+        let p3 = self.add(pext, p2);
+        let p5 = self.add(p3, p2);
+        let p7 = self.add(p5, p2);
+        let gaps = [&pext, &p3, &p5, &p7];
+        // Encode the chain as:
+        // 2l (doubling l times)
+        // ±k (add/sub kP where k is odd)
+        let mut c = [0_i8; 32];
+        let l = ecm::Curve::make_addition_chain(&mut c, k);
+        // Get initial element (chain[l-1] = 1 or 3 or 5 or 7)
+        let q = gaps[c[l - 1] as usize / 2];
+        let mut q = (q.0, q.1, q.2);
+        for idx in 1..l {
+            let op = c[l - 1 - idx];
+            if op % 2 == 0 {
+                for _ in 0..op / 2 {
+                    // FIXME: 1 MUL wasted
+                    q = self.double(q);
+                }
+            } else {
+                if op > 0 {
+                    q = self.dbladd(q, *gaps[op as usize / 2]);
+                } else {
+                    let mut gap = gaps[(-op) as usize / 2].clone();
+                    gap.0 = zn.sub(zn.cast(0), gap.0);
+                    gap.3 = zn.sub(zn.cast(0), gap.3);
+                    q = self.dbladd(q, gap);
+                }
+            }
+        }
+        q
     }
 }
 
@@ -575,4 +839,24 @@ fn test_ecm_small() {
             panic!("failure for {n}");
         }
     }
+}
+
+#[test]
+fn test_ecm_smooth() {
+    // 17227965250634428706527504247997363: 3 13 701 5399 10979 11423 47149 1005287 19635073
+    // Most prime factors are not P-1 smooth.
+    let n: u128 = 17227965250634428706527504247997363 / 39;
+    let sb = ecm::SmoothBase::new(60, false);
+    let facs = ecm_curve_smooth(&Uint::from(n), 1, &sb, 660.0);
+    assert!(facs.len() >= 3);
+    let facs = ecm_curve_smooth(&Uint::from(n), 2, &sb, 660.0);
+    assert!(facs.len() >= 3);
+    let facs = ecm_curve_smooth(&Uint::from(n), 3, &sb, 660.0);
+    assert!(facs.len() >= 3);
+
+    let sb = ecm::SmoothBase::new(125, false);
+    let facs = ecm_curve_smooth(&Uint::from(n), 1, &sb, 1920.0);
+    assert!(facs.len() >= 4);
+    let facs = ecm_curve_smooth(&Uint::from(n), 2, &sb, 1920.0);
+    assert!(facs.len() >= 4, "{facs:?}");
 }
