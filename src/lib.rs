@@ -636,7 +636,7 @@ fn factor_auto_impl(
 
     // For small inputs, P-1 covers most primes and is faster than ECM and quadratic sieve.
     let start_pm1 = std::time::Instant::now();
-    let pm1_res = pollard_pm1::pm1_auto(&n, prefs.verbosity);
+    let pm1_res = pollard_pm1::pm1_auto(&st.nred, prefs.verbosity);
     // P-1 should be only run once.
     if let Some((a_s, _b)) = pm1_res {
         if prefs.verbose(Verbosity::Info) {
@@ -661,9 +661,9 @@ fn factor_auto_impl(
     }
     // ECM, in its 128-bit variant, is already efficient for 52-bit numbers.
     let ecm_res = if matches!(n.bits(), 52..=128) {
-        ecm128::ecm128(n, false, prefs)
+        ecm128::ecm128(st.nred, false, prefs)
     } else {
-        ecm::ecm_auto(n, prefs, tpool)
+        ecm::ecm_auto(st.nred, prefs, tpool)
     };
     if let Some((a, _b)) = ecm_res {
         st.declare_factors(vec![a]);
