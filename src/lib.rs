@@ -27,7 +27,6 @@ pub mod relations;
 
 // Implementations
 pub mod ecm;
-pub mod ecm128;
 pub mod mpqs;
 pub mod pollard_pm1;
 pub mod pollard_rho;
@@ -335,7 +334,7 @@ fn factor_impl(
             // "Small" ECM
             // However due to determinism the recursion will go through the
             // same curves, which is not very useful.
-            if let Some((a, b)) = ecm128::ecm128(n, true, prefs) {
+            if let Some((a, b)) = ecm::ecm_small_auto(n, true, prefs) {
                 factor_impl(a, alg, prefs, factors, tpool);
                 if prefs.verbose(Verbosity::Info) {
                     eprintln!("Recursively factor {b}");
@@ -661,7 +660,7 @@ fn factor_auto_impl(
     }
     // ECM, in its 128-bit variant, is already efficient for 52-bit numbers.
     let ecm_res = if matches!(n.bits(), 52..=128) {
-        ecm128::ecm128(st.nred, false, prefs)
+        ecm::ecm_small_auto(st.nred, false, prefs)
     } else {
         ecm::ecm_auto(st.nred, prefs, tpool)
     };
@@ -687,7 +686,7 @@ fn factor_auto_impl(
 
         if st.nred.bits() <= 80 {
             // FIXME: don't repeat already tried curves.
-            if let Some((a, _b)) = ecm128::ecm128(st.nred, true, prefs) {
+            if let Some((a, _b)) = ecm::ecm_small_auto(st.nred, true, prefs) {
                 st.declare_factors(vec![a]);
                 if prefs.verbose(Verbosity::Info) {
                     eprintln!("Recursively factor {}", st.nred);
@@ -819,8 +818,7 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
         _ => (24, 250, 7.7e3), // 30..32
     };
     if nred.bits() < 128 {
-        while let Some((a, b)) = ecm128::ecm(u128::cast_from(nred), curves, b1, b2, prefs.verbosity)
-        {
+        while let Some((a, b)) = ecm::ecm_small(nred, curves, b1, b2, prefs.verbosity) {
             factor_auto_impl(a.into(), &prefs, factors, None).unwrap();
             nred = b.into();
             if nred.is_one() {

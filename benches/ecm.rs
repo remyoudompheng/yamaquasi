@@ -4,7 +4,7 @@ use std::time::Duration;
 use bnum::cast::CastFrom;
 use brunch::Bench;
 use yamaquasi::arith_montgomery::{Mod128, ZmodN};
-use yamaquasi::{ecm, ecm128, Preferences, Uint, Verbosity};
+use yamaquasi::{ecm, Preferences, Uint, Verbosity};
 
 fn main() {
     // A 128-bit modulus.
@@ -25,7 +25,7 @@ fn main() {
     brunch::benches! {
         inline:
         {
-            let c = ecm128::ECurve(Mod128::new128(p128));
+            let c = ecm::ECurve(Mod128::new128(p128));
             let g = (8, 9, 1);
             let n: u64 = 1511 * 1523 * 1531 * 1543 * 1549 * 1553;
             Bench::new("ECM128 scalar mul n64 x G (p128)")

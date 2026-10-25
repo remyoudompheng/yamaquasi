@@ -534,7 +534,7 @@ pub fn try_factor64(n: u64) -> Option<(u64, u64)> {
     if let Some(pq) = pollard_rho::rho_semiprime(n) {
         return Some(pq);
     }
-    crate::ecm128::ecm_semiprime(n)
+    crate::ecm::ecm_semiprime(n)
 }
 
 /// Performs trial division of x by fbase[idx] for prime indices in facs.
