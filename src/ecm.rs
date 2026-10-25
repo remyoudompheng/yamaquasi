@@ -1181,10 +1181,6 @@ impl Curve {
     fn equal(&self, p: &Point, q: &Point) -> bool {
         projective_equal(&self.zn, p, q)
     }
-
-    pub(crate) fn is_twisted128(&self) -> bool {
-        self.twisted && self.zn.words() == 2
-    }
 }
 
 // Test equality of points in the projective plane.

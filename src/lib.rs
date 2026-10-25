@@ -618,6 +618,10 @@ fn factor_auto_impl(
         factors.push(n);
         return Ok(());
     }
+    if n.bits() <= 32 {
+        trialdiv::factor_u32(u32::cast_from(n), factors);
+        return Ok(());
+    }
     let mut st = FactorState::new(n);
     if st.done() {
         factors.append(&mut st.primes);

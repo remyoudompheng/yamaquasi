@@ -157,6 +157,20 @@ impl Mod128 {
             ninv: mg_2adic_inv(n as u64),
         }
     }
+
+    // Compute 2^128 and 2^256 modulo n.
+    pub fn r_r2(self) -> (u128, u128) {
+        // (2^128 - n) % n
+        let r = 0_u128.wrapping_sub(self.n) % self.n;
+        // 2^256 % n
+        // This is the Montgomery representation of 2^128.
+        let two = self.add(r, r);
+        let mut r2 = self.add(two, two);
+        for _ in 2..8 {
+            r2 = self.mul(r2, r2);
+        }
+        (r, r2)
+    }
 }
 
 impl Zmod for Mod128 {
@@ -423,90 +437,6 @@ fn redc128(n: u128, ninv: u64, xy0: u128) -> u128 {
         mn1 = m as u128 * n1 as u128 + mn0hi as u128 + mn_low as u128;
     }
     mn1
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[doc(hidden)]
-pub struct M128(pub u128);
-
-// Montgomery modular arithmetic for 128-bit moduli.
-// If the modulus fits in 64 bits, operations are defined with
-// multiplier 2^64 instead of 2^128.
-impl M128 {
-    pub fn inv_2adic(n: u128) -> u128 {
-        debug_assert!(n % 2 == 1);
-        // Use 64-bit inverse as starting point.
-        let mut x = mg_2adic_inv(n as u64) as u128;
-        if n >> 64 == 0 {
-            return x;
-        }
-        loop {
-            let rem = n.wrapping_mul(x) - 1;
-            if rem == 0 {
-                break;
-            }
-            x += 1 << rem.trailing_zeros();
-        }
-        assert!(n.wrapping_mul(x) == 1);
-        1 + !x
-    }
-
-    // Compute 2^128 and 2^256 modulo n.
-    pub fn r_r2(n: u128, ninv: u128) -> (M128, M128) {
-        // (2^128 - n) % n
-        let r = M128(0_u128.wrapping_sub(n) % n);
-        if n >> 64 == 0 {
-            return (M128((1 << 64) % n), r);
-        }
-        // 2^256 % n
-        // This is the Montgomery representation of 2^128.
-        let two = M128::add(n, r, r);
-        let mut r2 = two;
-        for _ in 0..7 {
-            r2 = Self::mul(n, ninv, r2, r2);
-        }
-        (r, r2)
-    }
-
-    pub fn add(n: u128, x: M128, y: M128) -> M128 {
-        let (x, y) = (x.0, y.0);
-        let my = n - y;
-        if x >= my {
-            M128(x - my)
-        } else {
-            M128(x + y)
-        }
-    }
-
-    pub fn sub(n: u128, x: M128, y: M128) -> M128 {
-        let (x, y) = (x.0, y.0);
-        if x >= y {
-            M128(x - y)
-        } else {
-            M128(x + (n - y))
-        }
-    }
-
-    pub fn mul(n: u128, ninv: u128, x: M128, y: M128) -> M128 {
-        if n >> 64 == 0 {
-            return M128(mg_mul(n as u64, ninv as u64, x.0 as u64, y.0 as u64) as u128);
-        }
-        // Apply the REDC algorithm.
-        let (xy0, xy1) = mul256(x.0, y.0);
-        if xy0 == 0 {
-            return M128(xy1);
-        }
-        // mul cannot be zero.
-        let m = xy0.wrapping_mul(ninv);
-        // Return xy1 + 1 + highword(mul * n).
-        let mn1 = mul256(m, n).1;
-        let d = n - mn1 - 1;
-        if xy1 >= d {
-            M128(xy1 - d)
-        } else {
-            M128(xy1 + mn1 + 1)
-        }
-    }
 }
 
 /// Context for modular Montgomery arithmetic for large (512-bit) moduli
@@ -1105,26 +1035,25 @@ fn test_gcd_factors64() {
 fn test_mod128() {
     // 128-bit modular arithmetic
     let n = 242117442329613169289925222087543973661;
-    let ninv = M128::inv_2adic(n);
-    let (r, r2) = M128::r_r2(n, ninv);
+    let zn = Mod128::new128(n);
+    let (r, r2) = zn.r_r2();
     eprintln!("N={n}");
     eprintln!("R={r:?}");
     eprintln!("R²={r2:?}");
-    assert_eq!(r, M128::mul(n, ninv, r, r));
-    let x = M128::mul(n, ninv, M128(123456789), r2);
-    let y = M128::mul(n, ninv, M128(987654321), r2);
-    let xy = M128::mul(n, ninv, M128(123456789 * 987654321), r2);
+    assert_eq!(r, zn.mul(r, r));
+    let x = zn.mul(123456789, r2);
+    let y = zn.mul(987654321, r2);
+    let xy = zn.mul(123456789 * 987654321, r2);
     eprintln!("x={x:?}");
     eprintln!("y={y:?}");
-    assert_eq!(xy, M128::mul(n, ninv, x, y));
+    assert_eq!(xy, zn.mul(x, y));
 }
 
 #[test]
 fn test_mod128_pow() {
     let n = 242117442329613169289925222087543973661;
     let zn = Mod128::new128(n);
-    let ninv = M128::inv_2adic(n);
-    let (_r, M128(r2)) = M128::r_r2(n, ninv);
+    let (_r, r2) = zn.r_r2();
     let x = zn.mul(123456789, r2);
     let y = zn.mul(987654321, r2);
     let xy = zn.mul(123456789 * 987654321, r2);
