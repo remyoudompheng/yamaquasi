@@ -107,8 +107,9 @@ fn main() {
             let mut prefs = Preferences::default();
             prefs.verbosity = Verbosity::Silent;
             let pq = ecm::ecm(n, 1, b1, b2, &prefs, None);
-            if let Some((p, q)) = pq {
-                assert!(p.bits() > 1 && q.bits() > 1);
+            if let Some(facs) = pq {
+                let f = facs[0];
+                assert!(f.bits() > 1 && f < n);
                 ok += 1;
             }
         }

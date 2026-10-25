@@ -65,7 +65,7 @@
 #![allow(clippy::needless_range_loop)]
 #![allow(clippy::result_large_err)]
 
-use std::cmp::{max, min};
+use std::cmp::min;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use bnum::cast::CastFrom;
@@ -89,7 +89,7 @@ pub fn ecm_auto(
     n: Uint,
     prefs: &Preferences,
     tpool: Option<&rayon::ThreadPool>,
-) -> Option<(Uint, Uint)> {
+) -> Option<Vec<Uint>> {
     // The CPU budget here is only a few seconds (at most 1% of SIQS time).
     // So we intentionally use small parameters hoping to be very lucky.
     // This means that the parameters should be tuned to find factors
@@ -132,7 +132,7 @@ pub fn ecm_only(
     n: Uint,
     prefs: &Preferences,
     tpool: Option<&rayon::ThreadPool>,
-) -> Option<(Uint, Uint)> {
+) -> Option<Vec<Uint>> {
     // B1 values should be such that step 1 takes about as much time as step 2.
     // D values are only such that phi(D) is a bit less than a power of 2.
 
@@ -167,7 +167,7 @@ pub fn ecm(
     b2: f64,
     prefs: &Preferences,
     tpool: Option<&rayon::ThreadPool>,
-) -> Option<(Uint, Uint)> {
+) -> Option<Vec<Uint>> {
     let (b2, _, _) = stage2_params(b2);
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Attempting ECM with {curves} curves B1={b1} B2={b2:e}",);
@@ -236,31 +236,30 @@ pub fn ecm(
                     eprintln!("Unexpected factor {p}");
                 }
                 done.store(true, Ordering::Relaxed);
-                return Some((p, n / p));
+                return Some(vec![p]);
             }
         };
         if prefs.verbose(Verbosity::Verbose) {
             eprintln!("Trying Suyama-11 curve with parameter [{seed}]G");
         }
         if let Some(v) = ecm_curve(&sb, &zn, &c, b2, true, prefs.verbosity) {
-            let p = v[0];
             if prefs.verbose(Verbosity::Info) {
-                let (a, mut d) = c.a_d();
+                let (a, d) = c.a_d();
                 let elapsed = start.elapsed().as_secs_f64();
-                d = d % p;
-                eprintln!("ECM found factor {p} at curve {iter}/{curves} (Edwards a={a} d={d}) elapsed={elapsed:.3}s");
+                eprintln!("ECM found factors {v:?} at curve {iter}/{curves} (Edwards a={a} d={d}) elapsed={elapsed:.3}s");
             }
             done.store(true, Ordering::Relaxed);
-            return Some((p, n / p));
+            return Some(v);
         }
         None
     };
     if let Some(pool) = tpool {
         let results: Vec<Option<_>> =
             pool.install(|| seeds.par_iter().map(|&k| do_curve(k)).collect());
-        for r in results {
-            if r.is_some() {
-                return r;
+        let mut allfacs = vec![];
+        for mut r in results {
+            if let Some(ref mut res) = r {
+                allfacs.append(res);
             }
         }
     } else {
@@ -451,7 +450,9 @@ pub fn ecm_semiprime(n: u64) -> Option<(u64, u64)> {
 pub fn ecm_small(n: Uint, curves: usize, b1: u64, b2: f64, v: Verbosity) -> Option<(Uint, Uint)> {
     let mut prefs = Preferences::default();
     prefs.verbosity = v;
-    ecm(n, curves, b1 as usize, b2, &prefs, None)
+    let facs = ecm(n, curves, b1 as usize, b2, &prefs, None)?;
+    // FIXME: return vector
+    Some((facs[0], n / facs[0]))
 }
 
 // Run ECM for a number assumed to be smooth (returns multiple factors).
@@ -1939,6 +1940,8 @@ impl<'a> Suyama11<'a> {
 }
 
 #[cfg(test)]
+use std::cmp::max;
+#[cfg(test)]
 use std::str::FromStr;
 
 #[cfg(test)]
@@ -2076,14 +2079,14 @@ fn test_ecm_curve3() {
     prefs.verbosity = Verbosity::Debug;
     let res = ecm(n, 10, 3, 20., &prefs, None);
     assert!(res.is_some());
-    assert!(matches!(res.unwrap().0.digits()[0], 3011 | 3259));
+    assert!(matches!(res.unwrap()[0].digits()[0], 3011 | 3259));
 
     // A divisor of the numerator of 8G.
     let n = Uint::from_digit(8596409 * 2621197441);
     let res = ecm(n, 10, 300, 2000., &prefs, None);
     assert!(res.is_some());
-    let (p, q) = res.unwrap();
-    assert!(p * q == n);
+    let p = res.unwrap()[0];
+    assert!(n % p == Uint::ZERO);
 
     // A product of 2 large prime factors of y(16G)
     // 187517650311848773700321 * 26717264479748082280693283115460047361
@@ -2094,8 +2097,8 @@ fn test_ecm_curve3() {
             .unwrap();
         let res = ecm(n, 100, 120_000, 20e6, &prefs, None);
         assert!(res.is_some());
-        let (p, q) = res.unwrap();
-        assert!(p * q == n);
+        let p = res.unwrap()[0];
+        assert!(n % p == Uint::ZERO);
     }
 }
 

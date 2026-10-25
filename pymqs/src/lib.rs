@@ -243,17 +243,15 @@ fn ecm(
     let tpool = tpool.as_ref();
     let result =
         py.detach(|| yamaquasi::ecm::ecm(n, curves as usize, b1 as usize, b2, &prefs, tpool));
-    let (p, q) = match result {
-        Some(t) => t,
-        None => {
+    let Some(facs) = result
+        else {
             return Err(PyValueError::new_err(format!(
                 "No factors found by ECM B1={b1} B2={b2} with {curves} curves"
             )))
-        }
-    };
+        };
 
     let l = PyList::empty(py);
-    for f in [p, q] {
+    for f in facs {
         l.append(uint_to_py(py, &f))?;
     }
     Ok(l.into())

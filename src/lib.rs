@@ -320,12 +320,23 @@ fn factor_impl(
             return;
         }
         Algo::Ecm => {
-            if let Some((a, b)) = ecm::ecm_only(n, prefs, tpool) {
-                factor_impl(a, alg, prefs, factors, tpool);
-                if prefs.verbose(Verbosity::Info) {
-                    eprintln!("Recursively factor {b}");
+            if let Some(a_s) = ecm::ecm_only(n, prefs, tpool) {
+                let mut nred = n;
+                for a in a_s {
+                    if (nred % a).is_zero() {
+                        nred /= a;
+                        if prefs.verbose(Verbosity::Info) {
+                            eprintln!("Recursively factor {a}");
+                        }
+                        factor_impl(a, alg, prefs, factors, tpool);
+                    }
                 }
-                factor_impl(b, alg, prefs, factors, tpool);
+                if nred.bits() > 1 {
+                    if prefs.verbose(Verbosity::Info) {
+                        eprintln!("Recursively factor {nred}");
+                    }
+                    factor_impl(nred, alg, prefs, factors, tpool);
+                }
                 return;
             }
             if prefs.verbose(Verbosity::Info) {
@@ -662,99 +673,73 @@ fn factor_auto_impl(
             start_pm1.elapsed().as_secs_f64()
         );
     }
-    // ECM, in its 128-bit variant, is already efficient for 52-bit numbers.
-    let ecm_res = if matches!(n.bits(), 52..=128) {
-        ecm::ecm_small_auto(st.nred, false, prefs)
-    } else {
-        ecm::ecm_auto(st.nred, prefs, tpool)
-    };
-    if let Some((a, _b)) = ecm_res {
-        st.declare_factors(vec![a]);
-        if st.done() {
-            factors.append(&mut st.primes);
-            return Ok(());
-        }
-        if prefs.verbose(Verbosity::Info) {
-            eprintln!("Recursively factor {}", st.nred);
+    loop {
+        let ecm_res = ecm::ecm_auto(st.nred, prefs, tpool);
+        if let Some(fs) = ecm_res {
+            st.declare_factors(fs);
+            if st.done() {
+                factors.append(&mut st.primes);
+                return Ok(());
+            }
+        } else {
+            break;
         }
     }
 
-    for _ in 0..32 {
-        // ECM beats Siqs for small integers
-        let ncurrent = st.nred;
-        if st.done() {
-            // FIXME: redundant check?
-            factors.append(&mut st.primes);
-            return Ok(());
-        }
-
-        if st.nred.bits() <= 80 {
-            // FIXME: don't repeat already tried curves.
-            if let Some((a, _b)) = ecm::ecm_small_auto(st.nred, true, prefs) {
-                st.declare_factors(vec![a]);
-                if prefs.verbose(Verbosity::Info) {
-                    eprintln!("Recursively factor {}", st.nred);
-                }
-            }
-        } else {
-            // Never call SIQS with a perfect power.
-            let is_perfect_power = {
-                if ncurrent.bits() <= 64 {
-                    // Use native arithmetic is possible.
-                    arith::perfect_power(ncurrent.low_u64()).map(|_pk @ (p, k)| (p.into(), k))
-                } else if ncurrent.bits() <= 128 {
-                    arith::perfect_power(u128::cast_from(ncurrent))
-                        .map(|_pk @ (p, k)| (p.into(), k))
-                } else {
-                    arith::perfect_power(ncurrent)
-                }
-            };
-            if let Some((p, k)) = is_perfect_power {
-                let mut facs = vec![];
-                factor_auto_impl(p, prefs, &mut facs, tpool)?;
-                for _ in 0..k {
-                    st.declare_factors(facs.clone());
-                }
-                continue;
-            }
-
-            let (k, score) = fbase::select_multiplier(st.nred);
+    while !st.composites.is_empty() {
+        let chk: Uint = st.composites.iter().sum();
+        let facs = st.composites.clone();
+        for f in &facs {
             if prefs.verbose(Verbosity::Info) {
-                eprintln!("Selected multiplier {k} (score {score:.2}/10)");
+                eprintln!("Recursively factor {f}");
             }
-            let divs = siqs::siqs(&st.nred, k, prefs, tpool);
-            match divs {
-                Ok(divs) => st.declare_factors(divs),
-                Err(UnexpectedFactor(d)) => st.declare_factors(vec![d.into()]),
-            };
+            if f.bits() <= 80 {
+                if let Some(fs) = ecm::ecm_only(*f, prefs, tpool) {
+                    st.declare_factors(fs);
+                } else {
+                    return Err(FactoringFailure);
+                }
+            } else {
+                // Never call SIQS with a perfect power.
+                let is_perfect_power = {
+                    if f.bits() <= 64 {
+                        // Use native arithmetic is possible.
+                        arith::perfect_power(f.low_u64()).map(|_pk @ (p, k)| (p.into(), k))
+                    } else if f.bits() <= 128 {
+                        arith::perfect_power(u128::cast_from(*f)).map(|_pk @ (p, k)| (p.into(), k))
+                    } else {
+                        arith::perfect_power(*f)
+                    }
+                };
+                if let Some((p, k)) = is_perfect_power {
+                    let mut facs = vec![];
+                    factor_auto_impl(p, prefs, &mut facs, tpool)?;
+                    for _ in 0..k {
+                        st.declare_factors(facs.clone());
+                    }
+                    continue;
+                }
+
+                let (k, score) = fbase::select_multiplier(*f);
+                if prefs.verbose(Verbosity::Info) {
+                    eprintln!("Selected multiplier {k} (score {score:.2}/10)");
+                }
+                //eprintln!("{n} => SIQS {f}");
+                let divs = siqs::siqs(f, k, prefs, tpool);
+                match divs {
+                    Ok(divs) => st.declare_factors(divs),
+                    Err(UnexpectedFactor(d)) => st.declare_factors(vec![d.into()]),
+                };
+            }
         }
-        if st.nred == ncurrent {
-            // Iterations are deterministic.
+        let chk2: Uint = st.composites.iter().sum();
+        if chk == chk2 {
             break;
         }
         if st.done() {
             factors.append(&mut st.primes);
             return Ok(());
         }
-    }
-    if !st.done() {
-        // Try factoring remaining composites
-        let mut facs = vec![];
-        for &c in &st.composites {
-            if c == st.nred {
-                // Only recurse into smaller numbers.
-                return Err(FactoringFailure);
-            }
-            if prefs.verbose(Verbosity::Info) {
-                eprintln!("Recursively factor {c}");
-            }
-            factor_auto_impl(c, prefs, &mut facs, tpool)?;
-        }
-        st.declare_factors(facs);
-    }
-    if st.done() {
-        factors.append(&mut st.primes);
-        return Ok(());
     }
     if prefs.verbose(Verbosity::Info) {
         eprintln!("Factorization is incomplete.");
@@ -822,9 +807,14 @@ fn factor_small_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
         _ => (24, 250, 7.7e3), // 30..32
     };
     // Try ECM
-    while let Some((a, b)) = ecm::ecm(nred, curves, b1 as usize, b2, &prefs, None) {
-        factor_auto_impl(a, &prefs, factors, None).unwrap();
-        nred = b;
+    while let Some(a_s) = ecm::ecm(nred, curves, b1 as usize, b2, &prefs, None) {
+        for a in a_s {
+            let d = Integer::gcd(&a, &nred);
+            if Uint::ONE < d && d < nred {
+                factor_auto_impl(d, &prefs, factors, None).unwrap();
+                nred /= d;
+            }
+        }
         if pseudoprime(nred) {
             factors.push(nred);
             return;
@@ -863,9 +853,14 @@ fn factor_small_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
         144..=167 => (10000, 60_000_000, 1500e9),
         _ => (15000, 350_000_000, 49e12),
     };
-    while let Some((a, b)) = ecm::ecm(nred, curves, b1 as usize, b2, &prefs, None) {
-        factor_auto_impl(a, &prefs, factors, None).unwrap();
-        nred = b;
+    while let Some(a_s) = ecm::ecm(nred, curves, b1 as usize, b2, &prefs, None) {
+        for a in a_s {
+            let d = Integer::gcd(&a, &nred);
+            if Uint::ONE < d && d < nred {
+                factor_auto_impl(d, &prefs, factors, None).unwrap();
+                nred /= d;
+            }
+        }
         if pseudoprime(nred) {
             factors.push(nred);
             return;
@@ -949,34 +944,17 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
     let mut prefs = Preferences::default();
     prefs.verbosity = Verbosity::Silent;
 
-    if st.nred.bits() < 192 && factor_bits <= 32 {
-        // Use small ECM implementation
-        let sb = ecm::SmoothBase::new(b1, false);
-        for c in 0..tries {
-            //let t0 = std::time::Instant::now();
-            let facs = ecm::ecm_curve_smooth(&st.nred, c, &sb, b2 as f64);
-            //eprintln!("ecm {c} {n} => {}", t0.elapsed().as_secs_f32() * 1e6);
-            if !facs.is_empty() {
-                st.declare_factors(facs);
-                if st.done() {
-                    factors.append(&mut st.primes);
-                    return;
-                }
-            }
+    // Use general ECM
+    while let Some(a_s) = ecm::ecm(st.nred, tries as usize, b1, b2 as f64, &prefs, None) {
+        let old_nred = st.nred;
+        st.declare_factors(a_s);
+        if st.done() {
+            factors.append(&mut st.primes);
+            return;
         }
-    } else {
-        // Use general ECM
-        while let Some((a, _b)) = ecm::ecm(st.nred, tries as usize, b1, b2 as f64, &prefs, None) {
-            let old_nred = st.nred;
-            st.declare_factors(vec![a]);
-            if st.done() {
-                factors.append(&mut st.primes);
-                return;
-            }
-            if st.nred == old_nred {
-                // No change, curves are pseudo-random, abort.
-                break;
-            }
+        if st.nred == old_nred {
+            // No change, curves are pseudo-random, abort.
+            break;
         }
     }
 
@@ -1227,6 +1205,10 @@ fn test_factor() -> Result<(), bnum::errors::ParseIntError> {
     let n = Uint::from_str("35263301580611604739963993408020422755244243071902")?;
     factor(n, Algo::Auto, &Preferences::default()).unwrap();
 
+    // Triggered infinite loop
+    let n = Uint::from_str("29652120026020591938541823457")?;
+    factor(n, Algo::Auto, &Preferences::default()).unwrap();
+
     Ok(())
 }
 
@@ -1440,6 +1422,11 @@ fn test_factor_smooth() -> Result<(), bnum::errors::ParseIntError> {
     assert_eq!(fs.len(), 10, "{fs:?}");
     let fs = factor_smooth(Uint::from(56891511204557826214_u128), 18);
     assert_eq!(fs.len(), 9, "{fs:?}");
+
+    // Triggered infinite loop
+    let n = Uint::from_str("7977858279185817933259895587935864322507169424708")?;
+    let fs = factor_smooth(n, 24);
+    assert_eq!(fs.len(), 11, "{fs:?}");
 
     Ok(())
 }
