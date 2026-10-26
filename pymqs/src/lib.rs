@@ -221,16 +221,7 @@ fn ecm(
 
     let l = PyList::empty(py);
     for f in [p, q] {
-        // Use string for conversion.
-        // FIXME: this is ugly.
-        let s = CString::new(f.to_string()).unwrap();
-        let sptr = s.as_ptr();
-        let nullptr: *mut *mut c_char = std::ptr::null::<*mut c_char>() as *mut _;
-        let obj = unsafe {
-            let obj_ptr = PyLong_FromString(sptr, nullptr, 0);
-            Bound::from_owned_ptr(py, obj_ptr)
-        };
-        l.append(obj)?;
+        l.append(uint_to_py(py, &f))?;
     }
     Ok(l.into())
 }
