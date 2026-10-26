@@ -172,9 +172,9 @@ for sz in range(args.minsize, args.maxsize + 1, args.step):
     t2 = sum(t * t for (_, t) in results)
     mean = t1 / len(results)
     # Bootstrap sampling
+    subsample = (len(results) + 1) // 2
     submeans = [
-        sum(t for (_, t) in random.sample(results, len(results) // 2))
-        / (len(results) // 2)
+        sum(t for (_, t) in random.sample(results, subsample)) / subsample
         for _ in range(10)
     ]
     mean1, mean2 = min(submeans), max(submeans)
