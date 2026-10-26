@@ -224,7 +224,7 @@ pub fn factor(n: Uint, alg: Algo, prefs: &Preferences) -> Result<Vec<Uint>, Fact
 /// Algorithm selection is automatic and multithreading is not used.
 /// Parameters are optimized for the case where many small factors
 /// are expected.
-pub fn factor_smooth(n: Uint, factor_bits: usize) -> Vec<Uint> {
+pub fn find_small_factors(n: Uint, factor_bits: usize) -> Vec<Uint> {
     if n.is_zero() {
         return vec![n];
     }
@@ -243,7 +243,7 @@ pub fn factor_smooth(n: Uint, factor_bits: usize) -> Vec<Uint> {
             factors.push(p.into());
         }
     }
-    factor_smooth_impl(nred, factor_bits, &mut factors);
+    factor_small_impl(nred, factor_bits, &mut factors);
     // No primality testing of factors.
     factors.sort();
     factors
@@ -758,7 +758,7 @@ fn factor_auto_impl(
     Err(FactoringFailure)
 }
 
-fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
+fn factor_small_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
     if n.is_one() {
         return;
     }
@@ -870,6 +870,118 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
     factors.push(nred);
 }
 
+/// Factor an integer which known to be completely factorable
+/// using prime factors < 2^bits.
+pub fn factor_smooth(n: Uint, factor_bits: usize) -> Vec<Uint> {
+    if n.is_zero() {
+        return vec![n];
+    }
+    let mut factors = vec![];
+    let mut nred = n;
+    let tz = nred.trailing_zeros();
+    for _ in 0..tz {
+        factors.push(Uint::from(2_u64));
+    }
+    nred >>= tz;
+    // Perform trial division like factor_auto.
+    if nred.bits() <= 32 {
+        trialdiv::factor_u32(u32::cast_from(nred), &mut factors);
+        return factors;
+    } else if nred.bits() > 128 {
+        trialdiv::factor128k(&mut nred, &mut factors);
+    } else {
+        trialdiv::factor4096(&mut nred, &mut factors);
+    }
+    //eprintln!("{n} trialdiv => {} {:?}", t0.elapsed().as_secs_f32() * 1e6, &factors);
+    factor_smooth_impl(nred, factor_bits, &mut factors);
+    // No primality testing of factors.
+    factors.sort();
+    factors
+}
+
+fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
+    let mut st = FactorState::new(n);
+    if st.done() {
+        factors.append(&mut st.primes);
+        return;
+    }
+
+    // P-1 should be only run once.
+    let facs = pollard_pm1::pm1_small(&st.nred, factor_bits);
+    st.declare_factors(facs);
+    if st.done() {
+        factors.append(&mut st.primes);
+        return;
+    }
+
+    if factor_bits < 16 || factor_bits > 96 {
+        // No strategy: fallback to generic methods.
+        factors.append(&mut st.primes);
+        let mut prefs = Preferences::default();
+        prefs.verbosity = Verbosity::Silent;
+        for &c in &st.composites {
+            factor_auto_impl(c, &prefs, factors, None).unwrap();
+        }
+        return;
+    }
+
+    // Use ECM (only 128 bits): usually 5-10 curves are enough.
+    let (tries, b1, b2) = match factor_bits {
+        16..=20 => (10, 50, 1920),     // cost=1000
+        21..=24 => (20, 50, 1920),     // cost=1000
+        25..=28 => (30, 75, 5040),     // cost=2000
+        29..=30 => (30, 120, 13200),   // cost=4000
+        31..=36 => (30, 280, 33000),   // cost=8000
+        37..=44 => (30, 400, 126000),  // cost=16000
+        45..=48 => (30, 2000, 181000), // cost=50000
+        // Reuse parameters from ecm::ecm_only
+        49..=64 => (100, 10_000, 554000),
+        65..=80 => (100, 100_000, 19_000_000),
+        81..=96 => (200, 300_000, 156_000_000),
+        _ => unreachable!(),
+    };
+
+    // FIXME??
+    let mut prefs = Preferences::default();
+    prefs.verbosity = Verbosity::Silent;
+
+    if st.nred.bits() < 192 && factor_bits <= 32 {
+        // Use small ECM implementation
+        let sb = ecm::SmoothBase::new(b1, false);
+        for c in 0..tries {
+            //let t0 = std::time::Instant::now();
+            let facs = ecm::ecm_curve_smooth(&st.nred, c, &sb, b2 as f64);
+            //eprintln!("ecm {c} {n} => {}", t0.elapsed().as_secs_f32() * 1e6);
+            if !facs.is_empty() {
+                st.declare_factors(facs);
+                if st.done() {
+                    factors.append(&mut st.primes);
+                    return;
+                }
+            }
+        }
+    } else {
+        // Use general ECM
+        while let Some((a, _b)) = ecm::ecm(st.nred, tries as usize, b1, b2 as f64, &prefs, None) {
+            let old_nred = st.nred;
+            st.declare_factors(vec![a]);
+            if st.done() {
+                factors.append(&mut st.primes);
+                return;
+            }
+            if st.nred == old_nred {
+                // No change, curves are pseudo-random, abort.
+                break;
+            }
+        }
+    }
+
+    factors.append(&mut st.primes);
+    for &c in &st.composites {
+        factor_auto_impl(c, &prefs, factors, None).unwrap();
+    }
+}
+
 fn check_factors(n: &Uint, factors: &[Uint]) -> Result<(), FactoringFailure> {
     if let &[p] = &factors {
         assert_eq!(n, p);
@@ -886,8 +998,17 @@ fn check_factors(n: &Uint, factors: &[Uint]) -> Result<(), FactoringFailure> {
 /// It is known that bases until 11 are enough for a 40-bit integer.
 /// It is known that testing bases until 37 is enough for a 64-bit integer.
 pub fn isprime64(p: u64) -> bool {
-    if p < *fbase::SMALL_PRIMES.last().unwrap() {
-        return fbase::SMALL_PRIMES[..].contains(&p);
+    if p & 1 == 0 {
+        return p == 2;
+    }
+    if p % 3 == 0 {
+        return p == 3;
+    }
+    if p < fbase::PRIME_MAP_MAX as u64 {
+        // Only one of 3k+1 and 3k+2 is odd, use the bitmap.
+        let map_idx = p as usize / 3;
+        let bit = fbase::PRIME_MAP[map_idx / 64] >> (map_idx % 64);
+        return (bit & 1) == 1;
     }
     // Compute auxiliary numbers for modular arithmetic.
     let pinv = arith_montgomery::mg_2adic_inv(p);
@@ -1244,29 +1365,64 @@ fn test_factor_ecm_edgecases() -> Result<(), bnum::errors::ParseIntError> {
 }
 
 #[test]
-fn test_factor_smooth() -> Result<(), bnum::errors::ParseIntError> {
+fn test_find_small_factors() -> Result<(), bnum::errors::ParseIntError> {
     let n = Uint::from_str(
         "12201879382649676470194887538548324244326362954552609354733068712098984100",
     )?;
-    let fs = factor_smooth(n, 55);
+    let fs = find_small_factors(n, 55);
     assert_eq!(fs.len(), 13);
 
     let n = Uint::from_str(
         "24091791282868184848805353591599648198248879500538357141333569815331594788",
     )?;
-    let fs = factor_smooth(n, 55);
+    let fs = find_small_factors(n, 55);
     assert_eq!(fs.len(), 14);
 
     let n = Uint::from_str("2491972896696220875515999140704747439734476676")?;
-    let fs = factor_smooth(n, 20);
+    let fs = find_small_factors(n, 20);
     // n = 2*2*3*23*229*443*14341*34883*98221*104123*17396053561176129467
     assert_eq!(fs.len(), 11);
 
     // Some primes below 1000 can escape all tests:
     let n = Uint::from(242153041166900_u64);
-    let fs = factor_smooth(n, 19);
+    let fs = find_small_factors(n, 19);
     // n = 2*2*5*5*199*281*853*50767
     assert_eq!(fs.len(), 8);
+
+    let n = Uint::from(902002007847990_u64);
+    let fs = find_small_factors(n, 19);
+    assert_eq!(fs.len(), 9, "{fs:?}");
+
+    let fs = find_small_factors(Uint::from(70054262122659589807_u128), 18);
+    assert_eq!(fs.len(), 7, "{fs:?}");
+    let fs = find_small_factors(Uint::from(3977516652591602527_u128), 18);
+    assert_eq!(fs.len(), 8, "{fs:?}");
+    let fs = find_small_factors(Uint::from(3452559913281303_u64), 18);
+    assert_eq!(fs.len(), 10, "{fs:?}");
+    let fs = find_small_factors(Uint::from(56891511204557826214_u128), 18);
+    assert_eq!(fs.len(), 9, "{fs:?}");
+
+    Ok(())
+}
+
+#[test]
+fn test_factor_smooth() -> Result<(), bnum::errors::ParseIntError> {
+    let n = Uint::from_str(
+        "24091791282868184848805353591599648198248879500538357141333569815331594788",
+    )?;
+    let fs = factor_smooth(n, 28);
+    assert_eq!(fs.len(), 14);
+
+    let n = Uint::from_str("2491972896696220875515999140704747439734476676")?;
+    let fs = factor_smooth(n, 20);
+    // n = 2*2*3*23*229*443*14341*34883*98221*104123*1115111329*15600284123
+    assert_eq!(fs.len(), 12, "{fs:?}");
+
+    // Some primes below 1000 can escape all tests:
+    let n = Uint::from(242153041166900_u64);
+    let fs = factor_smooth(n, 19);
+    // n = 2*2*5*5*199*281*853*50767
+    assert_eq!(fs.len(), 8, "{fs:?}");
 
     let n = Uint::from(902002007847990_u64);
     let fs = factor_smooth(n, 19);
@@ -1285,8 +1441,8 @@ fn test_factor_smooth() -> Result<(), bnum::errors::ParseIntError> {
 }
 
 #[test]
-fn test_factor_smooth_random() {
-    // Test that factor_smooth catches almost all factor
+fn test_find_small_factors_random() {
+    // Test that find_small_factors catches almost all factor
     // of advertised size.
     // In debug mode, it is very slow, 1 sample per size is good enough.
     const SAMPLES: usize = 1;
@@ -1313,7 +1469,7 @@ fn test_factor_smooth_random() {
             let start = std::time::Instant::now();
             for i in 0..SAMPLES {
                 let n = Uint::from(ps[i]) * Uint::from(qs[i]);
-                let facs = factor_smooth(n, pbits);
+                let facs = find_small_factors(n, pbits);
                 let mut expect = [ps[i] as u128, qs[i]].map(Uint::from);
                 expect.sort();
                 if facs.len() == 2 {
@@ -1330,7 +1486,7 @@ fn test_factor_smooth_random() {
             let start = std::time::Instant::now();
             for i in 0..SAMPLES {
                 let n = Uint::from(ps[i]) * Uint::from(qs[i]) * Uint::from(79608931_u64);
-                let facs = factor_smooth(n, pbits);
+                let facs = find_small_factors(n, pbits);
                 let mut expect = [67, 733, 1621, ps[i] as u128, qs[i]].map(Uint::from);
                 expect.sort();
                 if facs.len() == 5 {
@@ -1364,7 +1520,14 @@ fn test_pseudoprime() {
 
     assert!(!isprime64(1));
     assert!(isprime64(2));
+    assert!(isprime64(3));
+    assert!(!isprime64(4));
+    assert!(!isprime64(9));
+    assert!(!isprime64(15));
     assert!(isprime64(17));
+    for p in fbase::primes(4096) {
+        assert!(isprime64(p as u64), "{p}");
+    }
     assert!(!isprime64(9746347772161));
     // Some prime number
     assert!(isprime64(9938261980284378737));

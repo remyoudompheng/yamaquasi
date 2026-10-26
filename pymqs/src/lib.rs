@@ -27,6 +27,8 @@ mod pymqs {
     #[pymodule_export]
     use super::factor_smooth;
     #[pymodule_export]
+    use super::find_small_factors;
+    #[pymodule_export]
     use super::quadratic_classgroup;
 }
 
@@ -147,7 +149,7 @@ fn uint_to_py<'py>(py: Python<'py>, n: &Uint) -> Bound<'py, PyInt> {
     signature = (n, factor_bits),
     text_signature = "(n: int, factor_bits: int) -> list[int]",
 )]
-/// Partially factors an integer to find all prime factors below size `factor_bits`.
+/// Attempt to completely factor an integer known to be semi-smooth, where at most 2 factors are above declared threshold.
 /// The result is a list whose product is the input argument.
 fn factor_smooth(py: Python<'_>, n: &Bound<'_, PyInt>, factor_bits: usize) -> PyResult<Py<PyList>> {
     // FIXME: handle interrupts?
@@ -162,6 +164,37 @@ fn factor_smooth(py: Python<'_>, n: &Bound<'_, PyInt>, factor_bits: usize) -> Py
         ));
     }
     let factors = py.detach(|| yamaquasi::factor_smooth(n, factor_bits));
+    let l = PyList::empty(py);
+    for f in factors {
+        l.append(uint_to_py(py, &f))?;
+    }
+    Ok(l.into())
+}
+
+#[pyfunction]
+#[pyo3(
+    signature = (n, factor_bits),
+    text_signature = "(n: int, factor_bits: int) -> list[int]",
+)]
+/// Partially factors an integer to find all prime factors below size `factor_bits`.
+/// The result is a list whose product is the input argument.
+fn find_small_factors(
+    py: Python<'_>,
+    n: &Bound<'_, PyInt>,
+    factor_bits: usize,
+) -> PyResult<Py<PyList>> {
+    // FIXME: handle interrupts?
+    let n = Uint::from_str(&n.to_string()).map_err(|_| {
+        PyValueError::new_err(
+            "Yamaquasi only accepts positive integers with at most 150 decimal digits".to_string(),
+        )
+    })?;
+    if n.bits() > 512 {
+        return Err(PyValueError::new_err(
+            "Yamaquasi only accepts positive integers with at most 150 decimal digits".to_string(),
+        ));
+    }
+    let factors = py.detach(|| yamaquasi::find_small_factors(n, factor_bits));
     let l = PyList::empty(py);
     for f in factors {
         l.append(uint_to_py(py, &f))?;

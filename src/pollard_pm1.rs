@@ -489,6 +489,16 @@ pub fn pm1_auto(n: &Uint, v: Verbosity) -> Option<(Vec<Uint>, Uint)> {
     }
 }
 
+/// Perform Pollard P-1 to search for factors smaller than 2^bits
+pub fn pm1_small(n: &Uint, bits: usize) -> Vec<Uint> {
+    match bits {
+        0..=20 => PM1_500.pm1(n),
+        21..=24 => PM1_1000.pm1(n),
+        25..=28 => PM1_2000.pm1(n),
+        _ => PM1_4000.pm1(n),
+    }
+}
+
 /// Perform Pollard P-1 with a large CPU budget.
 /// This is however unlikely to produce interesting results
 /// but should be faster than ECM with similar B1/B2.
