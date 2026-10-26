@@ -490,7 +490,7 @@ fn ecm_curve(
     // Add stage 1 results if any
     if let Some(mut facs) = stage1_res {
         match result {
-            None => { result = Some(facs) },
+            None => result = Some(facs),
             Some(ref mut v) => v.append(&mut facs),
         }
     }

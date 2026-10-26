@@ -19,6 +19,8 @@
 //! 65536, so we use 16-bit indices, and determinants will be less than
 //! 128kb large.
 
+#![allow(clippy::needless_range_loop)]
+
 use std::cmp::max;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;

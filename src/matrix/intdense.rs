@@ -7,6 +7,8 @@
 //! This is used for class group computations, for medium-sized
 //! matrices (at most size 1000).
 
+#![allow(clippy::needless_range_loop)]
+
 use std::cmp::max;
 use std::collections::BTreeMap;
 use std::ops::Range;

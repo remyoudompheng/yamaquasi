@@ -70,3 +70,10 @@ harness = false
 name = "factor64"
 harness = false
 
+[lints.clippy]
+needless_range_loop = "allow"
+len_zero = "allow"
+some_filter = "allow"
+assign_op_pattern = "allow"
+result_large_err = "allow"
+new_without_default = "allow"

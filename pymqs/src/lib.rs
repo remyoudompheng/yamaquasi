@@ -21,11 +21,11 @@ use yamaquasi::{self, Algo, Int, Preferences, Uint, Verbosity};
 #[pymodule]
 mod pymqs {
     #[pymodule_export]
+    use super::ecm;
+    #[pymodule_export]
     use super::factor;
     #[pymodule_export]
     use super::factor_smooth;
-    #[pymodule_export]
-    use super::ecm;
     #[pymodule_export]
     use super::quadratic_classgroup;
 }
@@ -158,8 +158,8 @@ fn factor_smooth(py: Python<'_>, n: &Bound<'_, PyInt>, factor_bits: usize) -> Py
     })?;
     if n.bits() > 512 {
         return Err(PyValueError::new_err(
-            "Yamaquasi only accepts positive integers with at most 150 decimal digits"
-        .to_string()));
+            "Yamaquasi only accepts positive integers with at most 150 decimal digits".to_string(),
+        ));
     }
     let factors = py.detach(|| yamaquasi::factor_smooth(n, factor_bits));
     let l = PyList::empty(py);
@@ -190,12 +190,12 @@ fn ecm(
     prefs.verbosity = verbosity;
     let n = Uint::from_str(&n.to_string()).map_err(|_| {
         PyValueError::new_err(
-            "Yamaquasi only accepts positive integers with at most 150 decimal digits".to_string()
+            "Yamaquasi only accepts positive integers with at most 150 decimal digits".to_string(),
         )
     })?;
     if n.bits() > 512 {
         return Err(PyValueError::new_err(
-            "Yamaquasi only accepts positive integers with at most 150 decimal digits".to_string()
+            "Yamaquasi only accepts positive integers with at most 150 decimal digits".to_string(),
         ));
     }
     let tpool: Option<rayon::ThreadPool> = prefs.threads.map(|t| {
@@ -256,12 +256,12 @@ fn quadratic_classgroup(
     })?;
     if !d.is_negative() || d.unsigned_abs().bits() > 250 {
         return Err(PyValueError::new_err(
-            "Yamaquasi only accepts negative integers with at most 75 decimal digits"
-        .to_string()));
+            "Yamaquasi only accepts negative integers with at most 75 decimal digits".to_string(),
+        ));
     }
     if d.bit(1) {
         return Err(PyValueError::new_err(
-            "Discriminant must be 0 or 1 mod 4".to_string()
+            "Discriminant must be 0 or 1 mod 4".to_string(),
         ));
     }
     let tpool: Option<rayon::ThreadPool> = prefs.threads.map(|t| {
@@ -279,7 +279,7 @@ fn quadratic_classgroup(
         Some(grp) => grp,
         None => {
             return Err(PyValueError::new_err(
-                "Classgroup computation failure".to_string()
+                "Classgroup computation failure".to_string(),
             ))
         }
     };
