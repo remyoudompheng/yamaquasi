@@ -266,7 +266,8 @@ pub fn ecm(
                 eprintln!("Trying Edwards curve with generator G=({gx},{gy})");
             }
         }
-        if let res @ Some((p, _)) = ecm_curve(&sb, &zn, &c, b2, prefs.verbosity) {
+        if let Some(v) = ecm_curve(&sb, &zn, &c, b2, true, prefs.verbosity) {
+            let p = v[0];
             if prefs.verbose(Verbosity::Info) {
                 let (a, mut d) = c.a_d();
                 let elapsed = start.elapsed().as_secs_f64();
@@ -274,7 +275,7 @@ pub fn ecm(
                 eprintln!("ECM found factor {p} at curve {iter}/{curves} (Edwards a={a} d={d}) elapsed={elapsed:.3}s");
             }
             done.store(true, Ordering::Relaxed);
-            return res;
+            return Some((p, n / p));
         }
         None
     };
@@ -304,37 +305,46 @@ fn ecm_curve(
     zn: &ZmodN,
     c: &Curve,
     b2: f64,
+    eager: bool,
     verbosity: Verbosity,
-) -> Option<(Uint, Uint)> {
+) -> Option<Vec<Uint>> {
     let n = &zn.n;
     let (_, d1, d2) = stage2_params(b2);
     // ECM stage 1
     let start1 = std::time::Instant::now();
     let mut g = c.gen().clone();
     const GCD_INTERVAL: usize = 1000;
-    let mut gxs = Vec::with_capacity(GCD_INTERVAL);
+    let mut gxs = Vec::with_capacity(16);
     let mut last_gx = zn.one();
+    gxs.push(last_gx);
     for block in sb.factors.chunks(GCD_INTERVAL) {
         // Once g.0 is divisible by p, it will be for the rest of the loop.
-        gxs.clear();
-        gxs.push(last_gx);
+        if eager {
+            gxs.clear();
+            gxs.push(last_gx);
+        }
         for &f in block {
             g = c.scalar64_chainmul(f, &g);
             gxs.push(g.0);
         }
         last_gx = g.0;
-        if let Some(d) = check_gcd_factor(n, &gxs) {
-            return Some((d, n / d));
+        if eager {
+            if let res @ Some(_) = check_gcd_factors(n, &gxs) {
+                return res;
+            }
         }
     }
-    gxs.clear();
-    gxs.push(g.0);
+    if eager {
+        gxs.clear();
+        gxs.push(g.0);
+    }
     for f in sb.larges.iter() {
         g = c.scalar1024_chainmul(f, &g);
         gxs.push(g.0);
     }
-    if let Some(d) = check_gcd_factor(n, &gxs) {
-        return Some((d, n / d));
+    let stage1_res = check_gcd_factors(n, &gxs);
+    if eager && stage1_res.is_some() {
+        return stage1_res;
     }
     drop(gxs);
     assert!(
@@ -433,17 +443,18 @@ fn ecm_curve(
         let mut buffer = zn.one();
         let mut prods = Vec::with_capacity(gsteps.len());
         prods.push(buffer);
-        for pg in gsteps {
+        for pb in bsteps {
             // Compute the gcd after each row for finer granularity.
-            for pb in bsteps {
+            // We use big step-major order to avoid collapsing many small factors.
+            for pg in gsteps {
                 // y(G) - y(B)
                 let delta_y = zn.sub(&pg.1, &pb.1);
                 buffer = zn.mul(&buffer, &delta_y);
             }
             prods.push(buffer);
         }
-        if let Some(d) = check_gcd_factor(n, &prods) {
-            result = Some((d, n / d));
+        if let res @ Some(_) = check_gcd_factors(n, &prods) {
+            result = res;
         }
     } else {
         // Usually D > 4 phi(D) (phi(2*3*5*7) < N/4)
@@ -472,8 +483,15 @@ fn ecm_curve(
             prod = zn.mul(&prod, &v);
         }
         vals.push(prod);
-        if let Some(d) = check_gcd_factor(n, &vals) {
-            result = Some((d, n / d));
+        if let res @ Some(_) = check_gcd_factors(n, &vals) {
+            result = res;
+        }
+    }
+    // Add stage 1 results if any
+    if let Some(mut facs) = stage1_res {
+        match result {
+            None => { result = Some(facs) },
+            Some(ref mut v) => v.append(&mut facs),
         }
     }
     if verbosity >= Verbosity::Verbose {
@@ -490,11 +508,16 @@ fn ecm_curve(
 }
 
 /// Extract a single factor using GCD.
-fn check_gcd_factor(n: &Uint, values: &[MInt]) -> Option<Uint> {
+fn check_gcd_factors(n: &Uint, values: &[MInt]) -> Option<Vec<Uint>> {
     // FIXME: we should return all factors. We just
     // return the largest one.
-    let fs = gcd_factors(n, values).0;
-    fs.iter().filter(|f| f != &n).max().copied()
+    let mut fs = gcd_factors(n, values).0;
+    fs.retain(|f| f != &Uint::ONE && f != n);
+    if fs.is_empty() {
+        None
+    } else {
+        Some(fs)
+    }
 }
 
 /// An exponent base for ECM.
@@ -1520,9 +1543,9 @@ fn test_ecm_curve() {
     // order: 2^2 * 7 * 19 * 29 * 347 * 503 * 223843
     let c = Curve::from_point(zn.clone(), 2, 10).unwrap();
     let sb = SmoothBase::new(1000, true);
-    let res = ecm_curve(&sb, &zn, &c, 500e3, Verbosity::Silent);
+    let res = ecm_curve(&sb, &zn, &c, 500e3, true, Verbosity::Silent);
     eprintln!("{:?}", res);
-    assert_eq!(res, Some((p, q)));
+    assert_eq!(res, Some(vec![p]));
 }
 
 #[test]
@@ -1536,9 +1559,9 @@ fn test_ecm_curve2() {
     // Order has largest prime factors 11329 and 802979
     let c = Curve::from_point(zn.clone(), 2, 132).unwrap();
     let sb = SmoothBase::new(15000, true);
-    let res = ecm_curve(&sb, &zn, &c, 1.37e6, Verbosity::Silent);
+    let res = ecm_curve(&sb, &zn, &c, 1.37e6, true, Verbosity::Silent);
     eprintln!("{:?}", res);
-    assert_eq!(res, Some((p, q)));
+    assert_eq!(res, Some(vec![p]));
 }
 
 #[test]
