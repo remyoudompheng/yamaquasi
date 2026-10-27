@@ -9,6 +9,8 @@ use yamaquasi::{ecm, Preferences, Uint, Verbosity};
 fn main() {
     // A 128-bit modulus.
     let p128: u128 = 192361420203955321314102766284003105319;
+    // A 160-bit modulus.
+    let p160 = Uint::from_str("947481979134496266846416245247285516908492136033").unwrap();
     // A 256-bit prime.
     let p256 = Uint::from_str(
         "92786510271815932444618978328822237837414362351005653014234479629925371473357",
@@ -108,43 +110,78 @@ fn main() {
         7.7e3, 20e3, 33e3, 81e3, 181e3, 554e3, 1.37e6, 2.3e6, 7.1e6, 28e6, 117e6, 643e6, 2.6e9,
         10.5e9, 43e9, 136e9, 543e9,
     ];
+    let mut tt160 = vec![];
     let mut tt256 = vec![];
     let mut tt480 = vec![];
     for &b2 in &b2_values {
         let b1 = 200;
+        let iters = if b2 < 100e3 {
+            1000
+        } else if b2 < 2e6 {
+            10
+        } else {
+            1
+        };
+
         let start = std::time::Instant::now();
-        // Use P256 so what ECM cannot work.
-        let iters = if b2 < 100e3 { 1000 } else { 1 };
+        for _ in 0..iters {
+            let res = ecm::ecm(p160, 1, b1, b2, &prefs, None);
+            assert!(res.is_none());
+        }
+        let t = start.elapsed().as_secs_f64() / (iters as f64);
+        if b2 < 1e8 {
+            eprintln!("p160 ECM(B1={b1},B2={b2:.3e}) in {:.3}ms", t * 1000.);
+        } else {
+            eprintln!("p160 ECM(B1={b1},B2={b2:.3e}) in {t:.3}s");
+        }
+        tt160.push(t);
+
+        let start = std::time::Instant::now();
         for _ in 0..iters {
             let res = ecm::ecm(p256, 1, b1, b2, &prefs, None);
             assert!(res.is_none());
         }
         let t = start.elapsed().as_secs_f64() / (iters as f64);
-        eprintln!("p256 ECM(B1={b1},B2={b2:.3e}) in {t:.3}s");
+        if b2 < 1e8 {
+            eprintln!("p256 ECM(B1={b1},B2={b2:.3e}) in {:.3}ms", t * 1000.);
+        } else {
+            eprintln!("p256 ECM(B1={b1},B2={b2:.3e}) in {t:.3}s");
+        }
         tt256.push(t);
 
         let start = std::time::Instant::now();
-        let res = ecm::ecm(p480, 1, b1, b2, &prefs, None);
-        assert!(res.is_none());
-        let t = start.elapsed().as_secs_f64();
-        eprintln!("p480 ECM(B1={b1},B2={b2:.3e}) in {t:.3}s");
+        for _ in 0..iters {
+            let res = ecm::ecm(p480, 1, b1, b2, &prefs, None);
+            assert!(res.is_none());
+        }
+        let t = start.elapsed().as_secs_f64() / (iters as f64);
+        if b2 < 1e8 {
+            eprintln!("p480 ECM(B1={b1},B2={b2:.3e}) in {:.3}ms", t * 1000.);
+        } else {
+            eprintln!("p480 ECM(B1={b1},B2={b2:.3e}) in {t:.3}s");
+        }
         tt480.push(t);
     }
 
     eprintln!("ECM timings stage 1");
+    let mut t160 = vec![];
     let mut t256 = vec![];
     let mut t480 = vec![];
     let b1s = &[100, 1000, 10_000, 100_000, 1_000_000, 10_000_000];
     for &b1 in b1s {
         let b2 = 38e6;
+
         let start = std::time::Instant::now();
-        // Use P256 so what ECM cannot work.
-        let iters = if b2 < 100e3 { 1000 } else { 1 };
-        for _ in 0..iters {
-            let res = ecm::ecm(p256, 1, b1, b2, &prefs, None);
-            assert!(res.is_none());
-        }
-        let t = start.elapsed().as_secs_f64() / (iters as f64);
+        let res = ecm::ecm(p160, 1, b1, b2, &prefs, None);
+        assert!(res.is_none());
+        let t = start.elapsed().as_secs_f64();
+        eprintln!("p160 ECM(B1={b1},B2={b2:.3e}) in {t:.3}s");
+        t160.push(t);
+
+        let start = std::time::Instant::now();
+        let res = ecm::ecm(p256, 1, b1, b2, &prefs, None);
+        assert!(res.is_none());
+        let t = start.elapsed().as_secs_f64();
         eprintln!("p256 ECM(B1={b1},B2={b2:.3e}) in {t:.3}s");
         t256.push(t);
 
@@ -157,37 +194,49 @@ fn main() {
     }
     // Compare with theoretical complexity.
     // In stage 1, we need 8.24 modular multiplications per bit.
+    let mut stage1_c160 = vec![];
     let mut stage1_c256 = vec![];
     let mut stage1_c480 = vec![];
     for i in 2..b1s.len() {
         let b1 = b1s[i] as f64;
+        let c = (t160[i] - t256[0]) / (1.44 * 8.24 * b1) * 1e9;
+        stage1_c160.push(c.round() as u64);
         let c = (t256[i] - t256[0]) / (1.44 * 8.24 * b1) * 1e9;
         stage1_c256.push(c.round() as u64);
         let c = (t480[i] - t480[0]) / (1.44 * 8.24 * b1) * 1e9;
         stage1_c480.push(c.round() as u64);
     }
+    eprintln!("p160: stage 1 cost 8.24 * 1.44 B1 * {stage1_c160:?}ns");
     eprintln!("p256: stage 1 cost 8.24 * 1.44 B1 * {stage1_c256:?}ns");
     eprintln!("p480: stage 1 cost 8.24 * 1.44 B1 * {stage1_c480:?}ns");
+    let mut small2_c160 = vec![];
     let mut small2_c256 = vec![];
     let mut small2_c480 = vec![];
+    let mut large2_c160 = vec![];
     let mut large2_c256 = vec![];
     let mut large2_c480 = vec![];
     for i in 1..b2_values.len() {
         let b2 = b2_values[i] as f64;
         if b2 < 2e6 {
+            let c = (tt160[i] - tt160[0]) / (b2 / b2.log2()) * 1e9;
+            small2_c160.push(c.round() as u64);
             let c = (tt256[i] - tt256[0]) / (b2 / b2.log2()) * 1e9;
             small2_c256.push(c.round() as u64);
             let c = (tt480[i] - tt480[0]) / (b2 / b2.log2()) * 1e9;
             small2_c480.push(c.round() as u64);
         } else {
+            let c = (tt160[i] - tt160[0]) / (b2.sqrt() * b2.log2()) * 1e9;
+            large2_c160.push(c.round() as u64);
             let c = (tt256[i] - tt256[0]) / (b2.sqrt() * b2.log2()) * 1e9;
             large2_c256.push(c.round() as u64);
             let c = (tt480[i] - tt480[0]) / (b2.sqrt() * b2.log2()) * 1e9;
             large2_c480.push(c.round() as u64);
         }
     }
+    eprintln!("p160: small stage 2 cost B2/log2(B2) * {small2_c160:?}ns");
     eprintln!("p256: small stage 2 cost B2/log2(B2) * {small2_c256:?}ns");
     eprintln!("p480: small stage 2 cost B2/log2(B2) * {small2_c480:?}ns");
+    eprintln!("p160: large stage 2 cost sqrt(B2)*log2(B2) * {large2_c160:?}ns");
     eprintln!("p256: large stage 2 cost sqrt(B2)*log2(B2) * {large2_c256:?}ns");
     eprintln!("p480: large stage 2 cost sqrt(B2)*log2(B2) * {large2_c480:?}ns");
 }

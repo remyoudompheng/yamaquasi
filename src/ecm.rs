@@ -310,44 +310,48 @@ fn ecm_curve(
     verbosity: Verbosity,
 ) -> Option<Vec<Uint>> {
     let n = &zn.n;
-    let (_, d1, d2) = stage2_params(b2);
     // ECM stage 1
     let start1 = std::time::Instant::now();
     let mut g = c.gen().clone();
-    const GCD_INTERVAL: usize = 1000;
-    let mut gxs = Vec::with_capacity(16);
-    let mut last_gx = zn.one();
-    gxs.push(last_gx);
-    for block in sb.factors.chunks(GCD_INTERVAL) {
-        // Once g.0 is divisible by p, it will be for the rest of the loop.
-        if eager {
-            gxs.clear();
-            gxs.push(last_gx);
-        }
-        for &f in block {
-            g = c.scalar64_chainmul(f, &g);
-            gxs.push(g.0);
-        }
-        last_gx = g.0;
-        if eager {
-            if let res @ Some(_) = check_gcd_factors(n, &gxs) {
-                return res;
-            }
-        }
-    }
-    if eager {
-        gxs.clear();
-        gxs.push(g.0);
-    }
-    for f in sb.larges.iter() {
-        g = c.scalar1024_chainmul(f, &g);
-        gxs.push(g.0);
-    }
-    let stage1_res = check_gcd_factors(n, &gxs);
-    if eager && stage1_res.is_some() {
-        return stage1_res;
-    }
-    drop(gxs);
+    let mut facs = vec![];
+    g = if c.twisted && n.bits() <= 64 {
+        // Specialized ECM is only for twisted curves.
+        let zn = Mod64::new64(u64::cast_from(*n));
+        let (gx, gy, gz) = g.xyz();
+        let g = (u64::from(gx), u64::from(gy), u64::from(gz));
+        let (_, g1) = ecm_curve_stage1(ECurve(zn), g, sb, &mut facs);
+        Point(
+            MInt::from_uint(g1.0),
+            MInt::from_uint(g1.1),
+            MInt::from_uint(g1.2),
+        )
+    } else if c.twisted && n.bits() <= 128 {
+        let zn = Mod128::new128(u128::cast_from(*n));
+        let (gx, gy, gz) = g.xyz();
+        let g = (u128::from(gx), u128::from(gy), u128::from(gz));
+        let (_, g1) = ecm_curve_stage1(ECurve(zn), g, sb, &mut facs);
+        Point(
+            MInt::from_uint(g1.0),
+            MInt::from_uint(g1.1),
+            MInt::from_uint(g1.2),
+        )
+    } else if c.twisted && n.bits() <= 192 {
+        let zn = Mod192::new(*n);
+        let (gx, gy, gz) = g.xyz();
+        let g = (
+            <Mod192 as Zmod>::Val::cast_from(Uint::from(gx)),
+            <Mod192 as Zmod>::Val::cast_from(Uint::from(gy)),
+            <Mod192 as Zmod>::Val::cast_from(Uint::from(gz)),
+        );
+        let (_, g1) = ecm_curve_stage1(ECurve(zn), g, sb, &mut facs);
+        Point(
+            MInt::from_uint(g1.0),
+            MInt::from_uint(g1.1),
+            MInt::from_uint(g1.2),
+        )
+    } else {
+        ecm_curve_stage1_big(zn, c, &g, sb, eager, &mut facs)
+    };
     assert!(
         c.is_valid(&g),
         "invalid point G=[{}:{}:{}] for d={} mod {}",
@@ -357,155 +361,63 @@ fn ecm_curve(
         c.zn.to_int(c.d),
         c.zn.n
     );
+    facs.retain(|f| f != &Uint::ONE && f != n);
+    if eager && facs.len() > 0 {
+        return Some(facs);
+    }
+
     let elapsed1 = start1.elapsed();
 
-    // ECM stage 2
-    // The order of G (hopefully) no longer has small prime factors.
-    // Look for a "large" prime order. Instead of computing [l]G
-    // for all primes l, use the baby step giant step method:
-    //
-    // [l]G = 0 translates to [ad+b]G = 0 or [ad]G = [-b]G
-    // whre d² <= B2, a <= d, b in [-d/2, d/2] is coprime to d.
-    //
-    // Since the opposite of (x,y) is (-x,y) this means that
-    // [ad]G and [abs(b)]G have the same coordinate y.
-    //
-    // After stage 1 we know that [ad]G and [abs(b)]G are never zero.
     let start2 = std::time::Instant::now();
-
-    // Prepare values of abs(b): there are phi(d1)/2 < d1/4 such values.
-    let mut bs = Vec::with_capacity(d1 as usize / 4);
-    for b in 1..d1 / 2 {
-        if Integer::gcd(&b, &d1) == 1 {
-            bs.push(b);
-        }
-    }
-    let g2 = c.double(&g);
-    let g4 = c.double(&g2);
-    let mut gaps = vec![c.to_extended(&g2), c.to_extended(&g4)];
-    // Baby/giant steps in a single vector.
-    let mut steps = Vec::with_capacity(d1 as usize / 4 + d2 as usize);
-    // Compute the baby steps
-    let mut bg = c.to_extended(&g);
-    let mut bexp = 1;
-    assert_eq!(bs[0], 1);
-    steps.push(g.clone());
-    let mut n_bsteps = 1 as usize;
-    for &b in &bs[1..] {
-        let gap = b - bexp;
-        while gaps.len() < gap as usize / 2 {
-            let gap2 = c.addext(&gaps[0], &gaps[gaps.len() - 1]);
-            gaps.push(gap2);
-        }
-        bg = c.addext(&bg, &gaps[gap as usize / 2 - 1]);
-        steps.push(bg.to_proj());
-        n_bsteps += 1;
-        bexp = b;
-    }
-    // Compute the giant steps
-    // WARNING: extended coordinate addition must not be used
-    // to compute the first step.
-    let dg = c.scalar64_chainmul(d1, &g);
-    let dg2 = c.double(&dg);
-    let dgext = c.to_extended(&dg);
-    let mut gg = c.to_extended(&dg2);
-    steps.push(dg);
-    steps.push(dg2);
-    for _ in 2..d2 {
-        gg = c.addext(&gg, &dgext);
-        steps.push(gg.to_proj());
-    }
-    // Normalize Y coordinates, 4 multiplications per point:
-    // replace y[i] by y[i]/z[i] * product(z[j])
-    // Compute u[i] = p[0] * ... * p[i-1]
-    // Compute v[i] = p[i+1] * ... * p[d]
-    // Then product(z[j]) / z[i] = u[i] * v[i]
-    {
-        let l = steps.len();
-        let mut u = steps[0].2;
-        for i in 1..l {
-            steps[i].1 = zn.mul(&steps[i].1, &u);
-            u = zn.mul(&u, &steps[i].2);
-        }
-        u = steps[l - 1].2;
-        for i in 2..=l {
-            steps[l - i].1 = zn.mul(&steps[l - i].1, &u);
-            u = zn.mul(&u, &steps[l - i].2);
-        }
-    }
-
-    let stage2_roots_time = start2.elapsed().as_secs_f64();
-
-    let bsteps = &steps[..n_bsteps];
-    let gsteps = &steps[n_bsteps..];
-    let mut result = None;
-    if d1 < 4000 {
-        // Compute O(d*phi(d)) products
-        let mut buffer = zn.one();
-        let mut prods = Vec::with_capacity(gsteps.len());
-        prods.push(buffer);
-        for pb in bsteps {
-            // Compute the gcd after each row for finer granularity.
-            // We use big step-major order to avoid collapsing many small factors.
-            for pg in gsteps {
-                // y(G) - y(B)
-                let delta_y = zn.sub(&pg.1, &pb.1);
-                buffer = zn.mul(&buffer, &delta_y);
-            }
-            prods.push(buffer);
-        }
-        if let res @ Some(_) = check_gcd_factors(n, &prods) {
-            result = res;
-        }
+    let (gx, gy, gz) = g.xyz();
+    if !c.twisted || n.bits() > 192 {
+        ecm_curve_stage2_big(zn, c, &g, b2, &mut facs)
+    } else if n.bits() <= 64 {
+        //eprintln!("ECM stage2 64");
+        let zn = Mod64::new64(u64::cast_from(*n));
+        let g = (
+            u64::cast_from(Uint::from(g.0)),
+            u64::cast_from(Uint::from(g.1)),
+            u64::cast_from(Uint::from(g.2)),
+        );
+        ecm_curve_stage2(ECurve(zn), n, g, b2, &mut facs)
+    } else if n.bits() <= 128 {
+        //eprintln!("ECM stage2 128");
+        let zn = Mod128::new128(u128::cast_from(*n));
+        let g = (
+            u128::cast_from(Uint::from(g.0)),
+            u128::cast_from(Uint::from(g.1)),
+            u128::cast_from(Uint::from(g.2)),
+        );
+        ecm_curve_stage2(ECurve(zn), n, g, b2, &mut facs)
+    } else if n.bits() <= 192 {
+        let zn = Mod192::new(*n);
+        let g = (
+            <Mod192 as Zmod>::Val::cast_from(Uint::from(gx)),
+            <Mod192 as Zmod>::Val::cast_from(Uint::from(gy)),
+            <Mod192 as Zmod>::Val::cast_from(Uint::from(gz)),
+        );
+        ecm_curve_stage2(ECurve(zn), n, g, b2, &mut facs)
     } else {
-        // Usually D > 4 phi(D) (phi(2*3*5*7) < N/4)
-        // And there are only phi(D)/2 baby steps
-        //
-        // If we split gsteps into blocks, each of them multieval'ed on bsteps.
-        // the complexity will be O(gsteps/bsteps * bsteps log(bsteps)^alpha)
-        //
-        // However, the multipoint evaluation is ~10x the complexity of
-        // a polynomial product.
-        // It is more efficient to compute the (large) polynomial
-        // PG=Product(X - pgs[i]) and reduce it modulo PB=Product(X - pbs[j])
-        // and compute a single remainder tree.
-        // (See "20 years of ECM" article)
-        //
-        // Efficiency is maximal if #bsteps is very close to a power of 2
-        // and if PG/PB can be computed efficiently.
-        let pbs: Vec<MInt> = bsteps.iter().map(|p| p.1).collect();
-        let pgs: Vec<MInt> = gsteps.iter().map(|p| p.1).collect();
-        let mut vals = Poly::roots_eval(zn, &pgs, &pbs);
-        let mut prod = zn.one();
-        // Replace array by cumulative products.
-        for i in 0..vals.len() {
-            let v = vals[i];
-            vals[i] = prod;
-            prod = zn.mul(&prod, &v);
-        }
-        vals.push(prod);
-        if let res @ Some(_) = check_gcd_factors(n, &vals) {
-            result = res;
-        }
+        unreachable!()
     }
-    // Add stage 1 results if any
-    if let Some(mut facs) = stage1_res {
-        match result {
-            None => result = Some(facs),
-            Some(ref mut v) => v.append(&mut facs),
-        }
-    }
+
     if verbosity >= Verbosity::Verbose {
         let stage1 = elapsed1.as_secs_f64();
         let stage2 = start2.elapsed().as_secs_f64();
-        let roots_pct = 100. * stage2_roots_time / stage2;
         if stage2 < 0.01 {
-            eprintln!("ECM stage1={stage1:.6}s stage2={stage2:.6}s (stage2 roots {roots_pct:.1}%)");
+            eprintln!("ECM stage1={stage1:.6}s stage2={stage2:.6}s");
         } else {
-            eprintln!("ECM stage1={stage1:.3}s stage2={stage2:.3}s (stage2 roots {roots_pct:.1}%)");
+            eprintln!("ECM stage1={stage1:.3}s stage2={stage2:.3}s");
         }
     }
-    result
+
+    facs.retain(|f| f != &Uint::ONE && f != n);
+    if facs.len() == 0 {
+        None
+    } else {
+        Some(facs)
+    }
 }
 
 /// Extract a single factor using GCD.
@@ -703,7 +615,7 @@ fn ecm_curve_small(
             u64::cast_from(g1.1),
             u64::cast_from(g1.2),
         );
-        ecm_curve_stage2(ECurve(zn), g, b2, &mut facs)
+        ecm_curve_stage2(ECurve(zn), &nred, g, b2, &mut facs)
     } else if nred.bits() <= 128 {
         //eprintln!("ECM stage2 128");
         let zn = Mod128::new128(u128::cast_from(nred));
@@ -712,7 +624,7 @@ fn ecm_curve_small(
             u128::cast_from(g1.1),
             u128::cast_from(g1.2),
         );
-        ecm_curve_stage2(ECurve(zn), g, b2, &mut facs)
+        ecm_curve_stage2(ECurve(zn), &nred, g, b2, &mut facs)
     } else if n.bits() <= 192 {
         let zn = Mod192::new(*n);
         let g = (
@@ -720,7 +632,7 @@ fn ecm_curve_small(
             <Mod192 as Zmod>::Val::cast_from(Uint::from(gy)),
             <Mod192 as Zmod>::Val::cast_from(Uint::from(gz)),
         );
-        ecm_curve_stage2(ECurve(zn), g, b2, &mut facs)
+        ecm_curve_stage2(ECurve(zn), &nred, g, b2, &mut facs)
     } else {
         unreachable!()
     };
@@ -742,10 +654,11 @@ fn ecm_curve_stage1<Z>(
 ) -> (Uint, (Uint, Uint, Uint))
 where
     Z: Zmod + Copy,
-    Z::Val: Copy,
+    Z::Val: Copy + PartialEq,
     Uint: CastFrom<Z::Val>,
 {
-    let mut g = g;
+    let g0 = g;
+    let mut g = g0;
     let mut gs = vec![g.0];
     // Assume that factors will not be found simultaneously
     for &f in sb.factors.iter() {
@@ -753,8 +666,14 @@ where
         gs.push(g.0);
         //if g.0 == 0 { break; }
     }
+    for f in sb.larges.iter() {
+        g = c.scalar1024_chainmul(f, g);
+        gs.push(g.0);
+    }
     let nred = c.0.gcd_factors(&gs, facs);
     drop(gs);
+
+    assert!(c.is_valid(g0, c.ext(g)));
     /*
     if crate::pseudoprime(nred.into()) {
         //eprintln!("finished {nred}!");
@@ -771,10 +690,187 @@ where
     )
 }
 
-fn ecm_curve_stage2<Z, V>(c: ECurve<Z>, g: (V, V, V), b2: f64, facs: &mut Vec<Uint>)
+fn ecm_curve_stage1_big(
+    zn: &ZmodN,
+    c: &Curve,
+    g: &Point,
+    sb: &SmoothBase,
+    eager: bool,
+    facs: &mut Vec<Uint>,
+) -> Point {
+    const GCD_INTERVAL: usize = 1000;
+    let n = &zn.n;
+    let mut gxs = Vec::with_capacity(16);
+    let mut last_gx = zn.one();
+    gxs.push(last_gx);
+    let mut g = g.clone();
+    for block in sb.factors.chunks(GCD_INTERVAL) {
+        // Once g.0 is divisible by p, it will be for the rest of the loop.
+        if eager {
+            gxs.clear();
+            gxs.push(last_gx);
+        }
+        for &f in block {
+            g = c.scalar64_chainmul(f, &g);
+            gxs.push(g.0);
+        }
+        last_gx = g.0;
+        if eager {
+            if let Some(mut fs) = check_gcd_factors(n, &gxs) {
+                facs.append(&mut fs);
+                return g;
+            }
+        }
+    }
+    if eager {
+        gxs.clear();
+        gxs.push(g.0);
+    }
+    for f in sb.larges.iter() {
+        g = c.scalar1024_chainmul(f, &g);
+        gxs.push(g.0);
+    }
+    if let Some(mut fs) = check_gcd_factors(n, &gxs) {
+        facs.append(&mut fs);
+    }
+    g
+}
+
+fn ecm_curve_stage2_big(zn: &ZmodN, c: &Curve, g: &Point, b2: f64, facs: &mut Vec<Uint>) {
+    // ECM stage 2
+    // The order of G (hopefully) no longer has small prime factors.
+    // Look for a "large" prime order. Instead of computing [l]G
+    // for all primes l, use the baby step giant step method:
+    //
+    // [l]G = 0 translates to [ad+b]G = 0 or [ad]G = [-b]G
+    // whre d² <= B2, a <= d, b in [-d/2, d/2] is coprime to d.
+    //
+    // Since the opposite of (x,y) is (-x,y) this means that
+    // [ad]G and [abs(b)]G have the same coordinate y.
+    //
+    // After stage 1 we know that [ad]G and [abs(b)]G are never zero.
+    let n = &zn.n;
+    let (_, d1, d2) = stage2_params(b2);
+
+    // Prepare values of abs(b): there are phi(d1)/2 < d1/4 such values.
+    let mut bs = Vec::with_capacity(d1 as usize / 4);
+    for b in 1..d1 / 2 {
+        if Integer::gcd(&b, &d1) == 1 {
+            bs.push(b);
+        }
+    }
+    let g2 = c.double(&g);
+    let g4 = c.double(&g2);
+    let mut gaps = vec![c.to_extended(&g2), c.to_extended(&g4)];
+    // Baby/giant steps in a single vector.
+    let mut steps = Vec::with_capacity(d1 as usize / 4 + d2 as usize);
+    // Compute the baby steps
+    let mut bg = c.to_extended(&g);
+    let mut bexp = 1;
+    assert_eq!(bs[0], 1);
+    steps.push(g.clone());
+    let mut n_bsteps = 1 as usize;
+    for &b in &bs[1..] {
+        let gap = b - bexp;
+        while gaps.len() < gap as usize / 2 {
+            let gap2 = c.addext(&gaps[0], &gaps[gaps.len() - 1]);
+            gaps.push(gap2);
+        }
+        bg = c.addext(&bg, &gaps[gap as usize / 2 - 1]);
+        steps.push(bg.to_proj());
+        n_bsteps += 1;
+        bexp = b;
+    }
+    // Compute the giant steps
+    // WARNING: extended coordinate addition must not be used
+    // to compute the first step.
+    let dg = c.scalar64_chainmul(d1, &g);
+    let dg2 = c.double(&dg);
+    let dgext = c.to_extended(&dg);
+    let mut gg = c.to_extended(&dg2);
+    steps.push(dg);
+    steps.push(dg2);
+    for _ in 2..d2 {
+        gg = c.addext(&gg, &dgext);
+        steps.push(gg.to_proj());
+    }
+    // Normalize Y coordinates, 4 multiplications per point:
+    // replace y[i] by y[i]/z[i] * product(z[j])
+    // Compute u[i] = p[0] * ... * p[i-1]
+    // Compute v[i] = p[i+1] * ... * p[d]
+    // Then product(z[j]) / z[i] = u[i] * v[i]
+    {
+        let l = steps.len();
+        let mut u = steps[0].2;
+        for i in 1..l {
+            steps[i].1 = zn.mul(&steps[i].1, &u);
+            u = zn.mul(&u, &steps[i].2);
+        }
+        u = steps[l - 1].2;
+        for i in 2..=l {
+            steps[l - i].1 = zn.mul(&steps[l - i].1, &u);
+            u = zn.mul(&u, &steps[l - i].2);
+        }
+    }
+
+    let bsteps = &steps[..n_bsteps];
+    let gsteps = &steps[n_bsteps..];
+    if d1 < 4000 {
+        // Compute O(d*phi(d)) products
+        let mut buffer = zn.one();
+        let mut prods = Vec::with_capacity(gsteps.len());
+        prods.push(buffer);
+        for pb in bsteps {
+            // Compute the gcd after each row for finer granularity.
+            // We use big step-major order to avoid collapsing many small factors.
+            for pg in gsteps {
+                // y(G) - y(B)
+                let delta_y = zn.sub(&pg.1, &pb.1);
+                buffer = zn.mul(&buffer, &delta_y);
+            }
+            prods.push(buffer);
+        }
+        if let Some(ref mut fs) = check_gcd_factors(n, &prods) {
+            facs.append(fs);
+        }
+    } else {
+        // Usually D > 4 phi(D) (phi(2*3*5*7) < N/4)
+        // And there are only phi(D)/2 baby steps
+        //
+        // If we split gsteps into blocks, each of them multieval'ed on bsteps.
+        // the complexity will be O(gsteps/bsteps * bsteps log(bsteps)^alpha)
+        //
+        // However, the multipoint evaluation is ~10x the complexity of
+        // a polynomial product.
+        // It is more efficient to compute the (large) polynomial
+        // PG=Product(X - pgs[i]) and reduce it modulo PB=Product(X - pbs[j])
+        // and compute a single remainder tree.
+        // (See "20 years of ECM" article)
+        //
+        // Efficiency is maximal if #bsteps is very close to a power of 2
+        // and if PG/PB can be computed efficiently.
+        let pbs: Vec<MInt> = bsteps.iter().map(|p| p.1).collect();
+        let pgs: Vec<MInt> = gsteps.iter().map(|p| p.1).collect();
+        let mut vals = Poly::roots_eval(zn, &pgs, &pbs);
+        let mut prod = zn.one();
+        // Replace array by cumulative products.
+        for i in 0..vals.len() {
+            let v = vals[i];
+            vals[i] = prod;
+            prod = zn.mul(&prod, &v);
+        }
+        vals.push(prod);
+        if let Some(ref mut fs) = check_gcd_factors(n, &vals) {
+            facs.append(fs);
+        }
+    }
+}
+
+fn ecm_curve_stage2<Z, V>(c: ECurve<Z>, n: &Uint, g: (V, V, V), b2: f64, facs: &mut Vec<Uint>)
 where
     Z: Zmod<Val = V> + Copy,
     Z::Val: Copy,
+    Uint: CastFrom<Z::Val>,
 {
     let (_, d1, d2) = stage2_params(b2);
     let zn = c.0;
@@ -843,19 +939,44 @@ where
     let bsteps = &steps[..n_bsteps];
     let gsteps = &steps[n_bsteps..];
     // Compute O(d*phi(d)) products
-    let mut buffer = zn.one();
-    let mut prods = Vec::with_capacity(gsteps.len());
-    prods.push(buffer);
-    for pg in gsteps {
-        // Compute the gcd after each row for finer granularity.
-        for pb in bsteps {
-            // y(G) - y(B)
-            let delta_y = zn.abs_diff(pg.1, pb.1);
-            buffer = zn.mul(buffer, delta_y);
-        }
+    if d1 < 4000 {
+        let mut buffer = zn.one();
+        let mut prods = Vec::with_capacity(gsteps.len());
         prods.push(buffer);
+        // <=480 baby steps
+        for pg in gsteps {
+            // Compute the gcd after each row for finer granularity.
+            for pb in bsteps {
+                // y(G) - y(B)
+                let delta_y = zn.abs_diff(pg.1, pb.1);
+                buffer = zn.mul(buffer, delta_y);
+            }
+            prods.push(buffer);
+        }
+        zn.gcd_factors(&prods, facs);
+    } else {
+        let zn = ZmodN::new(*n);
+        let pbs: Vec<MInt> = bsteps
+            .iter()
+            .map(|p| MInt::from_uint(Uint::cast_from(p.1)))
+            .collect();
+        let pgs: Vec<MInt> = gsteps
+            .iter()
+            .map(|p| MInt::from_uint(Uint::cast_from(p.1)))
+            .collect();
+        let mut vals = Poly::roots_eval(&zn, &pgs, &pbs);
+        let mut prod = zn.one();
+        // Replace array by cumulative products.
+        for i in 0..vals.len() {
+            let v = vals[i];
+            vals[i] = prod;
+            prod = zn.mul(&prod, &v);
+        }
+        vals.push(prod);
+        if let Some(ref mut fs) = check_gcd_factors(n, &vals) {
+            facs.append(fs);
+        }
     }
-    zn.gcd_factors(&prods, facs);
 }
 
 // Curve arithmetic in fixed precision.
@@ -953,6 +1074,9 @@ where
         (zn.mul(e, f), zn.mul(g, h), zn.mul(f, g), zn.mul(e, h))
     }
 
+    /// Compute scalar multiplication by a 64-bit integer.
+    ///
+    /// Usually needs ~9 MUL per exponent bit.
     pub fn scalar64_mul(&self, k: u64, p: (V, V, V)) -> (V, V, V) {
         let zn = self.0;
         // Prepare small steps.
@@ -991,7 +1115,47 @@ where
         q
     }
 
-    #[cfg(test)]
+    pub fn scalar1024_chainmul(&self, k: &U1024, p: (V, V, V)) -> (V, V, V) {
+        // See Curve::scalar1024_chainmul
+        assert!(k.bits() > 64);
+        let zn = self.0;
+        // Use mixed projective/extended coordinates.
+        // This is the same code as `scalar64_chainmul`.
+        let pext = self.ext(p);
+        let p2 = self.dblext(p);
+        // Store p, 3p ... 63p
+        let mut gaps = Vec::with_capacity(32);
+        gaps.push(pext);
+        for i in 1..32 {
+            let pi = self.add(gaps[i - 1], p2);
+            gaps.push(pi);
+        }
+        // Construct chain
+        let mut c = [0_i8; 384];
+        let l = Curve::make_addition_chain_long(&mut c, k);
+        // Get initial element (chain[l-1] = 1 or 3 or ... 63)
+        let q = gaps[c[l - 1] as usize / 2];
+        let mut q = (q.0, q.1, q.2);
+        for idx in 1..l {
+            let op = c[l - 1 - idx];
+            if op % 2 == 0 {
+                for _ in 0..op / 2 {
+                    q = self.double(q);
+                }
+            } else {
+                if op > 0 {
+                    q = self.dbladd(q, gaps[op as usize / 2]);
+                } else {
+                    let mut gap = gaps[(-op) as usize / 2].clone();
+                    gap.0 = zn.sub(zn.cast(0), gap.0);
+                    gap.3 = zn.sub(zn.cast(0), gap.3);
+                    q = self.dbladd(q, gap);
+                }
+            }
+        }
+        q
+    }
+
     fn is_valid(&self, g: (V, V, V), p: (V, V, V, V)) -> bool
     where
         V: PartialEq,
