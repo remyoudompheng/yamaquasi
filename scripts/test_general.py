@@ -178,7 +178,7 @@ for sz in range(args.minsize, args.maxsize + 1, args.step):
         for _ in range(10)
     ]
     mean1, mean2 = min(submeans), max(submeans)
-    std = math.sqrt(t2 / len(results) - (t1 / len(results)) ** 2)
+    std = math.sqrt(max(0, t2 / len(results) - (t1 / len(results)) ** 2))
     if mean2 < 1e-3:
         print(
             f"Bit length {sz}: tested {len(numbers)} numbers in {t1:.3f}s (mean {mean1 * 1e6:.3f}-{mean2 * 1e6:.3f}us, std {std * 1e6:.3f}us)"
