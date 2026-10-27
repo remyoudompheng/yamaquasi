@@ -312,29 +312,19 @@ fn ecm_curve(
     let n = &zn.n;
     // ECM stage 1
     let start1 = std::time::Instant::now();
-    let mut g = c.gen().clone();
+    let g = c.gen().clone();
     let mut facs = vec![];
-    g = if c.twisted && n.bits() <= 64 {
+    let (nred, (mut gx, mut gy, mut gz)) = if c.twisted && n.bits() <= 64 {
         // Specialized ECM is only for twisted curves.
         let zn = Mod64::new64(u64::cast_from(*n));
         let (gx, gy, gz) = g.xyz();
         let g = (u64::from(gx), u64::from(gy), u64::from(gz));
-        let (_, g1) = ecm_curve_stage1(ECurve(zn), g, sb, &mut facs);
-        Point(
-            MInt::from_uint(g1.0),
-            MInt::from_uint(g1.1),
-            MInt::from_uint(g1.2),
-        )
+        ecm_curve_stage1(ECurve(zn), g, sb, &mut facs)
     } else if c.twisted && n.bits() <= 128 {
         let zn = Mod128::new128(u128::cast_from(*n));
         let (gx, gy, gz) = g.xyz();
         let g = (u128::from(gx), u128::from(gy), u128::from(gz));
-        let (_, g1) = ecm_curve_stage1(ECurve(zn), g, sb, &mut facs);
-        Point(
-            MInt::from_uint(g1.0),
-            MInt::from_uint(g1.1),
-            MInt::from_uint(g1.2),
-        )
+        ecm_curve_stage1(ECurve(zn), g, sb, &mut facs)
     } else if c.twisted && n.bits() <= 192 {
         let zn = Mod192::new(*n);
         let (gx, gy, gz) = g.xyz();
@@ -343,14 +333,11 @@ fn ecm_curve(
             <Mod192 as Zmod>::Val::cast_from(Uint::from(gy)),
             <Mod192 as Zmod>::Val::cast_from(Uint::from(gz)),
         );
-        let (_, g1) = ecm_curve_stage1(ECurve(zn), g, sb, &mut facs);
-        Point(
-            MInt::from_uint(g1.0),
-            MInt::from_uint(g1.1),
-            MInt::from_uint(g1.2),
-        )
+        ecm_curve_stage1(ECurve(zn), g, sb, &mut facs)
     } else {
-        ecm_curve_stage1_big(zn, c, &g, sb, eager, &mut facs)
+        // FIXME: implement modulus reduction.
+        let g1 = ecm_curve_stage1_big(zn, c, &g, sb, eager, &mut facs);
+        (*n, (Uint::from(g1.0), Uint::from(g1.1), Uint::from(g1.2)))
     };
     assert!(
         c.is_valid(&g),
@@ -368,34 +355,40 @@ fn ecm_curve(
 
     let elapsed1 = start1.elapsed();
 
+    if &nred < n {
+        gx %= nred;
+        gy %= nred;
+        gz %= nred;
+    }
+
     let start2 = std::time::Instant::now();
-    let (gx, gy, gz) = g.xyz();
     if !c.twisted || n.bits() > 192 {
-        ecm_curve_stage2_big(zn, c, &g, b2, &mut facs)
+        let g1 = Point(
+            MInt::from_uint(gx),
+            MInt::from_uint(gy),
+            MInt::from_uint(gz),
+        );
+        ecm_curve_stage2_big(zn, c, &g1, b2, &mut facs)
     } else if n.bits() <= 64 {
         //eprintln!("ECM stage2 64");
-        let zn = Mod64::new64(u64::cast_from(*n));
-        let g = (
-            u64::cast_from(Uint::from(g.0)),
-            u64::cast_from(Uint::from(g.1)),
-            u64::cast_from(Uint::from(g.2)),
-        );
+        let zn = Mod64::new64(u64::cast_from(nred));
+        let g = (u64::cast_from(gx), u64::cast_from(gy), u64::cast_from(gz));
         ecm_curve_stage2(ECurve(zn), n, g, b2, &mut facs)
     } else if n.bits() <= 128 {
         //eprintln!("ECM stage2 128");
-        let zn = Mod128::new128(u128::cast_from(*n));
+        let zn = Mod128::new128(u128::cast_from(nred));
         let g = (
-            u128::cast_from(Uint::from(g.0)),
-            u128::cast_from(Uint::from(g.1)),
-            u128::cast_from(Uint::from(g.2)),
+            u128::cast_from(gx),
+            u128::cast_from(gy),
+            u128::cast_from(gz),
         );
         ecm_curve_stage2(ECurve(zn), n, g, b2, &mut facs)
     } else if n.bits() <= 192 {
-        let zn = Mod192::new(*n);
+        let zn = Mod192::new(nred);
         let g = (
-            <Mod192 as Zmod>::Val::cast_from(Uint::from(gx)),
-            <Mod192 as Zmod>::Val::cast_from(Uint::from(gy)),
-            <Mod192 as Zmod>::Val::cast_from(Uint::from(gz)),
+            <Mod192 as Zmod>::Val::cast_from(gx),
+            <Mod192 as Zmod>::Val::cast_from(gy),
+            <Mod192 as Zmod>::Val::cast_from(gz),
         );
         ecm_curve_stage2(ECurve(zn), n, g, b2, &mut facs)
     } else {
@@ -481,48 +474,9 @@ pub fn ecm_semiprime(n: u64) -> Option<(u64, u64)> {
 
 #[doc(hidden)]
 pub fn ecm_small(n: Uint, curves: usize, b1: u64, b2: f64, v: Verbosity) -> Option<(Uint, Uint)> {
-    assert!(n.bit(0) && n.bits() > 2, "n={n}");
-    let zn = ZmodN::new(n);
-    let suyama = Suyama11::new(&zn).unwrap();
-    let sb = SmoothBase::new(b1 as usize, false);
-    if v >= Verbosity::Info {
-        eprintln!("Attempting small ECM with {curves} curves B1={b1} B2={b2:e}",);
-    }
-    let start = std::time::Instant::now();
-    for seed in 1..=curves {
-        let g = suyama
-            .element(seed as u32 + 1)
-            .and_then(|p| Suyama11::params_point(&zn, &p));
-        let g = match g {
-            Ok(g) => g,
-            Err(UnexpectedLargeFactor(p)) => {
-                if p < n {
-                    if v >= Verbosity::Info {
-                        eprintln!("Unexpected factor {p} while selecting curve");
-                    }
-                    return Some((p, n / p));
-                }
-                continue;
-            }
-        };
-
-        if let Some(&p) = ecm_curve_small(&zn, &g, &sb, b2, v).last() {
-            if p.bits() > 1 && p < n {
-                if v >= Verbosity::Info {
-                    let elapsed = start.elapsed().as_secs_f64() * 1000.0;
-                    eprintln!(
-                        "Small ECM found factor {p} at curve {seed}/{curves} elapsed={elapsed:.2}ms"
-                    );
-                }
-                return Some((p, n / p));
-            }
-        }
-    }
-    if v >= Verbosity::Info {
-        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
-        eprintln!("Small ECM failure after {elapsed:.2}ms");
-    }
-    None
+    let mut prefs = Preferences::default();
+    prefs.verbosity = v;
+    ecm(n, curves, b1 as usize, b2, &prefs, None)
 }
 
 // Run ECM for a number assumed to be smooth (returns multiple factors).
@@ -559,91 +513,13 @@ pub fn ecm_curve_smooth(n: &Uint, curveseed: u32, sb: &SmoothBase, b2: f64) -> V
         }
     };
 
-    ecm_curve_small(&zn, &g, sb, b2, Verbosity::Silent)
-}
-
-/// Runs ECM for a single curve defined by generator `g`.
-/// This implementation is a simplified version of `ecm_curve`.
-///
-/// It returns a possibly empty list of non-trivial divisors of the modulus,
-/// for which the generator has smooth order.
-fn ecm_curve_small(
-    zn: &ZmodN,
-    g: &Point,
-    sb: &SmoothBase,
-    b2: f64,
-    verbosity: Verbosity,
-) -> Vec<Uint> {
-    let mut facs = vec![];
-
-    let start1 = std::time::Instant::now();
-    let n = &zn.n;
-    let (gx, gy, gz) = g.xyz();
-    let (nred, mut g1) = if n.bits() <= 64 {
-        let zn = Mod64::new64(u64::cast_from(*n));
-        let g = (u64::from(gx), u64::from(gy), u64::from(gz));
-        ecm_curve_stage1(ECurve(zn), g, sb, &mut facs)
-    } else if n.bits() <= 128 {
-        let zn = Mod128::new128(u128::cast_from(*n));
-        let g = (u128::from(gx), u128::from(gy), u128::from(gz));
-        ecm_curve_stage1(ECurve(zn), g, sb, &mut facs)
-    } else if n.bits() <= 192 {
-        let zn = Mod192::new(*n);
-        let g = (
-            <Mod192 as Zmod>::Val::cast_from(Uint::from(gx)),
-            <Mod192 as Zmod>::Val::cast_from(Uint::from(gy)),
-            <Mod192 as Zmod>::Val::cast_from(Uint::from(gz)),
-        );
-        ecm_curve_stage1(ECurve(zn), g, sb, &mut facs)
-    } else {
-        unreachable!()
+    let c = match Curve::twisted_from_point(zn.clone(), g) {
+        Ok(c) => c,
+        Err(UnexpectedLargeFactor(p)) => {
+            return vec![p.into()];
+        }
     };
-    let elapsed1 = start1.elapsed();
-
-    // Stage 2
-    let start2 = std::time::Instant::now();
-    if &nred < n {
-        g1.0 %= nred;
-        g1.1 %= nred;
-        g1.2 %= nred;
-    }
-    if nred.bits() <= 64 {
-        //eprintln!("ECM stage2 64");
-        let zn = Mod64::new64(u64::cast_from(nred));
-        let g = (
-            u64::cast_from(g1.0),
-            u64::cast_from(g1.1),
-            u64::cast_from(g1.2),
-        );
-        ecm_curve_stage2(ECurve(zn), &nred, g, b2, &mut facs)
-    } else if nred.bits() <= 128 {
-        //eprintln!("ECM stage2 128");
-        let zn = Mod128::new128(u128::cast_from(nred));
-        let g = (
-            u128::cast_from(g1.0),
-            u128::cast_from(g1.1),
-            u128::cast_from(g1.2),
-        );
-        ecm_curve_stage2(ECurve(zn), &nred, g, b2, &mut facs)
-    } else if n.bits() <= 192 {
-        let zn = Mod192::new(*n);
-        let g = (
-            <Mod192 as Zmod>::Val::cast_from(Uint::from(gx)),
-            <Mod192 as Zmod>::Val::cast_from(Uint::from(gy)),
-            <Mod192 as Zmod>::Val::cast_from(Uint::from(gz)),
-        );
-        ecm_curve_stage2(ECurve(zn), &nred, g, b2, &mut facs)
-    } else {
-        unreachable!()
-    };
-
-    if verbosity >= Verbosity::Verbose {
-        let stage1 = elapsed1.as_secs_f64() * 1000.0;
-        let stage2 = start2.elapsed().as_secs_f64() * 1000.0;
-        eprintln!("ECM128 stage1={stage1:.3}ms stage2={stage2:.3}ms");
-    }
-
-    facs
+    ecm_curve(sb, &zn, &c, b2, false, Verbosity::Silent).unwrap_or(vec![])
 }
 
 fn ecm_curve_stage1<Z>(
@@ -2469,7 +2345,8 @@ fn test_ecm_curve_small() {
         zn.from_i64(60 * 12860),
     );
     let sb = SmoothBase::new(5000, false);
-    let res = ecm_curve_small(&zn, &g, &sb, 554e3, Verbosity::Verbose);
+    let c = Curve::twisted_from_point(zn.clone(), g).unwrap();
+    let res = ecm_curve(&sb, &zn, &c, 554e3, false, Verbosity::Verbose).unwrap();
     eprintln!("{res:?}");
     assert_eq!(res[0], Uint::from(p));
 }

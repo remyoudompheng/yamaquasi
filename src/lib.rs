@@ -817,27 +817,13 @@ fn factor_smooth_impl(n: Uint, factor_bits: usize, factors: &mut Vec<Uint>) {
         28..=29 => (20, 150, 5040.),
         _ => (24, 250, 7.7e3), // 30..32
     };
-    if nred.bits() < 128 {
-        while let Some((a, b)) = ecm::ecm_small(nred, curves, b1, b2, prefs.verbosity) {
-            factor_auto_impl(a.into(), &prefs, factors, None).unwrap();
-            nred = b.into();
-            if nred.is_one() {
-                return;
-            }
-            if pseudoprime(nred) {
-                factors.push(nred);
-                return;
-            }
-        }
-    } else {
-        // Try ECM
-        while let Some((a, b)) = ecm::ecm(nred, curves, b1 as usize, b2, &prefs, None) {
-            factor_auto_impl(a, &prefs, factors, None).unwrap();
-            nred = b;
-            if pseudoprime(nred) {
-                factors.push(nred);
-                return;
-            }
+    // Try ECM
+    while let Some((a, b)) = ecm::ecm(nred, curves, b1 as usize, b2, &prefs, None) {
+        factor_auto_impl(a, &prefs, factors, None).unwrap();
+        nred = b;
+        if pseudoprime(nred) {
+            factors.push(nred);
+            return;
         }
     }
     if factor_bits < 32 {
