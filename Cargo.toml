@@ -26,6 +26,9 @@ brunch = "=0.6.1" # MSRV 1.77
 [profile.release]
 debug = 2
 
+[profile.bench]
+debug = 2
+
 [[bench]]
 name = "arith"
 harness = false
@@ -68,6 +71,10 @@ harness = false
 
 [[bench]]
 name = "factor64"
+harness = false
+
+[[bench]]
+name = "factorsmooth"
 harness = false
 
 [lints.clippy]
