@@ -17,21 +17,6 @@ import gmpy2
 
 import pymqs
 
-try:
-    import cypari2
-
-    pari = cypari2.Pari()
-    pari.allocatemem(32_000_000)
-except ImportError:
-    pass
-
-try:
-    import sage.all
-
-    sage.all.proof.arithmetic(False)
-except ImportError:
-    pass
-
 p = argparse.ArgumentParser()
 p.add_argument("-j", dest="threads", type=int, default=None, help="number of threads")
 p.add_argument(
@@ -89,8 +74,32 @@ def factor_smooth(n):
     return pymqs.factor_smooth(n, 20 + n.bit_length() // 30)
 
 
+match args.algo:
+    case "pari":
+        import cypari2
+
+        pari = cypari2.Pari()
+        pari.allocatemem(96_000_000)
+        factor_func = factor_pari
+    case "sage":
+        import sage.all
+
+        sage.all.proof.arithmetic(False)
+        factor_func = factor_sage
+    case "sage-ecm":
+        import sage.all
+
+        sage.all.proof.arithmetic(False)
+        factor_func = factor_sage_ecm
+    case "smooth":
+        factor_func = factor_smooth
+    case _:
+        factor_func = lambda _n: pymqs.factor(_n, algo=args.algo)
+
 print(f"Test using {args.threads} threads")
 for sz in range(args.minsize, args.maxsize + 1, args.step):
+    BATCHSIZE = 10000 if sz < 256 else 1000
+
     numbers = []
     if sz <= 11 and ("semiprime" not in args.sampling):
         numbers = list(range(2 ** (sz - 1), 2**sz))
@@ -138,18 +147,6 @@ for sz in range(args.minsize, args.maxsize + 1, args.step):
                 # adj = ""
             numbers.append(n)
 
-    match args.algo:
-        case "pari":
-            factor_func = factor_pari
-        case "sage":
-            factor_func = factor_sage
-        case "sage-ecm":
-            factor_func = factor_sage_ecm
-        case "smooth":
-            factor_func = factor_smooth
-        case _:
-            factor_func = lambda _n: pymqs.factor(_n, algo=args.algo)
-
     def test_number(n):
         try:
             t0 = time.monotonic()
@@ -159,8 +156,18 @@ for sz in range(args.minsize, args.maxsize + 1, args.step):
             print(f"Exception during factor({n})", file=sys.stderr)
             return None, time.monotonic() - t0
 
-    # Warmup
-    [test_number(_n) for _n in numbers[:10]]
+    # Warmup and batchsize
+    t_warm = time.monotonic()
+    [test_number(_n) for _n in numbers[:2]]
+    estimate = (time.monotonic() - t_warm) / 2
+    if estimate > 10.0:
+        numbers = numbers[:10]
+    elif estimate > 1.0:
+        numbers = numbers[:20]
+    elif estimate > 0.1:
+        numbers = numbers[:100]
+    elif estimate > 0.01:
+        numbers = numbers[:1000]
 
     if args.threads == 1:
         results = [test_number(_n) for _n in numbers]
