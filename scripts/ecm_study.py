@@ -8,7 +8,7 @@ is equivalent to:
     B y^2 = x^3 + A x^2 + x
     where A = 2(a+d)/(a-d), B=4/(a-d)
 and equivalent to
-    y^2 = x^3 + (A/B) x + (1/B^2)
+    y^2 = x^3 + (A/B) x^2 + (1/B^2) x
 
 If c=(a-d)/4
 1/B^2 = c^2
