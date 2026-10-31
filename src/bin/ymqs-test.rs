@@ -25,21 +25,24 @@ fn main() {
         eprintln!();
         eprintln!("Options:");
         eprintln!("  --help                    show this help");
-        eprintln!("  --sampling semiprime|uniform");
+        eprintln!("  --sampling semiprimes|semiprimes_unbalanced|uniform");
         eprintln!("  --mode ecm|ecm128|rho|qs|mpqs|siqs: force algorithm selection");
         eprintln!("  --bits B:                 input length");
         return;
     }
     let mode = arg.get::<String>("mode").unwrap_or("auto".into());
-    let smpl = arg.get::<String>("sampling").unwrap_or("semiprime".into());
+    let smpl = arg.get::<String>("sampling").unwrap_or("semiprimes".into());
     let bits = arg.get::<u32>("bits").unwrap_or(64);
-    assert!(matches!(smpl.as_str(), "semiprime" | "uniform"));
+    assert!(matches!(
+        smpl.as_str(),
+        "semiprimes" | "semiprimes_unbalanced" | "uniform"
+    ));
     // Prepare a factor base for trial division
     let fbase = fbase::FBase::new(Int::ZERO, 2 * bits);
     let mut rng = rand::thread_rng();
     let mut i = 0;
     let mut inputs = vec![];
-    if smpl == "semiprime" {
+    if smpl == "semiprimes" {
         for _ in 0..0x4000 {
             let mut words = [0u64; 4];
             rng.try_fill(&mut words).unwrap();
@@ -48,6 +51,18 @@ fn main() {
             let q0 = U256::from_digits(words) | U256::power_of_two(255);
             let p = Uint::cast_from(nextprime(&fbase, p0 >> (256 - bits / 2)));
             let q = Uint::cast_from(nextprime(&fbase, q0 >> (256 - bits + bits / 2)));
+            eprintln!("p={p} q={q} => n={}", p * q);
+            inputs.push(p * q);
+        }
+    } else if smpl == "semiprimes_unbalanced" {
+        for _ in 0..0x4000 {
+            let mut words = [0u64; 4];
+            rng.try_fill(&mut words).unwrap();
+            let p0 = U256::from_digits(words) | U256::power_of_two(255);
+            rng.try_fill(&mut words).unwrap();
+            let q0 = U256::from_digits(words) | U256::power_of_two(255);
+            let p = Uint::cast_from(nextprime(&fbase, p0 >> (256 - bits / 3)));
+            let q = Uint::cast_from(nextprime(&fbase, q0 >> (256 - bits + bits / 3)));
             eprintln!("p={p} q={q} => n={}", p * q);
             inputs.push(p * q);
         }
@@ -68,7 +83,7 @@ fn main() {
         let n = inputs[i & 0x3fff];
         // Factor
         let pq = factor(n, alg, &prefs).unwrap();
-        if smpl == "semiprime" {
+        if smpl.starts_with("semiprimes") {
             if pq.len() != 2 {
                 eprintln!("ERROR failed to factor {n}");
                 std::process::exit(1);
