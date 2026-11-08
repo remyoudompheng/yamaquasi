@@ -49,7 +49,6 @@ smooths = sorted([
         (1, 13), (1, 17), (1, 19), (1, 23), (1, 29), (1, 31), (1, 37)
     )
 ])
-# fmt:on
 # For small values, we want "square" patterns (1 block)
 for t in [10, 12, 16, 20, 24, 32, 40, 48, 64, 80, 100, 120, 150, 180, 210, 240, 320, 360, 420]:
     nbest = 0
@@ -58,8 +57,9 @@ for t in [10, 12, 16, 20, 24, 32, 40, 48, 64, 80, 100, 120, 150, 180, 210, 240, 
             nbest = n
     phi = euler_phi(nbest) // 2
     print(
-        f"D1={nbest} D2={phi} B2={float(phi*nbest):.3e} φ(D)/2={phi} (cost {phi**2} products)"
+        f"D1={nbest} D2={phi} B2={float(phi * nbest):.3e} φ(D)/2={phi} (cost {phi**2} products)"
     )
+# fmt:on
 for k in range(9, 25):
     t = 1 << k
     nbest = 0
@@ -69,7 +69,7 @@ for k in range(9, 25):
     phi = euler_phi(nbest) // 2
     for d2 in [2 * t, 3 * t, 4 * t]:
         print(
-            f"D1={nbest} D2={d2} B2={float(d2*nbest):.3e} φ(D)/2={phi} ({d2//t} blocks size 2^{k-1})"
+            f"D1={nbest} D2={d2} B2={float(d2 * nbest):.3e} φ(D)/2={phi} ({d2 // t} blocks size 2^{k - 1})"
         )
 
 # Moduli space of Suyama-11 curves.
@@ -87,6 +87,7 @@ def x13f_params(P):
         y = (alpha**3 - beta**3) / (alpha**3 + beta**3)
     else:
         x, y = "invalid", "invalid"
+    P.clear_denominators()
     print(f"P={P} σ={sigma} r={r} G=({x}, {y})")
     return sigma, r, x, y
 
@@ -100,10 +101,43 @@ for t in x13f_t:
     x13f_params(t)
 
 pg = X13f.gens()[0]
-for k in (1, 2, 3):
+for k in (1, 2, 3, 4):
     print(f"{k}G + torsion")
     for t in x13f_t:
         x13f_params(k * pg + t)
+
+# Moduli space of Suyama-9/4 curves
+X13d = EllipticCurve(QQ, [-5, 0])
+
+
+def x13d_params(P):
+    PX, PY = P.xy()
+    sigma = PX
+    alpha = sigma**2 - 5
+    beta = 4 * sigma
+    r = 48 * PY / PX**2
+    if sigma not in (0, 1, 5, -5):
+        x = (2 * r * sigma) / (sigma - 1) / (sigma + 5) / (sigma**2 + 5)
+        y = (alpha**3 - beta**3) / (alpha**3 + beta**3)
+    else:
+        x, y = "invalid", "invalid"
+    P.clear_denominators()
+    print(f"P={P} σ={sigma} r={r} G=({x}, {y})")
+    return sigma, r, x, y
+
+
+print("Suyama-9/4 family details:")
+x13d_t = X13d.torsion_points()
+print("Torsion points (invalid)")
+for t in x13d_t:
+    if t[0] == 0:
+        continue
+    x13d_params(t)
+
+pg = X13d(-1, 2)
+for k in (1, 2, 3, 4):
+    print(f"{k}G")
+    x13d_params(k * pg)
 
 
 def analyze(primes, b1, b2, x, y, a=1, expect=1):
@@ -142,9 +176,9 @@ def analyze(primes, b1, b2, x, y, a=1, expect=1):
     stats1.sort()
     stats2.sort()
     print(f"Generic torsion: ({t1}, {t2})")
-    print(f"Success rate {success/len(primes)*100:.2f}% (B1={b1} B2={b2})")
+    print(f"Success rate {success / len(primes) * 100:.2f}% (B1={b1} B2={b2})")
     l = len(primes)
-    print(f"avg exponent of 2,3: {exp2s/l:.3f}, {exp3s/l:.3f}")
+    print(f"avg exponent of 2,3: {exp2s / l:.3f}, {exp3s / l:.3f}")
     for r in (1, 5, 7, 11):
         v2, v3 = sum(exp2[r]) / len(exp2[r]), sum(exp3[r]) / len(exp3[r])
         print(f"avg exponent of 2,3 for primes 12k+{r}: ({v2:.3f}, {v3:.3f})")

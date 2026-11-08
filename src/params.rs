@@ -178,6 +178,8 @@ const CLASSGROUP_FBSIZES: &[(u32, u32, u32)] = &[
 const STAGE2_PARAMS: &[(f64, u64, u64)] = &[
     // B2, d1, d2
     // Using quadratic method, d2=φ(d1)/2, cost d2^2
+    (252., 42, 6),
+    (480., 60, 8),
     (660., 66, 10),
     (1080., 90, 12),
     (1920., 120, 16),

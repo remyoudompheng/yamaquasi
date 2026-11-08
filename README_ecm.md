@@ -54,3 +54,7 @@ Finding ECM-friendly curves through a study of Galois properties
 ](https://hal.archives-ouvertes.fr/hal-00671948)
 
 [Bos, Kleinjung, ECM at Work](https://eprint.iacr.org/2012/089)
+
+[R. Barbulescu, S. Shinde,
+A classification of ECM-friendly families using modular curves
+](https://hal.science/hal-01822144)

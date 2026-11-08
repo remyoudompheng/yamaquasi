@@ -50,6 +50,10 @@ name = "ecm"
 harness = false
 
 [[bench]]
+name = "ecm_test"
+harness = false
+
+[[bench]]
 name = "matrix"
 harness = false
 
