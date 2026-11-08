@@ -49,6 +49,7 @@ pub type Uint = arith::U1024;
 // Top-level functions
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::atomic::AtomicU32;
 
 use arith::Num;
 use arith_montgomery::{MInt, ZmodN};
@@ -70,6 +71,9 @@ pub struct Preferences {
     pub use_double: Option<bool>,
     // Only for class group computations
     pub outdir: Option<PathBuf>,
+
+    // Hidden state variable
+    pub(crate) ecm_seed: AtomicU32,
 }
 
 impl Preferences {

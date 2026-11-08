@@ -179,24 +179,11 @@ pub fn ecm(
     let iters = AtomicUsize::new(0);
     let done = AtomicBool::new(false);
 
-    // Generate seeds using a simple 16-bit or 32-bit LCG.
-    // We never need more than 10k seeds.
-    // TODO: optionally use non-deterministic selection.
-    let s0 = n.digits()[0];
-    let m0 = 2 * curves as u64 + 1;
+    // Generate seeds using a simple counter
     let mut seeds = vec![];
-    let mut seed = s0;
-    if curves >= 100 || n.bits() >= 32 {
-        // Always an odd number. The multiplicative order of m0 is always large.
-        for _ in 0..curves {
-            seed = seed.wrapping_mul(m0);
-            seeds.push(max(2, seed as u32));
-        }
-    } else {
-        for _ in 0..curves {
-            seed = seed.wrapping_mul(m0);
-            seeds.push(max(2, seed as u16 as u32));
-        }
+    for _ in 0..curves {
+        let seed = prefs.ecm_seed.fetch_add(1, Ordering::SeqCst);
+        seeds.push(seed);
     }
     assert!(seeds.len() == curves);
 
@@ -218,30 +205,23 @@ pub fn ecm(
 
     let suyama = Suyama11::new(&zn).unwrap();
     let do_curve = |seed: u32| {
-        assert!(seed >= 2);
         if done.load(Ordering::Relaxed) || prefs.abort() {
             return None;
         }
         let iter = iters.fetch_add(1, Ordering::SeqCst) + 1;
-        let curve = suyama
-            .element(seed)
+        let suyama_pt = if (seed as usize) < SUYAMA_POINTS.len() {
+            let p = SUYAMA_POINTS[seed as usize];
+            Ok(Point(
+                zn.from_i64(3 * p.0 - p.2),
+                zn.from_i64(3 * p.1),
+                zn.from_i64(3 * p.2),
+            ))
+        } else {
+            suyama.element(seed)
+        };
+        let curve = suyama_pt
             .and_then(|p| Suyama11::params_point(&zn, &p))
             .and_then(|g| Curve::twisted_from_point(zn.clone(), g));
-        let fallback = {
-            let seed = seed as u64 % (1 << 24);
-            (3 * seed + 5, 4 * seed + 5)
-        };
-        let curve = match curve {
-            Err(UnexpectedLargeFactor(p)) if p == n => {
-                // This is very unlikely unless n is very small.
-                if prefs.verbose(Verbosity::Debug) {
-                    eprintln!("Suyama curve failure seed={seed}")
-                }
-                Curve::from_point(zn.clone(), fallback.0, fallback.1)
-                    .map_err(|err| UnexpectedLargeFactor(err.0.into()))
-            }
-            _ => curve,
-        };
         let c = match curve {
             Ok(c) => c,
             Err(UnexpectedLargeFactor(p)) => {
@@ -260,12 +240,7 @@ pub fn ecm(
             }
         };
         if prefs.verbose(Verbosity::Verbose) {
-            if c.twisted {
-                eprintln!("Trying Suyama-11 curve with parameter [{seed}]G");
-            } else {
-                let (gx, gy) = fallback;
-                eprintln!("Trying Edwards curve with generator G=({gx},{gy})");
-            }
+            eprintln!("Trying Suyama-11 curve with parameter [{seed}]G");
         }
         if let Some(v) = ecm_curve(&sb, &zn, &c, b2, true, prefs.verbosity) {
             let p = v[0];
