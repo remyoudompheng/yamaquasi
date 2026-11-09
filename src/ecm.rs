@@ -262,6 +262,9 @@ pub fn ecm(
                 allfacs.append(res);
             }
         }
+        allfacs.sort_unstable();
+        allfacs.dedup();
+        return Some(allfacs);
     } else {
         for s in seeds {
             if let Some(res) = do_curve(s) {
@@ -2100,6 +2103,19 @@ fn test_ecm_curve3() {
         let p = res.unwrap()[0];
         assert!(n % p == Uint::ZERO);
     }
+}
+
+#[test]
+fn test_ecm_threads() {
+    // Multithreaded ECM must work
+    let n = Uint::from(3138385399334512741693131405179681_u128);
+    let prefs = Preferences::default();
+    let tpool: rayon::ThreadPool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .expect("cannot create thread pool");
+    let res = ecm(n, 100, 3000, 126e3, &prefs, Some(&tpool));
+    assert!(res.is_some());
 }
 
 #[test]
