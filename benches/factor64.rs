@@ -199,6 +199,97 @@ brunch::benches! {
     },
     */
     {
+        let n16: &[u64] = &[
+            47161, 60293, 48611, 33679, 38677
+        ];
+        Bench::new("5x pseudoprime n=16 bits prime")
+            .with_samples(50_000)
+            .run_seeded(n16, |ns| for &n in ns {
+                assert!(yamaquasi::isprime64(n));
+            })
+    },
+    {
+        let ns: &[u64] = &[
+            13383037, 15626777, 9736099, 9240683, 16070149
+        ];
+        Bench::new("5x pseudoprime n=24 bits prime")
+            .with_samples(50_000)
+            .run_seeded(ns, |ns| for &n in ns {
+                assert!(yamaquasi::isprime64(n));
+            })
+    },
+    {
+        let ns: &[u64] = &[
+            7977469, 12134833, 15380059, 10786771, 7881443
+        ];
+        Bench::new("5x pseudoprime n=24 bits composite")
+            .with_samples(50_000)
+            .run_seeded(ns, |ns| for &n in ns {
+                assert!(!yamaquasi::isprime64(n));
+            })
+    },
+    {
+        let ns: &[u64] = &[
+            219161743, 200625133, 231110093, 198868123, 252992219
+        ];
+        Bench::new("5x pseudoprime n=28 bits prime")
+            .with_samples(50_000)
+            .run_seeded(ns, |ns| for &n in ns {
+                assert!(yamaquasi::isprime64(n));
+            })
+    },
+    {
+        let ns: &[u64] = &[
+            127831157,88986389,89747717,72698897,181819793
+        ];
+        Bench::new("5x pseudoprime n=28 bits composite")
+            .run_seeded(ns, |ns| for &n in ns {
+                assert!(!yamaquasi::isprime64(n));
+            })
+    },
+    {
+        let n32: &[u64] = &[
+            2656530319,
+            3302512583,
+            2849385853,
+            2230843471,
+            2564848859,
+        ];
+        Bench::new("5x pseudoprime n=32 bits prime")
+            .with_samples(50_000)
+            .run_seeded(n32, |ns| for &n in ns {
+                assert!(yamaquasi::isprime64(n));
+            })
+    },
+    {
+        let n32: &[u64] = &[
+            3175244279,
+            2508597067,
+            2975415077,
+            2795977133,
+            2249742151,
+        ];
+        Bench::new("5x pseudoprime n=32 bits composite")
+            .with_samples(50_000)
+            .run_seeded(n32, |ns| for &n in ns {
+                assert!(fbase::certainly_composite(n));
+            })
+    },
+    {
+        let n48: &[u64] = &[
+            248121875018861,
+            264260672274707,
+            196470019792451,
+            227125290206527,
+            221249422787797,
+        ];
+        Bench::new("5x pseudoprime n=48 bits prime")
+            .with_samples(50_000)
+            .run_seeded(n48, |ns| for &n in ns {
+                assert!(yamaquasi::isprime64(n));
+            })
+    },
+    {
         let n48: &[u64] = &[
             235075827453629,
             166130059616737,
@@ -206,8 +297,37 @@ brunch::benches! {
             224077614412439,
             219669028971857,
         ];
-        Bench::new("5x pseudoprime n=48 bits")
+        Bench::new("5x pseudoprime n=48 bits composite")
+            .with_samples(50_000)
             .run_seeded(n48, |ns| for &n in ns {
+                assert!(fbase::certainly_composite(n));
+            })
+    },
+    {
+        let ns: &[u64] = &[
+            707333682626518879,
+            1058212004227469521,
+            1037671100376454927,
+            623197911999278353,
+            1012592912978925827
+        ];
+        Bench::new("5x pseudoprime n=60 bits prime")
+            .with_samples(50_000)
+            .run_seeded(ns, |ns| for &n in ns {
+                assert!(yamaquasi::isprime64(n));
+            })
+    },
+    {
+        let ns: &[u64] = &[
+            590475982812721451,
+            741485386388025119,
+            483522723378941153,
+            699484560272004929,
+            634432471312362553
+        ];
+        Bench::new("5x pseudoprime n=60 bits composite")
+            .with_samples(50_000)
+            .run_seeded(ns, |ns| for &n in ns {
                 assert!(fbase::certainly_composite(n));
             })
     },

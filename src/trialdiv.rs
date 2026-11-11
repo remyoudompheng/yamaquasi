@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: BSD-3-Clause
+// SPDX-FileCopyrightText: 2026 Rémy Oudompheng
+
 //! SIMD-friendly trial division
 //!
 //! For u128 inputs, it takes about 3 Zen4 cycles per prime.
@@ -14,6 +17,21 @@ use bnum::cast::CastFrom;
 use crate::arith_montgomery::mg_2adic_inv;
 use crate::fbase;
 use crate::Uint;
+
+pub fn isprime32(n: u32) -> bool {
+    if n & 1 == 0 {
+        return n == 2;
+    }
+    for b in &BLOCKS_U16[..] {
+        if b.p[0] * b.p[0] > n {
+            break;
+        }
+        if b.has_factor32(n) {
+            return n <= b.p[15] && b.p[..].contains(&n);
+        }
+    }
+    return true;
+}
 
 pub fn factor4096(n: &mut Uint, facs: &mut Vec<Uint>) {
     if n.bits() <= 64 {
@@ -306,6 +324,12 @@ impl BlockU32x16 {
         BlockU32x16 { p, pinv, bound }
     }
 
+    fn has_factor32(&self, n: u32) -> bool {
+        let r: [u32; 16] = std::array::from_fn(|i| self.pinv[i].wrapping_mul(n));
+        let ok: [bool; 16] = std::array::from_fn(|i| r[i] <= self.bound[i]);
+        ok.iter().any(|&x| x)
+    }
+
     fn factor32(&self, n: u32, facs: &mut Vec<u32>) {
         let r: [u32; 16] = std::array::from_fn(|i| self.pinv[i].wrapping_mul(n));
         let ok: [bool; 16] = std::array::from_fn(|i| r[i] <= self.bound[i]);
@@ -468,4 +492,15 @@ fn test_factor_u32() {
             .map(Uint::from_digit)
             .collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn test_isprime32() {
+    let primes = fbase::primes(2000);
+    for p in primes {
+        assert!(isprime32(p), "p={p}");
+    }
+    assert!(!isprime32(97 * 229));
+    assert!(!isprime32(5 * 7));
+    assert!(!isprime32(48611 * 33679));
 }
